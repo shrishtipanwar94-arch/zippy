@@ -1,0 +1,12 @@
+// Phase 0 intentionally defines no models. The database exists only so that
+// GET /health can run `SELECT 1`. The full domain schema — every table for
+// users, units, jobs, dispatch, money and the rest — arrives in Phase 1.
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+generator client {
+  provider = "prisma-client-js"
+}

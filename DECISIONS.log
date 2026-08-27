@@ -1,0 +1,180 @@
+# DECISIONS.log
+
+One structured entry per phase, appended at the end of that phase. This file
+is the raw material; at each checkpoint (end of Phases 4, 9, 13, 17, 22) it is
+consolidated into INTERVIEW.md and then cleared. INTERVIEW.md is never edited
+directly from a phase — only from a checkpoint consolidation.
+
+Entry template:
+
+    ## Phase N — name / Date / Commit
+    ### Built
+    ### Decisions            Decision / Why / Alternative / Why not / Tradeoff
+    ### Concurrency          Scenario / What races / Why dangerous / How handled / Assumption
+    ### Weaknesses introduced
+    ### Concepts now genuinely in use
+    ### Interview angle
+
+---
+
+## Phase 0 — Foundation / 2026-08-28 / Commit: "phase 0: foundation and docs"
+
+### Built
+
+Code:
+- `package.json` — all 15 named scripts (dev, dev:worker, start, start:worker,
+  build, typecheck, test, test:watch, test:concurrency, lint, db:migrate,
+  db:deploy, db:seed, db:reset, db:studio). `type: module`, engines node >=20.
+- `tsconfig.json` — strict, `noUncheckedIndexedAccess`, NodeNext ESM, target
+  ES2022, `rootDir src` / `outDir dist` so `node dist/index.js` resolves.
+- `src/infra/config.ts` — `loadConfig()` parses `process.env` through a Zod
+  schema (`NODE_ENV`, `PORT`, `DATABASE_URL`, `REDIS_URL`, `PUBLIC_URL`,
+  `WS_ORIGIN`, `CORS_ORIGINS`, `LOG_LEVEL`); `process.exit(1)` on any invalid
+  value; exports a frozen `config` with `corsOrigins` split out.
+- `src/infra/logger.ts` — one pino JSON logger, ISO timestamps, level as a
+  label.
+- `src/infra/db.ts` — the single `PrismaClient`, cached on `globalThis` in
+  non-production to survive `tsx watch` reloads.
+- `src/infra/redis.ts` — the single ioredis connection, `maxRetriesPerRequest:
+  1`, an `error` listener so an outage cannot crash the process.
+- `src/api/app.ts` — `createApp()`: pino-http with `genReqId` (echo or mint
+  `x-request-id`), an allowlist CORS middleware driven by `config.corsOrigins`,
+  `express.json({ limit: '1mb' })`, mounts `healthRouter`. No `listen`.
+- `src/api/health.ts` — `GET /health`: `checkDatabase()` runs
+  `prisma.$queryRaw\`SELECT 1\``, `checkRedis()` runs `redis.ping()`, both via
+  a `probe()` helper that resolves `false` on error or a 1 s timeout; returns
+  `{ status, db, redis, uptime }` with 200 only if both pass, else 503.
+- `src/index.ts` — web process: `createApp()`, `listen(PORT)`, SIGINT/SIGTERM
+  drain `server.close` → `prisma.$disconnect` → `redis.disconnect` → exit, with
+  a 10 s force-exit fallback.
+- `src/worker.ts` — worker process: a 30 s heartbeat `setInterval`, clean
+  shutdown on signal. Its own process, no queues yet.
+- `prisma/schema.prisma` — datasource + `prisma-client-js` generator, zero
+  models.
+- `prisma/seed.ts` — no-op that exits 0; placeholder for Phase 1, idempotent
+  by construction.
+- `docker-compose.yml` — `postgres:16` and `redis:7`, healthchecks
+  (`pg_isready`, `redis-cli ping`), named volumes `zippy_postgres_data` /
+  `zippy_redis_data`. Postgres is published on host `5433` (this dev machine
+  runs a native PostgreSQL service on `5432`); Redis on `6379`.
+- `.gitignore` (node_modules, dist, .env), `.env.example` (placeholders only),
+  `.gitattributes` (`* text=auto eol=lf`).
+- `requests/health.http` — VS Code REST Client file for `GET /health`.
+- `eslint.config.js` (flat, `no-explicit-any` on), `vitest.config.ts` (test
+  env vars so config loads without a `.env`).
+- `tests/health.test.ts` — 3 tests: envelope shape, 200-xor-503 (never a
+  hardcoded 200), `x-request-id` echo.
+
+Docs:
+- `CLAUDE.md` — invariants, locked stack, conventions, the readability
+  contract, the CODEMAP and INTERVIEW/DECISIONS maintenance instructions.
+- `docs/STACK.md` — each locked choice with its rejected alternative and a
+  one-line defence, plus a "do not relitigate" list.
+- `docs/DEPLOYMENT.md` — one platform, one origin, two always-on processes; no
+  sleeping free tier; no separate frontend host; the 30-second rule.
+- `docs/UI.md` — the three surfaces (driver / technician / dispatcher), the
+  amber-on-slate token palette, the one-state-object render discipline.
+- `docs/CODEMAP.md` — where things live, the reading order, the single
+  `GET /health` call path.
+- `INTERVIEW.md` — 19 sections, filled honestly for the post-Phase-0 state;
+  §7 lists 5 concepts, §15 says the project is barely built, §17 says NONE.
+
+Endpoints: `GET /health`.
+Tables: none.
+
+### Decisions
+
+- **Decision:** Validate all environment variables at startup through a Zod
+  schema and `process.exit(1)` on failure.
+  **Why:** A misconfiguration should fail loudly at boot, not as a confusing
+  error deep inside a request later.
+  **Alternative:** Read `process.env` lazily at each use site.
+  **Why not:** Spreads the failure surface across the codebase and delays
+  detection.
+  **Tradeoff:** Tests must supply a valid env; handled in `vitest.config.ts`.
+
+- **Decision:** `web` and `worker` are separate OS processes from Phase 0,
+  even though the worker does nothing yet.
+  **Why:** They deploy and fail independently; adding the split later means
+  untangling shared state.
+  **Alternative:** One process with a background timer until Phase 5.
+  **Why not:** Would bake in a shared-process assumption the whole design
+  rejects.
+  **Tradeoff:** Two entry points and two shutdown paths to maintain now.
+
+- **Decision:** `/health` performs a real `SELECT 1` and a real `PING`; the
+  status code is computed from the results.
+  **Why:** A hardcoded 200 hides a database outage from a load balancer.
+  **Alternative:** Return 200 unconditionally; add dependency checks later.
+  **Why not:** The distinction between "process gone" and "process up, DB
+  gone" is exactly what a health check exists to expose.
+  **Tradeoff:** Each check adds a round-trip and a 1 s timeout ceiling to the
+  endpoint.
+
+- **Decision:** Pin Prisma to v6 rather than take the just-released v7 that
+  npm resolved.
+  **Why:** v7 changes the client generator model and import path; v6 is
+  well-understood and the phase locks "Prisma", not a major version.
+  **Alternative:** Adopt Prisma 7 now.
+  **Why not:** Risk with no benefit at Phase 0.
+  **Tradeoff:** A major upgrade is deferred, not avoided.
+
+- **Decision:** Publish the Postgres container on host port `5433` instead of
+  `5432`.
+  **Why:** This machine already runs a native `postgresql-x64-16` service on
+  `5432` that shadows the container and rejects the compose credentials.
+  **Alternative:** Stop the native service and keep `5432`.
+  **Why not:** More disruptive to the machine than a one-line compose change;
+  `docker compose exec postgres psql ...` works either way.
+  **Tradeoff:** `DATABASE_URL` diverges from the conventional `5432`; a
+  comment in `docker-compose.yml` and `.env.example` records why and how to
+  revert.
+
+- **Decision:** Keep Express 5, Zod 4, ioredis 6, pino 10 as npm resolved
+  them; write imports defensively (`{ Redis }`, `{ pinoHttp }`, no deprecated
+  Zod `.url()`).
+  **Why:** These majors are API-stable for what Phase 0 uses.
+  **Tradeoff:** Some ESM/CJS interop friction under NodeNext, resolved with
+  named imports.
+
+### Concurrency
+
+- **Scenario:** `tsx watch` reloads modules on every file save in dev.
+  **What races:** Each reload could construct a new `PrismaClient` and a new
+  ioredis connection.
+  **Why dangerous:** Connections accumulate until Postgres refuses new ones.
+  **How handled:** Both clients are cached on `globalThis` when
+  `NODE_ENV !== 'production'` and reused across reloads.
+  **Assumption relied on:** A single Node process; no clustering at Phase 0.
+
+No request-level concurrency exists yet — there is no shared mutable state
+beyond those two singletons, and no writes.
+
+### Weaknesses introduced
+
+- `prisma/schema.prisma` has no models and no migration, so `npm run
+  db:migrate` / `db:deploy` are inert until Phase 1. Does not matter now.
+- `tests/concurrency/` is empty; `test:concurrency` passes with
+  `--passWithNoTests`. A real container-backed suite is required from
+  Phase 11 — until then the script proves nothing, by design.
+- The health check has no auth and no rate limit. Fine for a liveness probe;
+  revisit if it ever exposes more detail.
+- ESLint type-aware rules are off (no project service wired). Acceptable at
+  this size.
+- Only one integration test. Coverage is meant to be thin here.
+
+### Concepts now genuinely in use
+
+Fail-fast configuration; structured logging with a correlated request id;
+real dependency health checks (liveness vs readiness); process separation
+(web / worker); graceful shutdown with a force-exit fallback.
+
+### Interview angle
+
+- *Why isn't `/health` just `return res.sendStatus(200)`?* Because that tells
+  a load balancer the process is alive but not whether it can reach Postgres
+  or Redis; `src/api/health.ts` runs a real `SELECT 1` and `PING` and returns
+  503 — while staying alive — when a dependency is down.
+- *Why validate the whole environment at boot?* So a missing `DATABASE_URL`
+  is a one-line startup failure in `src/infra/config.ts`, not a stack trace
+  from inside a request handler an hour into a demo.

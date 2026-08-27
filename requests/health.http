@@ -1,0 +1,13 @@
+### Zippy — API requests, version-controlled
+### Open in VS Code with the REST Client extension (humao.rest-client) and click
+### "Send Request" above any block. Keeping these in the repo means our API
+### calls are reviewed and diffed like code, not trapped in a separate app.
+
+@baseUrl = http://localhost:3000
+
+### Health — liveness plus a real check of Postgres and Redis.
+### 200 with { status: "ok", db: true, redis: true } when both are up.
+### 503 with the same shape (db or redis false) when a dependency is down —
+### the process itself stays alive either way.
+GET {{baseUrl}}/health
+Accept: application/json
