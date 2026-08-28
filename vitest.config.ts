@@ -17,6 +17,10 @@ export default defineConfig({
       WS_ORIGIN: 'http://localhost:3000',
       CORS_ORIGINS: 'http://localhost:3000',
       LOG_LEVEL: 'silent',
+      JWT_ACCESS_SECRET: 'test-access-secret-0000000000000000',
+      JWT_REFRESH_SECRET: 'test-refresh-secret-1111111111111111',
+      JWT_ACCESS_TTL: '15m',
+      JWT_REFRESH_TTL: '7d',
     },
   },
 });

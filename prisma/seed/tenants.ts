@@ -4,13 +4,12 @@
 // a contract, an SLA policy and a fleet-manager login; the consumer tenant
 // pays per callout and has none of that.
 //
-// Passwords here are placeholders — Phase 2 introduces argon2id hashing and
-// real credentials. The string is obviously not a hash on purpose.
+// Every seeded user shares one dev-only password (see devPassword.ts) so any
+// role can be logged in as during development.
 
 import type { PrismaClient } from '@prisma/client';
 import { START_OF_YEAR } from './client.js';
-
-const PLACEHOLDER_HASH = 'seed-placeholder-not-a-real-hash';
+import { DEV_PASSWORD_HASH } from './devPassword.js';
 
 const TIERS: { id: string; name: 'GOLD' | 'SILVER' | 'BRONZE' | 'NONE'; priority: number; description: string }[] = [
   { id: 'tier-gold', name: 'GOLD', priority: 30, description: 'Fastest response, highest priority in the queue.' },
@@ -119,11 +118,11 @@ async function seedFleetTenant(prisma: PrismaClient, fleet: FleetSeed): Promise<
   const managerUserId = `user-${fleet.id}-fm`;
   await prisma.user.upsert({
     where: { email: fleet.managerEmail },
-    update: { name: fleet.managerName },
+    update: { name: fleet.managerName, passwordHash: DEV_PASSWORD_HASH },
     create: {
       id: managerUserId,
       email: fleet.managerEmail,
-      passwordHash: PLACEHOLDER_HASH,
+      passwordHash: DEV_PASSWORD_HASH,
       role: 'FLEET_MANAGER',
       name: fleet.managerName,
     },
@@ -148,11 +147,11 @@ async function seedDispatcher(prisma: PrismaClient): Promise<void> {
   // (every cross-tenant read is audited, from Phase 2).
   await prisma.user.upsert({
     where: { email: 'dispatch-ops@zippy.internal' },
-    update: { name: 'Dispatch Operations' },
+    update: { name: 'Dispatch Operations', passwordHash: DEV_PASSWORD_HASH },
     create: {
       id: 'user-dispatcher',
       email: 'dispatch-ops@zippy.internal',
-      passwordHash: PLACEHOLDER_HASH,
+      passwordHash: DEV_PASSWORD_HASH,
       role: 'DISPATCHER',
       name: 'Dispatch Operations',
     },

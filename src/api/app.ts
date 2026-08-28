@@ -5,6 +5,9 @@ import { randomUUID } from 'node:crypto';
 import { config } from '../infra/config.js';
 import { logger } from '../infra/logger.js';
 import { healthRouter } from './health.js';
+import { authRouter } from './auth.js';
+import { jobsRouter } from './jobs.js';
+import { errorHandler } from './middleware/errors.js';
 
 /**
  * Builds the Express app but does not start it. index.ts owns the listen call;
@@ -56,6 +59,11 @@ export function createApp(): Express {
   app.use(express.json({ limit: '1mb' }));
 
   app.use(healthRouter);
+  app.use(authRouter);
+  app.use(jobsRouter);
+
+  // Last: turns any error thrown or forwarded by a route into clean JSON.
+  app.use(errorHandler);
 
   return app;
 }

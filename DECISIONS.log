@@ -408,3 +408,238 @@ idempotency; a modular seed with an explicit dependency order.
   on a deterministic id (`tech-01`, `cap-obd_diagnostics`), so a second run
   updates in place and inserts nothing; there is no `deleteMany` anywhere, so
   it also never fights the append-only tables.
+
+---
+
+## Phase 2 — Auth, RBAC, tenant scoping / 2026-08-29 / Commit: (uncommitted — "phase 2: auth and tenancy")
+
+### Built
+
+Auth primitives — `src/auth/`:
+- `passwords.ts` — `hashPassword` / `verifyPassword` over `@node-rs/argon2`
+  (argon2id by default; prebuilt binaries, no node-gyp). `verifyPassword`
+  swallows a malformed-hash throw and returns `false`.
+- `tokens.ts` — `issueAccessToken` / `issueRefreshToken` /
+  `verifyAccessToken` / `verifyRefreshToken` over `jsonwebtoken`, plus a
+  `TokenError` class. Access claims: `{ sub, role, tenantId, crossTenant }`.
+  Refresh claims: `{ sub }`. Two secrets, short access TTL, long refresh TTL.
+- `permissions.ts` — `PERMISSIONS: Record<Role, Partial<Record<Resource,
+  Action[]>>>` and `can(user, action, resource)`. Resources: `job`, `unit`,
+  `technician`, `driver`, `user`, `auditLog`. Actions: `read|create|update|
+  delete`.
+- `context.ts` — `AuthContext` type, an `AsyncLocalStorage`,
+  `runWithAuthContext(ctx, fn)` and `getAuthContext()`.
+- `tenantScope.ts` — pure: `TENANT_SCOPED_MODELS` (`Job`, `Vehicle`, `Driver`,
+  `Payment`, `Contract`), `NO_TENANT = '__no_tenant__'`, `tenantFilterValue`,
+  `isReadOperation`, `operationTakesWhereFilter`, `isTenantScopedModel`.
+
+Infra:
+- `prismaBase.ts` — the raw client (new file). Global-cached for `tsx watch`.
+- `tenantScopeExtension.ts` — `Prisma.defineExtension` with a
+  `query.$allModels.$allOperations` hook. On a tenant-scoped model it:
+  reads `getAuthContext()`; if `crossTenant` runs unfiltered and writes an
+  `AuditLog` row via `prismaBase`; for `findUnique(OrThrow)` post-checks the
+  row's `tenantId`; for every other where-taking op AND-composes
+  `{ tenantId: <value> }` into `where`; with no context the value is
+  `NO_TENANT`, which matches nothing.
+- `db.ts` — now exports `prisma` = `prismaBase.$extends(tenantScopeExtension)`
+  and re-exports `prismaBase`.
+
+API:
+- `middleware/authenticate.ts` — `authenticate` (verifies the bearer access
+  token, sets `req.auth`, runs the rest of the request in
+  `runWithAuthContext`) and `requirePermission(action, resource)` (403 if
+  `can()` is false). Augments `Express.Request` with `auth?: AuthContext`.
+- `middleware/errors.ts` — `errorHandler`: `ZodError` -> 400, `TokenError`
+  -> 401, else 500 (logged). Mounted last.
+- `auth.ts` — `POST /auth/login` (email+password -> access+refresh+user;
+  identical 401 for unknown email and wrong password), `POST /auth/refresh`
+  (refresh -> fresh pair, tenant binding re-derived). `resolveTenantBinding`:
+  DISPATCHER -> `{ tenantId: null, crossTenant: true }`, everyone else ->
+  first membership's tenant.
+- `jobs.ts` — `GET /jobs` and `GET /jobs/:id`, both behind `authenticate` +
+  `requirePermission('read','job')`. Neither filters by tenant itself — the
+  extension does. `/jobs/:id` returns 404 (not 403) when the scoped lookup
+  finds nothing.
+- `app.ts` — mounts `authRouter`, `jobsRouter`, then `errorHandler`.
+
+Config — `JWT_ACCESS_SECRET`, `JWT_REFRESH_SECRET` (min 16),
+`JWT_ACCESS_TTL` (default `15m`), `JWT_REFRESH_TTL` (default `7d`). Added to
+`.env`, `.env.example`, `vitest.config.ts`.
+
+Seed — `prisma/seed/devPassword.ts`: `DEV_PASSWORD = 'password-dev-only'`,
+`DEV_PASSWORD_HASH = hashSync(DEV_PASSWORD)` computed once. `tenants.ts`,
+`technicians.ts`, `drivers.ts` now set `passwordHash` on both the `create` AND
+the `update` branch of every user upsert (the update branch is why the first
+re-seed silently kept the Phase 1 placeholder).
+
+Tests:
+- `tests/rbac.test.ts` — 16 pure tests: `can()` matrix, `tenantFilterValue`,
+  model/operation classification, access-token round-trip + tamper, password
+  verify + malformed hash.
+- `tests/tenancy.test.ts` — 14 tests against a real `zippy_test` Postgres
+  (created + migrated in `beforeAll` via `npx prisma migrate deploy`), with a
+  two-tenant fixture built through `prismaBase`. Covers: scoped caller sees
+  only its rows; no-context query returns `[]`; DISPATCHER sees all; a
+  cross-tenant read writes exactly one `AuditLog` row; `GET /jobs/:id` gives
+  404 across tenants both directions; list scoping; DISPATCHER list sees both;
+  401 with no token; login success/failure; DISPATCHER login has null tenant.
+
+Endpoints added: `POST /auth/login`, `POST /auth/refresh`, `GET /jobs`,
+`GET /jobs/:id`.
+Tables first read: `User`, `TenantMembership`, `AuditLog`, `Job`.
+
+### Decisions
+
+- **Decision:** Tenant isolation is enforced in a Prisma client extension, not
+  in route code.
+  **Why:** Single-point enforcement is how leaks happen — one handler that
+  forgets `where: { tenantId }`. The extension applies to every query on a
+  scoped model whether or not the caller remembered.
+  **Alternative:** A `scopedFindJob(ctx, id)` helper each route must call.
+  **Why not:** Relies on discipline; the first route that calls
+  `prisma.job.findMany` directly is a leak.
+  **Tradeoff:** The extension reads context at query-EXECUTION time, so a
+  caller must still be inside `runWithAuthContext` when the promise resolves.
+  The middleware guarantees this for HTTP; workers/scripts/tests must wrap
+  their `await`. Raw SQL (`$queryRaw`) bypasses the hook entirely.
+
+- **Decision:** Request context travels in `AsyncLocalStorage`, not a
+  parameter.
+  **Why:** The extension sits far below the call site; threading `ctx` through
+  every function to reach it would be noisy and, again, forgettable.
+  **Alternative:** Pass an explicit client instance per request
+  (`prismaForTenant(id)`).
+  **Why not:** Every function signature grows a Prisma-client parameter; and
+  constructing a client per request is heavy.
+  **Tradeoff:** ALS is "spooky action at a distance" — the behaviour of a
+  query depends on invisible ambient state. Mitigated by there being exactly
+  one writer of that state (the authenticate middleware).
+
+- **Decision:** Cross-tenant access is 404, never 403.
+  **Why:** A 403 confirms the row exists. A FLEET_MANAGER probing ids should
+  not be able to map another tenant's jobs.
+  **Alternative:** 403 for "not yours".
+  **Why not:** Leaks existence.
+  **Tradeoff:** A genuine permission bug and a genuine not-found look the same
+  to the client; operators rely on the audit log / server logs to tell them
+  apart.
+
+- **Decision:** DISPATCHER has `crossTenant: true` and is exempt from the
+  filter; every cross-tenant read writes one `AuditLog` row, awaited inside
+  the hook.
+  **Why:** Dispatchers legitimately work across tenants, but that power has to
+  leave a trail. Awaiting (not fire-and-forget) means the row is guaranteed
+  present before the read returns.
+  **Alternative:** Fire-and-forget the audit write.
+  **Why not:** A crash between read and write loses the trail; and tests would
+  be racy.
+  **Tradeoff:** Every dispatcher read pays one extra INSERT of latency, and a
+  busy dispatcher session generates a lot of audit rows.
+
+- **Decision:** `@node-rs/argon2` over the `argon2` npm package.
+  **Why:** `argon2` compiles via node-gyp; `@node-rs/argon2` ships prebuilt
+  binaries. On this Windows dev machine that is the difference between "works"
+  and "toolchain yak-shave".
+  **Alternative:** `argon2`, or `bcrypt`.
+  **Why not:** node-gyp friction; bcrypt is not argon2id.
+  **Tradeoff:** A Rust-based native dep in the tree.
+
+- **Decision:** The tenancy test uses the local `zippy_test` database, created
+  by `prisma migrate deploy` in `beforeAll`, not testcontainers.
+  **Why:** `docker compose up` is already a prerequisite for the project;
+  reusing the running Postgres is seconds faster per run. testcontainers is
+  reserved for the concurrency suite (Phase 11), per the note in
+  `vitest.config.ts`.
+  **Alternative:** Spin a dedicated container per run.
+  **Why not:** ~4s container boot on every `npm run test`, for no extra
+  isolation over a dedicated database.
+  **Tradeoff:** `npm run test` now needs Postgres for one file. If Docker is
+  down, `tenancy.test.ts` fails (legitimately — you cannot test isolation
+  against a real DB without one); `health.test.ts` and `rbac.test.ts` still
+  run infra-free.
+
+- **Decision:** One shared dev password for every seeded user
+  (`password-dev-only`), hashed once and reused.
+  **Why:** Any role can be logged in as during development without a
+  credential list; one `hashSync` keeps the seed fast.
+  **Alternative:** Per-user passwords, or a login bypass in dev.
+  **Why not:** A list to maintain; a bypass is a landmine.
+  **Tradeoff:** Obviously not production-safe — the value is deliberately
+  loud, and Phase 26 must replace it.
+
+### Concurrency
+
+- **Scenario:** Two requests in flight for different tenants share the process.
+  **What races:** Which tenant the Prisma extension scopes a given query to.
+  **Why dangerous:** If context leaked between requests, tenant A's handler
+  could read tenant B's rows.
+  **How handled:** `AsyncLocalStorage.run` gives each request its own context
+  store; async continuations spawned inside it inherit that store and no
+  other. There is no shared mutable module-level "current tenant".
+  **Assumption relied on:** Every DB-touching request path enters through the
+  `authenticate` middleware (or an explicit `runWithAuthContext`). A path that
+  queries a scoped model outside any context gets `NO_TENANT` and returns
+  nothing — fails safe, not open.
+
+- **Scenario:** A refresh token is used after the user's tenant membership
+  changed.
+  **What races:** Token claims vs current membership.
+  **Why dangerous:** A stale `tenantId` in a long-lived token would keep
+  scoping to the old tenant.
+  **How handled:** `/auth/refresh` reloads the user and re-derives the tenant
+  binding, so the new access token reflects the current membership. The old
+  access token still carries stale claims until it expires (<= 15 min).
+  **Assumption relied on:** Access TTL stays short; there is no revocation
+  list yet.
+
+### Weaknesses introduced
+
+- **No refresh-token revocation / rotation store.** `/auth/refresh` issues a
+  new pair but the old refresh token still works until expiry. A stolen
+  refresh token is valid for up to 7 days. Fine for a demo; a real system
+  needs a denylist or rotating family ids.
+- **`$queryRaw` / `$executeRaw` bypass the tenant-scope extension.** Documented
+  in the extension header. Hand-written SQL from Phase 11 must scope itself;
+  nothing enforces that it does.
+- **`create` / `upsert` are not auto-scoped.** The extension constrains reads
+  and `update`/`delete`, but a `create` with a wrong `tenantId` is not caught.
+  No create path exists yet; when one does it must pass `tenantId` from
+  context explicitly.
+- **First membership wins.** A user in two tenants is silently scoped to
+  whichever membership row comes back first. The seed never does this; a real
+  multi-tenant user needs a tenant-switch mechanism.
+- **The audit row for a `findMany` cross-tenant read has `resourceId: null`.**
+  Only single-row reads capture an id. A dispatcher listing everything logs
+  "read Job (findMany)" with no target — coarse but honest.
+- **`req.auth` is optional (`auth?:`).** Every handler behind `authenticate`
+  must still null-check it or trust the middleware ran. `requirePermission`
+  does check; ad-hoc handlers could forget.
+- **RBAC matrix is thin.** Six resources, four actions, no field-level or
+  ownership rules (e.g. "a driver may read only their OWN jobs"). Row
+  ownership beyond tenant is not modelled.
+
+### Concepts now genuinely in use
+
+JWT access/refresh split with two secrets; argon2id password hashing; a
+table-driven RBAC `can()`; `AsyncLocalStorage` request context; Prisma client
+`$extends` query interception; policy-as-data (permission table, scoped-model
+set); fail-closed defaults (missing context -> `NO_TENANT` -> empty result);
+404-not-403 to avoid existence disclosure; audit logging of privileged reads.
+
+### Interview angle
+
+- *How do you stop one tenant reading another's data, and what happens if a
+  developer forgets to add the filter?* Enforcement is a Prisma client
+  extension (`src/infra/tenantScopeExtension.ts`) that injects
+  `AND tenantId = <caller>` into every query on a scoped model, using a
+  request context carried in `AsyncLocalStorage` — so a handler that runs
+  `prisma.job.findMany()` with no `where` is still scoped, and one that runs
+  with no auth context at all gets an impossible tenant id and returns
+  nothing. The break-it test in Phase 2 removes `Job` from the scoped-model
+  set and six isolation tests immediately fail with cross-tenant rows.
+- *Why does a fleet manager get 404 and not 403 for another tenant's job?*
+  Because 403 would confirm the job exists; the scoped query simply finds
+  nothing and the route cannot tell "not yours" from "not real", which is the
+  point. Dispatchers, who may read across tenants, have every such read
+  written to `AuditLog` inside the same extension.

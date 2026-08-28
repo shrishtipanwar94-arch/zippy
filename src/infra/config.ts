@@ -41,6 +41,14 @@ const envSchema = z.object({
   // Comma-separated list of allowed browser origins.
   CORS_ORIGINS: z.string().min(1, 'CORS_ORIGINS must list at least one origin'),
 
+  // Two separate secrets so a leaked access secret cannot mint refresh tokens.
+  // Short access TTL, long refresh TTL — the refresh token is the only
+  // long-lived credential and it is only ever sent to POST /auth/refresh.
+  JWT_ACCESS_SECRET: z.string().min(16, 'JWT_ACCESS_SECRET must be at least 16 characters'),
+  JWT_REFRESH_SECRET: z.string().min(16, 'JWT_REFRESH_SECRET must be at least 16 characters'),
+  JWT_ACCESS_TTL: z.string().min(1).default('15m'),
+  JWT_REFRESH_TTL: z.string().min(1).default('7d'),
+
   LOG_LEVEL: z
     .enum(['fatal', 'error', 'warn', 'info', 'debug', 'trace', 'silent'])
     .default('info'),

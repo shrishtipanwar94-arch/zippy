@@ -11,9 +11,9 @@
 import type { PrismaClient } from '@prisma/client';
 import { todayAt } from './client.js';
 import { capabilityId } from './capabilities.js';
+import { DEV_PASSWORD_HASH } from './devPassword.js';
 import { zoneId } from './zones.js';
 
-const PLACEHOLDER_HASH = 'seed-placeholder-not-a-real-hash';
 export const TECHNICIAN_COUNT = 31;
 
 // Given a zero-based technician index, the capability codes that technician
@@ -52,11 +52,11 @@ export async function seedTechnicians(prisma: PrismaClient): Promise<void> {
 
     await prisma.user.upsert({
       where: { email },
-      update: { name: `Technician ${number}` },
+      update: { name: `Technician ${number}`, passwordHash: DEV_PASSWORD_HASH },
       create: {
         id: userId,
         email,
-        passwordHash: PLACEHOLDER_HASH,
+        passwordHash: DEV_PASSWORD_HASH,
         role: 'TECHNICIAN',
         name: `Technician ${number}`,
       },

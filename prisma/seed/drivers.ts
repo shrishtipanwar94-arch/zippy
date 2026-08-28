@@ -5,8 +5,7 @@
 // path has a vehicle that actually needs a high-voltage-certified technician.
 
 import type { PrismaClient } from '@prisma/client';
-
-const PLACEHOLDER_HASH = 'seed-placeholder-not-a-real-hash';
+import { DEV_PASSWORD_HASH } from './devPassword.js';
 
 type ProfileSeed = {
   id: string;
@@ -76,8 +75,8 @@ export async function seedDrivers(prisma: PrismaClient): Promise<void> {
 
     await prisma.user.upsert({
       where: { email },
-      update: { name: driver.name },
-      create: { id: userId, email, passwordHash: PLACEHOLDER_HASH, role: 'DRIVER', name: driver.name },
+      update: { name: driver.name, passwordHash: DEV_PASSWORD_HASH },
+      create: { id: userId, email, passwordHash: DEV_PASSWORD_HASH, role: 'DRIVER', name: driver.name },
     });
 
     await prisma.driver.upsert({

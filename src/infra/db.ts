@@ -1,23 +1,29 @@
-import { PrismaClient } from '@prisma/client';
 import { config } from './config.js';
+import { prismaBase } from './prismaBase.js';
+import { tenantScopeExtension } from './tenantScopeExtension.js';
 
 /**
- * The single Prisma client for the process. Postgres is the source of truth for
- * every hold and reservation (invariant 1); this is how the rest of the code
- * reaches it.
+ * The Prisma client the application uses. It is `prismaBase` wrapped in the
+ * tenant-scope extension, so every query on a tenant-scoped model is filtered
+ * to the caller's tenant (see tenantScopeExtension.ts). Postgres is the source
+ * of truth for every hold and reservation (invariant 1); this is how the rest
+ * of the code reaches it.
  *
- * In dev, `tsx watch` reloads modules on every save. Without the global cache
- * below, each reload would open a fresh pool and Postgres would slowly run out
- * of connections. In production the module loads once and the cache is a no-op.
+ * `prismaBase` is re-exported for the few callers that genuinely need the
+ * unscoped client (the extension's own audit writes, test fixtures).
  */
-const globalForPrisma = globalThis as unknown as { prisma?: PrismaClient };
+function createExtendedClient() {
+  return prismaBase.$extends(tenantScopeExtension);
+}
 
-export const prisma =
-  globalForPrisma.prisma ??
-  new PrismaClient({
-    log: ['warn', 'error'],
-  });
+type ExtendedPrismaClient = ReturnType<typeof createExtendedClient>;
+
+const globalForPrisma = globalThis as unknown as { prisma?: ExtendedPrismaClient };
+
+export const prisma = globalForPrisma.prisma ?? createExtendedClient();
 
 if (!config.isProduction) {
   globalForPrisma.prisma = prisma;
 }
+
+export { prismaBase };
