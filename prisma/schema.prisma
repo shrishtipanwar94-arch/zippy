@@ -1,6 +1,30 @@
-// Phase 0 intentionally defines no models. The database exists only so that
-// GET /health can run `SELECT 1`. The full domain schema — every table for
-// users, units, jobs, dispatch, money and the rest — arrives in Phase 1.
+// ZIPPY DOMAIN SCHEMA — every table the build will ever need, created in Phase 1.
+//
+// Many models here are not read by any code yet. That is deliberate: the build
+// plan adds features phase by phase, and a migration that only ever grows is
+// easier to reason about than one that keeps reshaping tables other code has
+// started to depend on. Each section header says which phase first reads it.
+//
+// TWO PATTERNS APPEAR THROUGHOUT — the maintainer should know both:
+//
+// APPEND-ONLY LOG
+//   `job_events` and `ledger_entries` are written once and never changed. A
+//   mistake is corrected by writing a new compensating row, not by editing the
+//   old one. This is enforced in the database itself by a trigger (see the
+//   migration), so even a raw `UPDATE` from psql is rejected. The point is an
+//   audit trail nobody — not even a bug — can quietly rewrite.
+//
+// OPTIMISTIC VERSION COLUMN
+//   Rows that two actors can race for (`units`, `jobs`, `unit_stock`,
+//   `unit_holds`, `dispatch_offers`, `technician_offers`) carry a `version` Int.
+//   A writer reads the version, then updates `WHERE id = ? AND version = ?` and
+//   bumps it. If someone else got there first the version moved, zero rows
+//   change, and the writer knows it lost — without holding a row lock open while
+//   a technician's phone rings. The conditional UPDATE arrives in Phase 11.
+//
+// Money is integer paise, never Float. Anything that originates outside Zippy
+// records both `event_time` (when it happened out there) and `received_at`
+// (when we heard about it) — external events arrive late and more than once.
 
 datasource db {
   provider = "postgresql"
@@ -9,4 +33,1718 @@ datasource db {
 
 generator client {
   provider = "prisma-client-js"
+}
+
+// ============================================================================
+// ENUMS — only the genuine state machines. Peripheral status columns stay
+// String so the enum list does not become its own maintenance burden.
+// ============================================================================
+
+enum Role {
+  DRIVER
+  TECHNICIAN
+  DISPATCHER
+  FLEET_MANAGER
+}
+
+enum TenantKind {
+  FLEET
+  CONSUMER
+}
+
+enum ContractTierName {
+  GOLD
+  SILVER
+  BRONZE
+  NONE
+}
+
+enum UnitKind {
+  VAN
+  BIKE
+  FLATBED_TOW
+  WHEEL_LIFT_TOW
+}
+
+enum UnitStatus {
+  AVAILABLE
+  HELD
+  ON_JOB
+  MAINTENANCE
+  OFFLINE
+}
+
+enum JobStatus {
+  DRAFT
+  INTAKE
+  PLANNED
+  OFFERED
+  COMMITTED
+  EN_ROUTE
+  ON_SITE
+  DIAGNOSING
+  WORKING
+  AWAITING_DESTINATION
+  TOWING
+  RESOLVED
+  UNSERVICEABLE
+  CANCELLED
+}
+
+enum SafetyLevel {
+  NORMAL
+  ELEVATED
+  HIGH_RISK
+}
+
+enum RoadPosition {
+  SHOULDER
+  LANE
+  SERVICE_ROAD
+  PARKING
+}
+
+enum HoldStatus {
+  ACTIVE
+  RELEASED
+  EXPIRED
+  CONSUMED
+}
+
+enum OfferStatus {
+  PROPOSED
+  ACCEPTED
+  DECLINED
+  TIMEOUT
+  WITHDRAWN
+}
+
+// The reservation saga's state, stored on dispatch_offers.state (Phase 12).
+enum SagaState {
+  PROPOSED
+  AWAITING_LEGS
+  ALL_ACCEPTED
+  COMMITTED
+  RELEASED_ALL
+  REQUEUED
+}
+
+enum ActionTier {
+  AUTO
+  RECOMMEND
+  APPROVE
+}
+
+enum ActionStatus {
+  PENDING
+  EXECUTED
+  APPROVED
+  REJECTED
+  CANCELLED
+}
+
+enum PaymentMethod {
+  CARD
+  UPI
+  CASH
+  CONTRACT
+}
+
+enum PaymentStatus {
+  PENDING
+  AUTHORISED
+  CAPTURED
+  REFUNDED
+  FAILED
+}
+
+enum EstimateStatus {
+  DRAFT
+  SENT
+  APPROVED
+  REJECTED
+}
+
+enum HealthState {
+  NORMAL
+  DEGRADED
+  CRITICAL
+}
+
+enum EscalationStatus {
+  OPEN
+  RESOLVED
+}
+
+enum DeliveryStatus {
+  QUEUED
+  SENT
+  DELIVERED
+  FAILED
+}
+
+enum PromotionKind {
+  LOCATION_CORRECTION
+  ACCESS_RESTRICTION
+  SAFETY_CHANGE
+  DIAGNOSIS_DETAIL
+}
+
+enum PromotionStatus {
+  FLAGGED
+  CONFIRMED
+  REJECTED
+}
+
+// ============================================================================
+// TENANCY — read from Phase 2 (auth and tenant scoping). Consumers are a
+// tenant too (kind = CONSUMER) so every job has a tenant and scoping has no
+// special case.
+// ============================================================================
+
+model Tenant {
+  id        String     @id @default(cuid())
+  name      String
+  kind      TenantKind
+  createdAt DateTime   @default(now()) @map("created_at")
+  updatedAt DateTime   @updatedAt @map("updated_at")
+
+  memberships TenantMembership[]
+  contracts   Contract[]
+  drivers     Driver[]
+  vehicles    Vehicle[]
+  jobs        Job[]
+  priceLists  PriceList[]
+  payments    Payment[]
+
+  @@map("tenants")
+}
+
+model TenantMembership {
+  id        String   @id @default(cuid())
+  tenantId  String   @map("tenant_id")
+  userId    String   @map("user_id")
+  role      Role
+  createdAt DateTime @default(now()) @map("created_at")
+
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([tenantId, userId])
+  @@index([userId])
+  @@map("tenant_memberships")
+}
+
+model Contract {
+  id        String    @id @default(cuid())
+  tenantId  String    @map("tenant_id")
+  tierId    String    @map("tier_id")
+  name      String
+  startsAt  DateTime  @map("starts_at")
+  endsAt    DateTime? @map("ends_at")
+  active    Boolean   @default(true)
+  createdAt DateTime  @default(now()) @map("created_at")
+
+  tenant           Tenant            @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  tier             ContractTier      @relation(fields: [tierId], references: [id])
+  slaPolicies      SlaPolicy[]
+  coveredServices  CoveredService[]
+  contractBillings ContractBilling[]
+
+  @@index([tenantId])
+  @@map("contracts")
+}
+
+model ContractTier {
+  id          String           @id @default(cuid())
+  name        ContractTierName
+  description String
+  priority    Int              @default(0)
+
+  contracts Contract[]
+
+  @@map("contract_tiers")
+}
+
+model SlaPolicy {
+  id                String   @id @default(cuid())
+  contractId        String   @map("contract_id")
+  serviceType       String   @map("service_type")
+  responseMinutes   Int      @map("response_minutes")
+  resolutionMinutes Int      @map("resolution_minutes")
+  createdAt         DateTime @default(now()) @map("created_at")
+
+  contract  Contract   @relation(fields: [contractId], references: [id], onDelete: Cascade)
+  jobs      Job[]
+  slaEvents SlaEvent[]
+
+  @@index([contractId])
+  @@map("sla_policies")
+}
+
+model CoveredService {
+  id          String  @id @default(cuid())
+  contractId  String  @map("contract_id")
+  serviceType String  @map("service_type")
+  covered     Boolean @default(true)
+  capPaise    Int?    @map("cap_paise")
+
+  contract Contract @relation(fields: [contractId], references: [id], onDelete: Cascade)
+
+  @@unique([contractId, serviceType])
+  @@map("covered_services")
+}
+
+// ============================================================================
+// CORE — people, skills, vehicles, units, zones. Read from Phase 2 onward.
+// ============================================================================
+
+model User {
+  id           String   @id @default(cuid())
+  email        String   @unique
+  passwordHash String   @map("password_hash")
+  role         Role
+  name         String
+  phone        String?
+  active       Boolean  @default(true)
+  createdAt    DateTime @default(now()) @map("created_at")
+  updatedAt    DateTime @updatedAt @map("updated_at")
+
+  driver      Driver?
+  technician  Technician?
+  memberships TenantMembership[]
+
+  @@map("users")
+}
+
+model Driver {
+  id         String   @id @default(cuid())
+  userId     String   @unique @map("user_id")
+  tenantId   String?  @map("tenant_id")
+  homeZoneId String?  @map("home_zone_id")
+  notes      String?
+  createdAt  DateTime @default(now()) @map("created_at")
+
+  user     User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  tenant   Tenant?   @relation(fields: [tenantId], references: [id])
+  homeZone Zone?     @relation(fields: [homeZoneId], references: [id])
+  vehicles Vehicle[]
+  jobs     Job[]
+
+  @@index([tenantId])
+  @@map("drivers")
+}
+
+// A make/model/year band with the facts dispatch cares about: is it an EV,
+// what key technology it uses, what body type. Vehicles point at one profile.
+model VehicleProfile {
+  id       String  @id @default(cuid())
+  make     String
+  model    String
+  yearFrom Int     @map("year_from")
+  yearTo   Int     @map("year_to")
+  bodyType String  @map("body_type")
+  fuelType String  @map("fuel_type")
+  evClass  String? @map("ev_class")
+  keyType  String  @map("key_type")
+  notes    String?
+
+  vehicles Vehicle[]
+
+  @@unique([make, model, yearFrom, yearTo])
+  @@map("vehicle_profiles")
+}
+
+model Vehicle {
+  id           String   @id @default(cuid())
+  driverId     String   @map("driver_id")
+  tenantId     String?  @map("tenant_id")
+  profileId    String   @map("profile_id")
+  registration String   @unique
+  colour       String
+  createdAt    DateTime @default(now()) @map("created_at")
+
+  driver  Driver         @relation(fields: [driverId], references: [id], onDelete: Cascade)
+  tenant  Tenant?        @relation(fields: [tenantId], references: [id])
+  profile VehicleProfile @relation(fields: [profileId], references: [id])
+  jobs    Job[]
+
+  @@index([driverId])
+  @@map("vehicles")
+}
+
+model Zone {
+  id          String   @id @default(cuid())
+  code        String   @unique
+  name        String
+  city        String
+  centroidLat Float    @map("centroid_lat")
+  centroidLng Float    @map("centroid_lng")
+  boundary    Json?
+  createdAt   DateTime @default(now()) @map("created_at")
+
+  units       Unit[]
+  shifts      TechnicianShift[]
+  jobs        Job[]
+  drivers     Driver[]
+  technicians Technician[]
+  workshops   Workshop[]
+  depots      Depot[]
+
+  @@map("zones")
+}
+
+model Capability {
+  id          String   @id @default(cuid())
+  code        String   @unique
+  name        String
+  description String
+  category    String
+  createdAt   DateTime @default(now()) @map("created_at")
+
+  technicians TechnicianCapability[]
+  units       UnitCapability[]
+
+  @@map("capabilities")
+}
+
+model Technician {
+  id           String   @id @default(cuid())
+  userId       String   @unique @map("user_id")
+  homeZoneId   String?  @map("home_zone_id")
+  employeeCode String   @unique @map("employee_code")
+  active       Boolean  @default(true)
+  ratingBps    Int?     @map("rating_bps")
+  createdAt    DateTime @default(now()) @map("created_at")
+
+  user            User                   @relation(fields: [userId], references: [id], onDelete: Cascade)
+  homeZone        Zone?                  @relation(fields: [homeZoneId], references: [id])
+  capabilities    TechnicianCapability[]
+  shifts          TechnicianShift[]
+  currentUnit     Unit?                  @relation("UnitCurrentTechnician")
+  offers          TechnicianOffer[]
+  assignedJobs    Job[]                  @relation("JobAssignedTechnician")
+  commissions     Commission[]
+  payouts         Payout[]
+  cashCollections CashCollection[]
+
+  @@map("technicians")
+}
+
+model TechnicianCapability {
+  id           String    @id @default(cuid())
+  technicianId String    @map("technician_id")
+  capabilityId String    @map("capability_id")
+  certifiedAt  DateTime  @default(now()) @map("certified_at")
+  expiresAt    DateTime? @map("expires_at")
+  certRef      String?   @map("cert_ref")
+
+  technician Technician @relation(fields: [technicianId], references: [id], onDelete: Cascade)
+  capability Capability @relation(fields: [capabilityId], references: [id], onDelete: Cascade)
+
+  @@unique([technicianId, capabilityId])
+  @@index([capabilityId])
+  @@map("technician_capability")
+}
+
+model TechnicianShift {
+  id           String   @id @default(cuid())
+  technicianId String   @map("technician_id")
+  zoneId       String?  @map("zone_id")
+  startsAt     DateTime @map("starts_at")
+  endsAt       DateTime @map("ends_at")
+  createdAt    DateTime @default(now()) @map("created_at")
+
+  technician Technician @relation(fields: [technicianId], references: [id], onDelete: Cascade)
+  zone       Zone?      @relation(fields: [zoneId], references: [id])
+
+  @@index([technicianId, startsAt])
+  @@map("technician_shifts")
+}
+
+model Unit {
+  id                  String     @id @default(cuid())
+  code                String     @unique
+  kind                UnitKind
+  zoneId              String     @map("zone_id")
+  status              UnitStatus @default(AVAILABLE)
+  version             Int        @default(0)
+  currentTechnicianId String?    @unique @map("current_technician_id")
+  lat                 Float?
+  lng                 Float?
+  lastLocationAt      DateTime?  @map("last_location_at")
+  createdAt           DateTime   @default(now()) @map("created_at")
+  updatedAt           DateTime   @updatedAt @map("updated_at")
+
+  zone              Zone                @relation(fields: [zoneId], references: [id])
+  currentTechnician Technician?         @relation("UnitCurrentTechnician", fields: [currentTechnicianId], references: [id])
+  capabilities      UnitCapability[]
+  statusHistory     UnitStatusHistory[]
+  // One active job per unit (invariant 7). This is a list only because Prisma
+  // models the inverse of a nullable FK as a list; it holds 0 or 1 rows.
+  assignedJobs      Job[]               @relation("JobAssignedUnit")
+  holds             UnitHold[]
+  stock             UnitStock[]
+  stockMovements    StockMovement[]
+  restockOrders     RestockOrder[]
+  etaEstimates      EtaEstimate[]
+  dispatchOptions   DispatchOption[]
+  dispatchOffers    DispatchOffer[]
+
+  @@index([zoneId, status])
+  @@map("units")
+}
+
+model UnitCapability {
+  id           String @id @default(cuid())
+  unitId       String @map("unit_id")
+  capabilityId String @map("capability_id")
+
+  unit       Unit       @relation(fields: [unitId], references: [id], onDelete: Cascade)
+  capability Capability @relation(fields: [capabilityId], references: [id], onDelete: Cascade)
+
+  @@unique([unitId, capabilityId])
+  @@map("unit_capability")
+}
+
+model UnitStatusHistory {
+  id         String      @id @default(cuid())
+  unitId     String      @map("unit_id")
+  fromStatus UnitStatus? @map("from_status")
+  toStatus   UnitStatus  @map("to_status")
+  reason     String?
+  jobId      String?     @map("job_id")
+  at         DateTime    @default(now())
+
+  unit Unit @relation(fields: [unitId], references: [id], onDelete: Cascade)
+
+  @@index([unitId, at])
+  @@map("unit_status_history")
+}
+
+// ============================================================================
+// INCIDENT — a job and everything intake produces about it. Read from Phase 3.
+// ============================================================================
+
+model Job {
+  id                   String      @id @default(cuid())
+  tenantId             String?     @map("tenant_id")
+  driverId             String      @map("driver_id")
+  vehicleId            String      @map("vehicle_id")
+  zoneId               String      @map("zone_id")
+  status               JobStatus   @default(DRAFT)
+  safetyLevel          SafetyLevel @default(NORMAL) @map("safety_level")
+  serviceType          String?     @map("service_type")
+  version              Int         @default(0)
+  assignedUnitId       String?     @map("assigned_unit_id")
+  assignedTechnicianId String?     @map("assigned_technician_id")
+  priceListId          String?     @map("price_list_id")
+  slaPolicyId          String?     @map("sla_policy_id")
+
+  // Location refinement — a feasibility input, not a UX nicety. Carriageway
+  // direction is first-class: a unit on the far side of a divided highway is
+  // 20km away by road while 200m away in a straight line.
+  lat                  Float?
+  lng                  Float?
+  headingDegrees       Int?          @map("heading_degrees")
+  carriagewayDirection String?       @map("carriageway_direction")
+  nearestExit          String?       @map("nearest_exit")
+  kmMarker             String?       @map("km_marker")
+  landmark             String?
+  roadPosition         RoadPosition? @map("road_position")
+  parkingLevel         String?       @map("parking_level")
+  onHighway            Boolean?      @map("on_highway")
+
+  createdAt   DateTime  @default(now()) @map("created_at")
+  updatedAt   DateTime  @updatedAt @map("updated_at")
+  resolvedAt  DateTime? @map("resolved_at")
+  cancelledAt DateTime? @map("cancelled_at")
+
+  tenant             Tenant?     @relation(fields: [tenantId], references: [id])
+  driver             Driver      @relation(fields: [driverId], references: [id])
+  vehicle            Vehicle     @relation(fields: [vehicleId], references: [id])
+  zone               Zone        @relation(fields: [zoneId], references: [id])
+  assignedUnit       Unit?       @relation("JobAssignedUnit", fields: [assignedUnitId], references: [id])
+  assignedTechnician Technician? @relation("JobAssignedTechnician", fields: [assignedTechnicianId], references: [id])
+  priceList          PriceList?  @relation(fields: [priceListId], references: [id])
+  slaPolicy          SlaPolicy?  @relation(fields: [slaPolicyId], references: [id])
+
+  events                 JobEvent[]
+  symptomReports         SymptomReport[]
+  faultHypotheses        FaultHypothesis[]
+  intakeAnswers          IntakeAnswer[]
+  locationEvents         LocationEvent[]
+  etaEstimates           EtaEstimate[]
+  completionVerification CompletionVerification?
+  solverRuns             SolverRun[]
+  dispatchOptions        DispatchOption[]
+  planVariants           PlanVariant[]
+  dispatchOffers         DispatchOffer[]
+  unitHolds              UnitHold[]
+  technicianOffers       TechnicianOffer[]
+  decisionRecords        DecisionRecord[]
+  destinationOffers      DestinationOffer[]
+  actionRequests         ActionRequest[]
+  escalations            Escalation[]
+  conversation           Conversation?
+  eventPromotions        EventPromotion[]
+  notifications          Notification[]
+  payments               Payment[]
+  estimates              Estimate[]
+  commissions            Commission[]
+  cashCollections        CashCollection[]
+  ledgerEntries          LedgerEntry[]
+  slaEvents              SlaEvent[]
+  stockConfirmations     StockConfirmation[]
+  aiExtractions          AiExtraction[]
+
+  @@index([status, createdAt])
+  @@index([zoneId, status])
+  @@index([tenantId])
+  @@map("jobs")
+}
+
+// APPEND-ONLY. Every state transition writes one of these. `sequence` is a
+// per-job counter assigned by the fan-out point (Phase 4) so a reconnecting
+// client can ask for "everything after N" and replay in order. The database
+// rejects UPDATE and DELETE on this table — see the migration.
+model JobEvent {
+  id        String   @id @default(cuid())
+  jobId     String   @map("job_id")
+  sequence  Int
+  eventType String   @map("event_type")
+  payload   Json     @default("{}")
+  actorRole String?  @map("actor_role")
+  actorId   String?  @map("actor_id")
+  at        DateTime @default(now())
+
+  job Job @relation(fields: [jobId], references: [id], onDelete: Cascade)
+
+  @@unique([jobId, sequence])
+  @@index([jobId, sequence])
+  @@map("job_events")
+}
+
+model SymptomReport {
+  id        String   @id @default(cuid())
+  jobId     String   @map("job_id")
+  source    String   @default("STRUCTURED")
+  payload   Json
+  rawText   String?  @map("raw_text")
+  createdAt DateTime @default(now()) @map("created_at")
+
+  job Job @relation(fields: [jobId], references: [id], onDelete: Cascade)
+
+  @@index([jobId])
+  @@map("symptom_reports")
+}
+
+// A probability distribution over fault types plus the capability set needed to
+// resolve them. Recomputed as intake answers arrive; `version` bumps each time.
+model FaultHypothesis {
+  id                      String   @id @default(cuid())
+  jobId                   String   @map("job_id")
+  distribution            Json
+  requiredCapabilityCodes String[] @map("required_capability_codes")
+  entropy                 Float
+  topFault                String?  @map("top_fault")
+  version                 Int      @default(0)
+  createdAt               DateTime @default(now()) @map("created_at")
+
+  job Job @relation(fields: [jobId], references: [id], onDelete: Cascade)
+
+  @@index([jobId, createdAt])
+  @@map("fault_hypotheses")
+}
+
+// The catalogue of questions intake can ask. Entropy-driven selection picks
+// from this set; it does not generate questions.
+model IntakeQuestion {
+  id              String   @id @default(cuid())
+  code            String   @unique
+  prompt          String
+  answerType      String   @map("answer_type")
+  faultsAddressed String[] @map("faults_addressed")
+  active          Boolean  @default(true)
+
+  answers IntakeAnswer[]
+
+  @@map("intake_questions")
+}
+
+model IntakeAnswer {
+  id            String   @id @default(cuid())
+  jobId         String   @map("job_id")
+  questionId    String?  @map("question_id")
+  questionCode  String   @map("question_code")
+  answer        String
+  entropyBefore Float    @map("entropy_before")
+  entropyAfter  Float    @map("entropy_after")
+  expectedGain  Float?   @map("expected_gain")
+  createdAt     DateTime @default(now()) @map("created_at")
+
+  job      Job             @relation(fields: [jobId], references: [id], onDelete: Cascade)
+  question IntakeQuestion? @relation(fields: [questionId], references: [id])
+
+  @@index([jobId, createdAt])
+  @@map("intake_answers")
+}
+
+// A GPS ping or a "send my exact location" tap. Originates on a phone, so it
+// carries both when it was measured and when the server received it.
+model LocationEvent {
+  id             String   @id @default(cuid())
+  jobId          String   @map("job_id")
+  lat            Float
+  lng            Float
+  headingDegrees Int?     @map("heading_degrees")
+  accuracyMetres Float?   @map("accuracy_metres")
+  source         String
+  eventTime      DateTime @map("event_time")
+  receivedAt     DateTime @default(now()) @map("received_at")
+
+  job Job @relation(fields: [jobId], references: [id], onDelete: Cascade)
+
+  @@index([jobId, eventTime])
+  @@map("location_events")
+}
+
+model EtaEstimate {
+  id           String   @id @default(cuid())
+  jobId        String   @map("job_id")
+  unitId       String?  @map("unit_id")
+  technicianId String?  @map("technician_id")
+  etaSeconds   Int      @map("eta_seconds")
+  method       String
+  degraded     Boolean  @default(false)
+  computedAt   DateTime @default(now()) @map("computed_at")
+
+  job  Job   @relation(fields: [jobId], references: [id], onDelete: Cascade)
+  unit Unit? @relation(fields: [unitId], references: [id])
+
+  @@index([jobId, computedAt])
+  @@map("eta_estimates")
+}
+
+model CompletionVerification {
+  id           String    @id @default(cuid())
+  jobId        String    @unique @map("job_id")
+  code         String
+  method       String    @default("CODE")
+  result       String?
+  verifierRole String?   @map("verifier_role")
+  verifiedAt   DateTime? @map("verified_at")
+  createdAt    DateTime  @default(now()) @map("created_at")
+
+  job Job @relation(fields: [jobId], references: [id], onDelete: Cascade)
+
+  @@map("completion_verifications")
+}
+
+// ============================================================================
+// DISPATCH — the solver's inputs and outputs, and the reservation legs.
+// SolverRun/DispatchOption/PlanVariant read from Phase 9; holds and offers
+// from Phase 11; the saga from Phase 12.
+// ============================================================================
+
+// One run of solve.run(). Persists the whole decision: input snapshot hash,
+// every option with its cost breakdown, every rejection with its reason code,
+// and wall-clock time. The solver writes this and nothing else (invariant 2).
+model SolverRun {
+  id              String   @id @default(cuid())
+  jobId           String?  @map("job_id")
+  trigger         String
+  snapshotHash    String   @map("snapshot_hash")
+  optionCount     Int      @map("option_count")
+  feasibleCount   Int      @map("feasible_count")
+  rejected        Json     @default("[]")
+  wallClockMs     Int      @map("wall_clock_ms")
+  zonePartitioned Boolean  @default(false) @map("zone_partitioned")
+  createdAt       DateTime @default(now()) @map("created_at")
+
+  job             Job?             @relation(fields: [jobId], references: [id])
+  dispatchOptions DispatchOption[]
+  planVariants    PlanVariant[]
+  decisionRecords DecisionRecord[]
+
+  @@index([createdAt])
+  @@map("solver_runs")
+}
+
+model DispatchOption {
+  id                      String   @id @default(cuid())
+  solverRunId             String   @map("solver_run_id")
+  jobId                   String   @map("job_id")
+  unitId                  String   @map("unit_id")
+  technicianId            String   @map("technician_id")
+  estimatedTravelMinutes  Float    @map("estimated_travel_minutes")
+  coveredFaultProbability Float    @map("covered_fault_probability")
+  missingCapabilities     String[] @map("missing_capabilities")
+  feasible                Boolean  @default(true)
+  rejectionCode           String?  @map("rejection_code")
+  rejectionDetail         String?  @map("rejection_detail")
+  costBreakdown           Json?    @map("cost_breakdown")
+  totalCost               Float?   @map("total_cost")
+  createdAt               DateTime @default(now()) @map("created_at")
+
+  solverRun       SolverRun        @relation(fields: [solverRunId], references: [id], onDelete: Cascade)
+  job             Job              @relation(fields: [jobId], references: [id], onDelete: Cascade)
+  unit            Unit             @relation(fields: [unitId], references: [id])
+  decisionRecords DecisionRecord[]
+
+  @@index([jobId])
+  @@index([solverRunId])
+  @@map("dispatch_options")
+}
+
+// One of the three named weight vectors' plans (FASTEST_RESOLUTION,
+// LOWEST_COST, BALANCED) for a solver run — the A/B/C the dispatcher chooses.
+model PlanVariant {
+  id          String   @id @default(cuid())
+  solverRunId String   @map("solver_run_id")
+  jobId       String?  @map("job_id")
+  label       String
+  assignments Json
+  metrics     Json
+  totalCost   Float    @map("total_cost")
+  createdAt   DateTime @default(now()) @map("created_at")
+
+  solverRun      SolverRun       @relation(fields: [solverRunId], references: [id], onDelete: Cascade)
+  job            Job?            @relation(fields: [jobId], references: [id])
+  dispatchOffers DispatchOffer[]
+
+  @@index([solverRunId])
+  @@map("plan_variants")
+}
+
+// The saga aggregate. `state` holds the SagaState machine (Phase 12). A
+// startup routine finds rows not in COMMITTED / REQUEUED and finishes or
+// compensates them.
+model DispatchOffer {
+  id            String    @id @default(cuid())
+  jobId         String    @map("job_id")
+  planVariantId String?   @map("plan_variant_id")
+  unitId        String?   @map("unit_id")
+  technicianId  String?   @map("technician_id")
+  state         SagaState @default(PROPOSED)
+  version       Int       @default(0)
+  proposedAt    DateTime  @default(now()) @map("proposed_at")
+  decidedAt     DateTime? @map("decided_at")
+  createdAt     DateTime  @default(now()) @map("created_at")
+  updatedAt     DateTime  @updatedAt @map("updated_at")
+
+  job               Job                @relation(fields: [jobId], references: [id], onDelete: Cascade)
+  planVariant       PlanVariant?       @relation(fields: [planVariantId], references: [id])
+  unit              Unit?              @relation(fields: [unitId], references: [id])
+  unitHolds         UnitHold[]
+  technicianOffers  TechnicianOffer[]
+  destinationOffers DestinationOffer[]
+
+  @@index([jobId])
+  @@index([state])
+  @@map("dispatch_offers")
+}
+
+// A reservation on a unit, taken by a version-checked conditional UPDATE
+// (Phase 11). Has a TTL; the cleanup worker releases expired holds. Release is
+// idempotent — releasing twice is a no-op, never a double-free.
+model UnitHold {
+  id              String     @id @default(cuid())
+  unitId          String     @map("unit_id")
+  jobId           String     @map("job_id")
+  dispatchOfferId String?    @map("dispatch_offer_id")
+  status          HoldStatus @default(ACTIVE)
+  version         Int        @default(0)
+  heldAt          DateTime   @default(now()) @map("held_at")
+  expiresAt       DateTime   @map("expires_at")
+  releasedAt      DateTime?  @map("released_at")
+  releaseReason   String?    @map("release_reason")
+
+  unit          Unit           @relation(fields: [unitId], references: [id])
+  job           Job            @relation(fields: [jobId], references: [id], onDelete: Cascade)
+  dispatchOffer DispatchOffer? @relation(fields: [dispatchOfferId], references: [id])
+
+  @@index([unitId, status])
+  @@index([expiresAt])
+  @@map("unit_holds")
+}
+
+// An offer to a technician: PROPOSED -> ACCEPTED | DECLINED | TIMEOUT. TTL via
+// the offer-expiry queue. An accept landing as the offer expires must resolve
+// to exactly one outcome (Phase 11).
+model TechnicianOffer {
+  id                String      @id @default(cuid())
+  jobId             String      @map("job_id")
+  technicianId      String      @map("technician_id")
+  dispatchOfferId   String?     @map("dispatch_offer_id")
+  status            OfferStatus @default(PROPOSED)
+  version           Int         @default(0)
+  sentAt            DateTime    @default(now()) @map("sent_at")
+  expiresAt         DateTime    @map("expires_at")
+  respondedAt       DateTime?   @map("responded_at")
+  responseLatencyMs Int?        @map("response_latency_ms")
+
+  job           Job            @relation(fields: [jobId], references: [id], onDelete: Cascade)
+  technician    Technician     @relation(fields: [technicianId], references: [id])
+  dispatchOffer DispatchOffer? @relation(fields: [dispatchOfferId], references: [id])
+
+  @@index([status, expiresAt])
+  @@index([jobId])
+  @@map("technician_offers")
+}
+
+// The "why this technician?" record: the selected option with its cost
+// breakdown term by term, and every rejected alternative with its feasibility
+// reason code. The data already exists from Phases 7 and 8; this persists it.
+model DecisionRecord {
+  id                      String   @id @default(cuid())
+  jobId                   String   @map("job_id")
+  solverRunId             String?  @map("solver_run_id")
+  selectedOptionId        String?  @map("selected_option_id")
+  selectedByRole          String?  @map("selected_by_role")
+  selectedById            String?  @map("selected_by_id")
+  overrideReasonCode      String?  @map("override_reason_code")
+  costBreakdown           Json     @default("{}") @map("cost_breakdown")
+  rejectedAlternatives    Json     @default("[]") @map("rejected_alternatives")
+  coveredFaultProbability Float?   @map("covered_fault_probability")
+  createdAt               DateTime @default(now()) @map("created_at")
+
+  job            Job             @relation(fields: [jobId], references: [id], onDelete: Cascade)
+  solverRun      SolverRun?      @relation(fields: [solverRunId], references: [id])
+  selectedOption DispatchOption? @relation(fields: [selectedOptionId], references: [id])
+
+  @@index([jobId, createdAt])
+  @@map("decision_records")
+}
+
+// ============================================================================
+// INVENTORY — parts on units and in depots. Unread until Phase 18/19.
+// ============================================================================
+
+model PartCategory {
+  id       String  @id @default(cuid())
+  code     String  @unique
+  name     String
+  parentId String? @map("parent_id")
+
+  parent   PartCategory?  @relation("PartCategoryTree", fields: [parentId], references: [id])
+  children PartCategory[] @relation("PartCategoryTree")
+  parts    Part[]
+
+  @@map("part_categories")
+}
+
+model Part {
+  id         String   @id @default(cuid())
+  sku        String   @unique
+  name       String
+  categoryId String   @map("category_id")
+  unit       String   @default("EACH")
+  hazmat     Boolean  @default(false)
+  createdAt  DateTime @default(now()) @map("created_at")
+
+  category           PartCategory        @relation(fields: [categoryId], references: [id])
+  unitStock          UnitStock[]
+  stockMovements     StockMovement[]
+  stockConfirmations StockConfirmation[]
+  restockOrders      RestockOrder[]
+  partPrices         PartPrice[]
+
+  @@index([categoryId])
+  @@map("parts")
+}
+
+model Depot {
+  id     String  @id @default(cuid())
+  code   String  @unique
+  name   String
+  zoneId String? @map("zone_id")
+  lat    Float?
+  lng    Float?
+
+  zone           Zone?           @relation(fields: [zoneId], references: [id])
+  stockMovements StockMovement[]
+  restockOrders  RestockOrder[]
+
+  @@map("depots")
+}
+
+model UnitStock {
+  id        String   @id @default(cuid())
+  unitId    String   @map("unit_id")
+  partId    String   @map("part_id")
+  quantity  Int      @default(0)
+  version   Int      @default(0)
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  unit Unit @relation(fields: [unitId], references: [id], onDelete: Cascade)
+  part Part @relation(fields: [partId], references: [id])
+
+  @@unique([unitId, partId])
+  @@index([partId])
+  @@map("unit_stock")
+}
+
+// Ledger of stock changes. `reason` is CONSUMED_ON_JOB | RESTOCK | ADJUSTMENT |
+// TRANSFER. Carries event_time / received_at because a technician can confirm
+// a part used while offline and it reaches us later.
+model StockMovement {
+  id         String   @id @default(cuid())
+  unitId     String?  @map("unit_id")
+  depotId    String?  @map("depot_id")
+  partId     String   @map("part_id")
+  delta      Int
+  reason     String
+  jobId      String?  @map("job_id")
+  refId      String?  @map("ref_id")
+  eventTime  DateTime @default(now()) @map("event_time")
+  receivedAt DateTime @default(now()) @map("received_at")
+
+  unit  Unit?  @relation(fields: [unitId], references: [id])
+  depot Depot? @relation(fields: [depotId], references: [id])
+  part  Part   @relation(fields: [partId], references: [id])
+
+  @@index([partId, eventTime])
+  @@map("stock_movements")
+}
+
+model StockConfirmation {
+  id           String   @id @default(cuid())
+  jobId        String   @map("job_id")
+  technicianId String   @map("technician_id")
+  partId       String   @map("part_id")
+  quantity     Int
+  confirmedAt  DateTime @default(now()) @map("confirmed_at")
+
+  job  Job  @relation(fields: [jobId], references: [id], onDelete: Cascade)
+  part Part @relation(fields: [partId], references: [id])
+
+  @@index([jobId])
+  @@map("stock_confirmations")
+}
+
+model RestockOrder {
+  id          String    @id @default(cuid())
+  depotId     String?   @map("depot_id")
+  unitId      String?   @map("unit_id")
+  partId      String    @map("part_id")
+  quantity    Int
+  status      String    @default("REQUESTED")
+  requestedAt DateTime  @default(now()) @map("requested_at")
+  receivedAt  DateTime? @map("received_at")
+
+  depot Depot? @relation(fields: [depotId], references: [id])
+  unit  Unit?  @relation(fields: [unitId], references: [id])
+  part  Part   @relation(fields: [partId], references: [id])
+
+  @@index([partId])
+  @@map("restock_orders")
+}
+
+// ============================================================================
+// PRICING — versioned. A job prices against the list in force at CREATION and
+// is never re-priced. Unread until Phase 15c. Money is integer paise.
+// ============================================================================
+
+model PriceList {
+  id        String    @id @default(cuid())
+  name      String
+  tenantId  String?   @map("tenant_id")
+  currency  String    @default("INR")
+  validFrom DateTime  @map("valid_from")
+  validTo   DateTime? @map("valid_to")
+  active    Boolean   @default(true)
+  createdAt DateTime  @default(now()) @map("created_at")
+
+  tenant      Tenant?      @relation(fields: [tenantId], references: [id])
+  partPrices  PartPrice[]
+  labourRates LabourRate[]
+  towTariffs  TowTariff[]
+  calloutFees CalloutFee[]
+  jobs        Job[]
+  estimates   Estimate[]
+
+  @@index([validFrom, validTo])
+  @@map("price_lists")
+}
+
+model PartPrice {
+  id             String    @id @default(cuid())
+  priceListId    String    @map("price_list_id")
+  partId         String    @map("part_id")
+  unitPricePaise Int       @map("unit_price_paise")
+  validFrom      DateTime  @map("valid_from")
+  validTo        DateTime? @map("valid_to")
+
+  priceList PriceList @relation(fields: [priceListId], references: [id], onDelete: Cascade)
+  part      Part      @relation(fields: [partId], references: [id])
+
+  @@index([priceListId, partId])
+  @@map("part_prices")
+}
+
+model LabourRate {
+  id               String    @id @default(cuid())
+  priceListId      String    @map("price_list_id")
+  code             String
+  ratePerHourPaise Int       @map("rate_per_hour_paise")
+  validFrom        DateTime  @map("valid_from")
+  validTo          DateTime? @map("valid_to")
+
+  priceList PriceList @relation(fields: [priceListId], references: [id], onDelete: Cascade)
+
+  @@index([priceListId])
+  @@map("labour_rates")
+}
+
+model TowTariff {
+  id             String    @id @default(cuid())
+  priceListId    String    @map("price_list_id")
+  towType        String    @map("tow_type")
+  perKmPaise     Int       @map("per_km_paise")
+  minChargePaise Int       @default(0) @map("min_charge_paise")
+  validFrom      DateTime  @map("valid_from")
+  validTo        DateTime? @map("valid_to")
+
+  priceList PriceList @relation(fields: [priceListId], references: [id], onDelete: Cascade)
+
+  @@index([priceListId])
+  @@map("tow_tariffs")
+}
+
+model CalloutFee {
+  id          String    @id @default(cuid())
+  priceListId String    @map("price_list_id")
+  serviceType String    @map("service_type")
+  feePaise    Int       @map("fee_paise")
+  validFrom   DateTime  @map("valid_from")
+  validTo     DateTime? @map("valid_to")
+
+  priceList PriceList @relation(fields: [priceListId], references: [id], onDelete: Cascade)
+
+  @@index([priceListId])
+  @@map("callout_fees")
+}
+
+// ============================================================================
+// MONEY — payments, estimates and a double-entry ledger. Unread until Phase
+// 15c. All amounts are signed integer paise.
+// ============================================================================
+
+model Payment {
+  id             String        @id @default(cuid())
+  jobId          String        @map("job_id")
+  tenantId       String?       @map("tenant_id")
+  method         PaymentMethod
+  status         PaymentStatus @default(PENDING)
+  amountPaise    Int           @map("amount_paise")
+  currency       String        @default("INR")
+  idempotencyKey String        @unique @map("idempotency_key")
+  externalRef    String?       @map("external_ref")
+  createdAt      DateTime      @default(now()) @map("created_at")
+  updatedAt      DateTime      @updatedAt @map("updated_at")
+
+  job           Job            @relation(fields: [jobId], references: [id])
+  tenant        Tenant?        @relation(fields: [tenantId], references: [id])
+  events        PaymentEvent[]
+  authorisation Authorisation?
+  captures      Capture[]
+  refunds       Refund[]
+
+  @@index([jobId])
+  @@map("payments")
+}
+
+// Gateway callbacks. External origin, so event_time and received_at both.
+model PaymentEvent {
+  id         String   @id @default(cuid())
+  paymentId  String   @map("payment_id")
+  type       String
+  payload    Json     @default("{}")
+  eventTime  DateTime @map("event_time")
+  receivedAt DateTime @default(now()) @map("received_at")
+
+  payment Payment @relation(fields: [paymentId], references: [id], onDelete: Cascade)
+
+  @@index([paymentId])
+  @@map("payment_events")
+}
+
+model Authorisation {
+  id           String    @id @default(cuid())
+  paymentId    String    @unique @map("payment_id")
+  amountPaise  Int       @map("amount_paise")
+  status       String
+  externalRef  String?   @map("external_ref")
+  authorisedAt DateTime? @map("authorised_at")
+  expiresAt    DateTime? @map("expires_at")
+  createdAt    DateTime  @default(now()) @map("created_at")
+
+  payment Payment @relation(fields: [paymentId], references: [id], onDelete: Cascade)
+
+  @@map("authorisations")
+}
+
+model Capture {
+  id             String   @id @default(cuid())
+  paymentId      String   @map("payment_id")
+  amountPaise    Int      @map("amount_paise")
+  idempotencyKey String   @unique @map("idempotency_key")
+  externalRef    String?  @map("external_ref")
+  capturedAt     DateTime @default(now()) @map("captured_at")
+
+  payment Payment @relation(fields: [paymentId], references: [id], onDelete: Cascade)
+
+  @@index([paymentId])
+  @@map("captures")
+}
+
+model Refund {
+  id             String   @id @default(cuid())
+  paymentId      String   @map("payment_id")
+  amountPaise    Int      @map("amount_paise")
+  reason         String?
+  idempotencyKey String   @unique @map("idempotency_key")
+  externalRef    String?  @map("external_ref")
+  refundedAt     DateTime @default(now()) @map("refunded_at")
+
+  payment Payment @relation(fields: [paymentId], references: [id], onDelete: Cascade)
+
+  @@index([paymentId])
+  @@map("refunds")
+}
+
+model Estimate {
+  id            String         @id @default(cuid())
+  jobId         String         @map("job_id")
+  priceListId   String?        @map("price_list_id")
+  status        EstimateStatus @default(DRAFT)
+  subtotalPaise Int            @default(0) @map("subtotal_paise")
+  taxPaise      Int            @default(0) @map("tax_paise")
+  totalPaise    Int            @default(0) @map("total_paise")
+  createdAt     DateTime       @default(now()) @map("created_at")
+  updatedAt     DateTime       @updatedAt @map("updated_at")
+
+  job       Job               @relation(fields: [jobId], references: [id], onDelete: Cascade)
+  priceList PriceList?        @relation(fields: [priceListId], references: [id])
+  lines     EstimateLine[]
+  approval  EstimateApproval?
+
+  @@index([jobId])
+  @@map("estimates")
+}
+
+model EstimateLine {
+  id             String  @id @default(cuid())
+  estimateId     String  @map("estimate_id")
+  kind           String
+  description    String
+  quantity       Float   @default(1)
+  unitPricePaise Int     @map("unit_price_paise")
+  amountPaise    Int     @map("amount_paise")
+  refId          String? @map("ref_id")
+
+  estimate Estimate @relation(fields: [estimateId], references: [id], onDelete: Cascade)
+
+  @@index([estimateId])
+  @@map("estimate_lines")
+}
+
+model EstimateApproval {
+  id             String   @id @default(cuid())
+  estimateId     String   @unique @map("estimate_id")
+  approvedByRole String   @map("approved_by_role")
+  approvedById   String?  @map("approved_by_id")
+  channel        String?
+  approvedAt     DateTime @default(now()) @map("approved_at")
+
+  estimate Estimate @relation(fields: [estimateId], references: [id], onDelete: Cascade)
+
+  @@map("estimate_approvals")
+}
+
+// A double-entry account. Every LedgerEntry names one. `kind` is ASSET |
+// LIABILITY | REVENUE | EXPENSE | CLEARING.
+model LedgerAccount {
+  id        String   @id @default(cuid())
+  code      String   @unique
+  name      String
+  kind      String
+  createdAt DateTime @default(now()) @map("created_at")
+
+  entries LedgerEntry[]
+
+  @@map("ledger_accounts")
+}
+
+// APPEND-ONLY, like job_events. A correction is a new compensating entry, never
+// an edit. For any transaction_id the signed amounts sum to zero — that
+// invariant is checked in /src/commit at write time (Phase 15c); the database
+// only enforces that nothing is ever updated or deleted here.
+model LedgerEntry {
+  id            String   @id @default(cuid())
+  transactionId String   @map("transaction_id")
+  accountId     String   @map("account_id")
+  amountPaise   Int      @map("amount_paise")
+  currency      String   @default("INR")
+  jobId         String?  @map("job_id")
+  memo          String?
+  eventTime     DateTime @default(now()) @map("event_time")
+  createdAt     DateTime @default(now()) @map("created_at")
+
+  account LedgerAccount @relation(fields: [accountId], references: [id])
+  job     Job?          @relation(fields: [jobId], references: [id])
+
+  @@index([transactionId])
+  @@index([accountId, createdAt])
+  @@map("ledger_entries")
+}
+
+model Commission {
+  id           String   @id @default(cuid())
+  jobId        String   @map("job_id")
+  technicianId String   @map("technician_id")
+  amountPaise  Int      @map("amount_paise")
+  rateBps      Int?     @map("rate_bps")
+  status       String   @default("ACCRUED")
+  createdAt    DateTime @default(now()) @map("created_at")
+
+  job        Job        @relation(fields: [jobId], references: [id], onDelete: Cascade)
+  technician Technician @relation(fields: [technicianId], references: [id])
+
+  @@index([technicianId])
+  @@map("commissions")
+}
+
+model Payout {
+  id           String    @id @default(cuid())
+  technicianId String    @map("technician_id")
+  batchId      String?   @map("batch_id")
+  amountPaise  Int       @map("amount_paise")
+  status       String    @default("PENDING")
+  periodStart  DateTime? @map("period_start")
+  periodEnd    DateTime? @map("period_end")
+  createdAt    DateTime  @default(now()) @map("created_at")
+
+  technician Technician   @relation(fields: [technicianId], references: [id])
+  batch      PayoutBatch? @relation(fields: [batchId], references: [id])
+
+  @@index([technicianId])
+  @@index([batchId])
+  @@map("payouts")
+}
+
+model PayoutBatch {
+  id          String    @id @default(cuid())
+  reference   String    @unique
+  status      String    @default("DRAFT")
+  totalPaise  Int       @default(0) @map("total_paise")
+  createdAt   DateTime  @default(now()) @map("created_at")
+  processedAt DateTime? @map("processed_at")
+
+  payouts Payout[]
+
+  @@map("payout_batches")
+}
+
+model CashCollection {
+  id           String   @id @default(cuid())
+  jobId        String   @map("job_id")
+  technicianId String   @map("technician_id")
+  amountPaise  Int      @map("amount_paise")
+  reconciled   Boolean  @default(false)
+  collectedAt  DateTime @default(now()) @map("collected_at")
+
+  job        Job        @relation(fields: [jobId], references: [id], onDelete: Cascade)
+  technician Technician @relation(fields: [technicianId], references: [id])
+
+  @@index([technicianId])
+  @@map("cash_collections")
+}
+
+model ContractBilling {
+  id          String   @id @default(cuid())
+  contractId  String   @map("contract_id")
+  periodStart DateTime @map("period_start")
+  periodEnd   DateTime @map("period_end")
+  amountPaise Int      @map("amount_paise")
+  status      String   @default("DRAFT")
+  createdAt   DateTime @default(now()) @map("created_at")
+
+  contract Contract @relation(fields: [contractId], references: [id], onDelete: Cascade)
+
+  @@index([contractId])
+  @@map("contract_billings")
+}
+
+// ============================================================================
+// PROVIDERS — workshops a tow can be sent to. Unread until Phase 22.
+// ============================================================================
+
+model Workshop {
+  id        String   @id @default(cuid())
+  code      String   @unique
+  name      String
+  zoneId    String?  @map("zone_id")
+  lat       Float
+  lng       Float
+  evClass   String?  @map("ev_class")
+  active    Boolean  @default(true)
+  createdAt DateTime @default(now()) @map("created_at")
+
+  zone              Zone?                   @relation(fields: [zoneId], references: [id])
+  capabilities      WorkshopCapability[]
+  authorisations    WorkshopAuthorisation[]
+  hours             WorkshopHours[]
+  destinationOffers DestinationOffer[]
+
+  @@map("workshops")
+}
+
+model WorkshopCapability {
+  id             String  @id @default(cuid())
+  workshopId     String  @map("workshop_id")
+  capabilityCode String  @map("capability_code")
+  notes          String?
+
+  workshop Workshop @relation(fields: [workshopId], references: [id], onDelete: Cascade)
+
+  @@unique([workshopId, capabilityCode])
+  @@map("workshop_capabilities")
+}
+
+model WorkshopAuthorisation {
+  id         String    @id @default(cuid())
+  workshopId String    @map("workshop_id")
+  brand      String
+  level      String    @default("STANDARD")
+  validFrom  DateTime? @map("valid_from")
+  validTo    DateTime? @map("valid_to")
+
+  workshop Workshop @relation(fields: [workshopId], references: [id], onDelete: Cascade)
+
+  @@unique([workshopId, brand])
+  @@map("workshop_authorisations")
+}
+
+model WorkshopHours {
+  id         String  @id @default(cuid())
+  workshopId String  @map("workshop_id")
+  dayOfWeek  Int     @map("day_of_week")
+  opens      String
+  closes     String
+  closed     Boolean @default(false)
+
+  workshop Workshop @relation(fields: [workshopId], references: [id], onDelete: Cascade)
+
+  @@unique([workshopId, dayOfWeek])
+  @@map("workshop_hours")
+}
+
+// Leg 3 of the saga (tows only). External actor: accept / decline / timeout.
+model DestinationOffer {
+  id              String    @id @default(cuid())
+  jobId           String    @map("job_id")
+  workshopId      String    @map("workshop_id")
+  dispatchOfferId String?   @map("dispatch_offer_id")
+  status          String    @default("PROPOSED")
+  etaSeconds      Int?      @map("eta_seconds")
+  sentAt          DateTime  @default(now()) @map("sent_at")
+  expiresAt       DateTime  @map("expires_at")
+  respondedAt     DateTime? @map("responded_at")
+
+  job           Job                @relation(fields: [jobId], references: [id], onDelete: Cascade)
+  workshop      Workshop           @relation(fields: [workshopId], references: [id])
+  dispatchOffer DispatchOffer?     @relation(fields: [dispatchOfferId], references: [id])
+  outcome       AcceptanceOutcome?
+
+  @@index([jobId])
+  @@map("destination_offers")
+}
+
+model AcceptanceOutcome {
+  id                 String   @id @default(cuid())
+  destinationOfferId String   @unique @map("destination_offer_id")
+  outcome            String
+  reason             String?
+  recordedAt         DateTime @default(now()) @map("recorded_at")
+
+  destinationOffer DestinationOffer @relation(fields: [destinationOfferId], references: [id], onDelete: Cascade)
+
+  @@map("acceptance_outcomes")
+}
+
+// ============================================================================
+// CONTROL — the human-in-the-loop tiers and system health. Read from Phase 13.
+// ============================================================================
+
+// tier is AUTO | RECOMMEND | APPROVE. AUTO executes immediately and is logged;
+// RECOMMEND shows reason + impact and waits for a dispatcher click; APPROVE is
+// blocked pending sign-off, approver recorded.
+model ActionRequest {
+  id              String       @id @default(cuid())
+  jobId           String?      @map("job_id")
+  tier            ActionTier
+  kind            String
+  reason          String
+  computedImpact  Json?        @map("computed_impact")
+  status          ActionStatus @default(PENDING)
+  resolution      String?
+  requestedByRole String?      @map("requested_by_role")
+  requestedById   String?      @map("requested_by_id")
+  createdAt       DateTime     @default(now()) @map("created_at")
+  resolvedAt      DateTime?    @map("resolved_at")
+
+  job      Job?            @relation(fields: [jobId], references: [id])
+  approval ApprovalRecord?
+
+  @@index([jobId])
+  @@index([status])
+  @@map("action_requests")
+}
+
+model ApprovalRecord {
+  id              String   @id @default(cuid())
+  actionRequestId String   @unique @map("action_request_id")
+  approvedByRole  String   @map("approved_by_role")
+  approvedById    String?  @map("approved_by_id")
+  decision        String
+  note            String?
+  decidedAt       DateTime @default(now()) @map("decided_at")
+
+  actionRequest ActionRequest @relation(fields: [actionRequestId], references: [id], onDelete: Cascade)
+
+  @@map("approval_records")
+}
+
+model Escalation {
+  id                String           @id @default(cuid())
+  jobId             String?          @map("job_id")
+  reason            String
+  status            EscalationStatus @default(OPEN)
+  reassignmentCount Int              @default(0) @map("reassignment_count")
+  openedAt          DateTime         @default(now()) @map("opened_at")
+  closedAt          DateTime?        @map("closed_at")
+
+  job       Job?                 @relation(fields: [jobId], references: [id])
+  decisions EscalationDecision[]
+
+  @@index([jobId])
+  @@index([status])
+  @@map("escalations")
+}
+
+model EscalationDecision {
+  id            String   @id @default(cuid())
+  escalationId  String   @map("escalation_id")
+  decision      String
+  note          String?
+  decidedByRole String?  @map("decided_by_role")
+  decidedById   String?  @map("decided_by_id")
+  decidedAt     DateTime @default(now()) @map("decided_at")
+
+  escalation Escalation @relation(fields: [escalationId], references: [id], onDelete: Cascade)
+
+  @@index([escalationId])
+  @@map("escalation_decisions")
+}
+
+// One row per component. state is NORMAL | DEGRADED | CRITICAL. Every degraded
+// state must be visible to an operator (invariant 8) — this table is how.
+model SystemHealthState {
+  id        String      @id @default(cuid())
+  component String      @unique
+  state     HealthState @default(NORMAL)
+  detail    String?
+  since     DateTime    @default(now())
+  updatedAt DateTime    @updatedAt @map("updated_at")
+
+  @@map("system_health_states")
+}
+
+// ============================================================================
+// COMMS — chat, its delivery records, and message -> operational event
+// promotion. Read from Phase 15b. No typing indicators, no read receipts.
+// ============================================================================
+
+model Conversation {
+  id        String    @id @default(cuid())
+  jobId     String    @unique @map("job_id")
+  createdAt DateTime  @default(now()) @map("created_at")
+  closedAt  DateTime? @map("closed_at")
+
+  job      Job       @relation(fields: [jobId], references: [id], onDelete: Cascade)
+  messages Message[]
+
+  @@map("conversations")
+}
+
+model Message {
+  id             String   @id @default(cuid())
+  conversationId String   @map("conversation_id")
+  senderRole     String   @map("sender_role")
+  senderId       String?  @map("sender_id")
+  body           String
+  kind           String   @default("TEXT")
+  eventTime      DateTime @default(now()) @map("event_time")
+  receivedAt     DateTime @default(now()) @map("received_at")
+
+  conversation Conversation      @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  deliveries   MessageDelivery[]
+  attachments  Attachment[]
+  promotions   EventPromotion[]
+
+  @@index([conversationId, eventTime])
+  @@map("messages")
+}
+
+model MessageDelivery {
+  id          String         @id @default(cuid())
+  messageId   String         @map("message_id")
+  recipientId String         @map("recipient_id")
+  channel     String
+  status      DeliveryStatus @default(QUEUED)
+  sentAt      DateTime?      @map("sent_at")
+  deliveredAt DateTime?      @map("delivered_at")
+
+  message Message @relation(fields: [messageId], references: [id], onDelete: Cascade)
+
+  @@unique([messageId, recipientId])
+  @@map("message_deliveries")
+}
+
+model Attachment {
+  id        String   @id @default(cuid())
+  messageId String   @map("message_id")
+  kind      String
+  url       String
+  sizeBytes Int?     @map("size_bytes")
+  metadata  Json?
+  createdAt DateTime @default(now()) @map("created_at")
+
+  message Message @relation(fields: [messageId], references: [id], onDelete: Cascade)
+
+  @@index([messageId])
+  @@map("attachments")
+}
+
+// A message flagged as maybe containing operational information. A HUMAN
+// confirms before it becomes a JobEvent (invariant 5). On confirmation,
+// job_event_id points at the event written, with provenance back to the message.
+model EventPromotion {
+  id              String          @id @default(cuid())
+  messageId       String?         @map("message_id")
+  jobId           String          @map("job_id")
+  kind            PromotionKind
+  status          PromotionStatus @default(FLAGGED)
+  proposedPayload Json            @map("proposed_payload")
+  confirmedByRole String?         @map("confirmed_by_role")
+  confirmedById   String?         @map("confirmed_by_id")
+  jobEventId      String?         @map("job_event_id")
+  createdAt       DateTime        @default(now()) @map("created_at")
+  confirmedAt     DateTime?       @map("confirmed_at")
+
+  message Message? @relation(fields: [messageId], references: [id])
+  job     Job      @relation(fields: [jobId], references: [id], onDelete: Cascade)
+
+  @@index([jobId])
+  @@map("event_promotions")
+}
+
+// Driver/technician notifications. coalesce_key lets a re-plan storm collapse
+// into a single message after the plan stabilises.
+model Notification {
+  id          String    @id @default(cuid())
+  jobId       String?   @map("job_id")
+  recipientId String    @map("recipient_id")
+  channel     String
+  title       String
+  body        String
+  coalesceKey String?   @map("coalesce_key")
+  sentAt      DateTime? @map("sent_at")
+  readAt      DateTime? @map("read_at")
+  createdAt   DateTime  @default(now()) @map("created_at")
+
+  job Job? @relation(fields: [jobId], references: [id])
+
+  @@index([recipientId, createdAt])
+  @@map("notifications")
+}
+
+// ============================================================================
+// CROSS — things nearly everything touches. AuditLog and IdempotencyKey read
+// from Phase 2; SlaEvent from Phase 3; AiExtraction from Phase 16.
+// ============================================================================
+
+model SlaEvent {
+  id          String    @id @default(cuid())
+  jobId       String    @map("job_id")
+  slaPolicyId String?   @map("sla_policy_id")
+  kind        String
+  dueAt       DateTime? @map("due_at")
+  eventTime   DateTime  @default(now()) @map("event_time")
+  receivedAt  DateTime  @default(now()) @map("received_at")
+
+  job       Job        @relation(fields: [jobId], references: [id], onDelete: Cascade)
+  slaPolicy SlaPolicy? @relation(fields: [slaPolicyId], references: [id])
+
+  @@index([jobId, eventTime])
+  @@map("sla_events")
+}
+
+// Written whenever a dispatcher reads across tenants, among other things.
+model AuditLog {
+  id          String   @id @default(cuid())
+  actorId     String?  @map("actor_id")
+  actorRole   String?  @map("actor_role")
+  action      String
+  resource    String
+  resourceId  String?  @map("resource_id")
+  tenantId    String?  @map("tenant_id")
+  crossTenant Boolean  @default(false) @map("cross_tenant")
+  detail      Json?
+  at          DateTime @default(now())
+
+  @@index([resource, at])
+  @@index([actorId, at])
+  @@map("audit_logs")
+}
+
+// Scoped per user. expires_at drives the cleanup sweep (Phase 5) — Postgres
+// has no TTL index, so a worker deletes expired rows on a schedule.
+model IdempotencyKey {
+  id             String   @id @default(cuid())
+  key            String
+  userId         String   @map("user_id")
+  scope          String
+  requestHash    String?  @map("request_hash")
+  responseStatus Int?     @map("response_status")
+  responseBody   Json?    @map("response_body")
+  createdAt      DateTime @default(now()) @map("created_at")
+  expiresAt      DateTime @map("expires_at")
+
+  @@unique([userId, scope, key])
+  @@index([expiresAt])
+  @@map("idempotency_keys")
+}
+
+// One LLM call: what went in, what came back, what was extracted. External
+// origin (the model provider), so event_time / received_at both. The LLM
+// classifies and extracts; it never decides (invariant 5).
+model AiExtraction {
+  id          String   @id @default(cuid())
+  jobId       String?  @map("job_id")
+  model       String
+  prompt      String?
+  rawResponse Json?    @map("raw_response")
+  extracted   Json?
+  confidence  Float?
+  accepted    Boolean?
+  eventTime   DateTime @default(now()) @map("event_time")
+  receivedAt  DateTime @default(now()) @map("received_at")
+
+  job Job? @relation(fields: [jobId], references: [id])
+
+  @@index([jobId])
+  @@map("ai_extractions")
 }

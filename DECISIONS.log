@@ -178,3 +178,233 @@ real dependency health checks (liveness vs readiness); process separation
 - *Why validate the whole environment at boot?* So a missing `DATABASE_URL`
   is a one-line startup failure in `src/infra/config.ts`, not a stack trace
   from inside a request handler an hour into a demo.
+
+---
+
+## Phase 1 — Schema and seed / 2026-08-28 / Commit: (uncommitted — "phase 1: schema and seed")
+
+### Built
+
+Schema — `prisma/schema.prisma`, one file, 83 tables, grouped by the build
+plan's sections with a header comment block explaining the two recurring
+patterns (append-only log, optimistic `version` column):
+
+- CORE: `users`, `drivers`, `vehicle_profiles`, `vehicles`, `zones`,
+  `capabilities`, `technicians`, `technician_capability`, `technician_shifts`,
+  `units`, `unit_capability`, `unit_status_history`.
+- INCIDENT: `jobs`, `job_events`, `symptom_reports`, `fault_hypotheses`,
+  `intake_questions`, `intake_answers`, `location_events`, `eta_estimates`,
+  `completion_verifications`.
+- DISPATCH: `solver_runs`, `dispatch_options`, `plan_variants`,
+  `dispatch_offers`, `unit_holds`, `technician_offers`, `decision_records`.
+- INVENTORY: `part_categories`, `parts`, `depots`, `unit_stock`,
+  `stock_movements`, `stock_confirmations`, `restock_orders`.
+- PRICING: `price_lists`, `part_prices`, `labour_rates`, `tow_tariffs`,
+  `callout_fees` — all carry `valid_from` / `valid_to`.
+- MONEY: `payments`, `payment_events`, `authorisations`, `captures`, `refunds`,
+  `estimates`, `estimate_lines`, `estimate_approvals`, `ledger_accounts`,
+  `ledger_entries`, `commissions`, `payouts`, `payout_batches`,
+  `cash_collections`, `contract_billings`.
+- PROVIDERS: `workshops`, `workshop_capabilities`, `workshop_authorisations`,
+  `workshop_hours`, `destination_offers`, `acceptance_outcomes`.
+- TENANCY: `tenants`, `tenant_memberships`, `contracts`, `contract_tiers`,
+  `sla_policies`, `covered_services`.
+- CONTROL: `action_requests`, `approval_records`, `escalations`,
+  `escalation_decisions`, `system_health_states`.
+- COMMS: `conversations`, `messages`, `message_deliveries`, `attachments`,
+  `event_promotions`, `notifications`.
+- CROSS: `sla_events`, `audit_logs`, `idempotency_keys`, `ai_extractions`.
+
+Enums: Role, TenantKind, ContractTierName, UnitKind, UnitStatus, JobStatus,
+SafetyLevel, RoadPosition, HoldStatus, OfferStatus, SagaState, ActionTier,
+ActionStatus, PaymentMethod, PaymentStatus, EstimateStatus, HealthState,
+EscalationStatus, DeliveryStatus, PromotionKind, PromotionStatus. Peripheral
+status columns are left `String` on purpose.
+
+`version Int @default(0)` on: `units`, `jobs`, `unit_stock`, `unit_holds`,
+`dispatch_offers`, `technician_offers`.
+
+Indexes for the queries that will actually run: `units(zone_id, status)`,
+`jobs(status, created_at)`, `jobs(zone_id, status)`,
+`job_events(job_id, sequence)` (also `@@unique`), plus per-FK and
+time-ordered indexes on the event/child tables.
+
+Migration — `prisma/migrations/20260828150236_phase1_domain_schema/migration.sql`:
+Prisma-generated DDL, then a hand-written tail:
+- `zippy_reject_mutation()` PL/pgSQL function — `RAISE EXCEPTION` with a hint.
+- `job_events_append_only` and `ledger_entries_append_only` triggers,
+  `BEFORE UPDATE OR DELETE ... FOR EACH ROW`.
+- `REVOKE UPDATE, DELETE ... FROM PUBLIC` on both tables (defence in depth for
+  the non-privileged app role later phases connect as).
+
+Seed — modular under `prisma/seed/`, orchestrated by `prisma/seed.ts`:
+- `client.ts` — one PrismaClient, `todayAt(hour, minute)`, `START_OF_YEAR`.
+- `zones.ts` — 6 Bengaluru zones (`seedZones`, `zoneId`).
+- `capabilities.ts` — 12-code catalogue (`seedCapabilities`, `capabilityId`).
+- `parts.ts` — 8 categories, 22 parts (`seedParts`, `partId`, `partCategoryId`).
+- `pricing.ts` — one active price list "Standard 2026", a `part_prices` row per
+  part, 2 labour rates, 2 tow tariffs, 2 callout fees (`seedPricing`).
+- `tenants.ts` — 4 tier rows; 3 FLEET tenants each with a contract, 2 SLA
+  policies (STANDARD + a tighter HIGHWAY one), covered services and a
+  FLEET_MANAGER login + membership; 1 CONSUMER tenant with none of that; a
+  tenant-less DISPATCHER login (`seedTenants`).
+- `technicians.ts` — 31 technicians + users; `capabilitiesFor(i)` gives the
+  uneven matrix (EV 2, key 3, OBD 18, basics 31); `shiftFor(i)` gives three
+  partially-overlapping bands plus a night band.
+- `fleet.ts` — 24 units (12 VAN, 6 BIKE, 4 FLATBED_TOW, 2 WHEEL_LIFT_TOW) with
+  per-kind capabilities, a location off the zone centroid, and per-kind
+  `unit_stock` (195 rows total).
+- `workshops.ts` — 12 workshops (2/zone), brand authorisations, EV class flags
+  (2 HV, some LV), 7-day hours (2 are 24x7).
+- `drivers.ts` — 6 vehicle profiles (one Tata Nexon EV), 6 drivers + users +
+  vehicles across the four tenants.
+Every seeder `upsert`s on a deterministic id — running the seed any number of
+times changes nothing and never errors.
+
+`package.json` — added `"prisma": { "seed": "tsx prisma/seed.ts" }` so
+`prisma migrate reset` re-seeds.
+
+Endpoints: none (unchanged). No API, no business logic — schema and seed only.
+
+### Decisions
+
+- **Decision:** Enforce the `job_events` / `ledger_entries` append-only rule
+  with a `BEFORE UPDATE OR DELETE` row trigger, not only `REVOKE`.
+  **Why:** The table owner and any superuser bypass table privileges, so
+  `REVOKE` alone would let a `psql -U postgres` `UPDATE` through. A trigger
+  that raises stops everyone.
+  **Alternative:** `REVOKE` only; or an `ON UPDATE DO INSTEAD NOTHING` rule.
+  **Why not:** `REVOKE` is bypassable as above; a silent no-op rule hides the
+  violation instead of failing it, which is worse for an audit log.
+  **Tradeoff:** A row-level cascade delete of a `job` now raises rather than
+  cascade. Jobs are never deleted in this system, and test cleanup uses fresh
+  databases (testcontainers, Phase 11), so this costs nothing today.
+
+- **Decision:** One `schema.prisma` file rather than the Prisma 6 schema
+  folder.
+  **Why:** An interviewer opens one file and sees the whole domain; the
+  readability contract's "files under ~200 lines" is about logic, not a
+  declarative schema. Cross-model relations are easier to follow in one place.
+  **Alternative:** `prisma/schema/` split by section.
+  **Why not:** 11 files with relations pointing across all of them is harder to
+  read, not easier, and adds a config surface.
+  **Tradeoff:** The file is ~1,000 lines. Section banners and per-model
+  comments carry the navigation.
+
+- **Decision:** The seed IS split — into `prisma/seed/` modules, one concept
+  per file.
+  **Why:** Seed data is bulky; a single 400-line file would breach the
+  contract for no reason, and "the 31-technician capability matrix" is a thing
+  you want to open on its own.
+  **Alternative:** One `seed.ts`.
+  **Why not:** Harder to find the one table you want to change.
+  **Tradeoff:** Nine files plus an orchestrator whose fixed call order is a
+  dependency to keep correct by hand.
+
+- **Decision:** Idempotency by deterministic id + `upsert`, never
+  `deleteMany()` + recreate.
+  **Why:** `deleteMany()` on `job_events` / `ledger_entries` would hit the
+  append-only trigger; and delete-recreate churns ids that later seeds and
+  demos reference.
+  **Alternative:** Truncate-and-reseed.
+  **Why not:** Fragile against the append-only tables and against anything
+  holding a foreign key.
+  **Tradeoff:** Every seeder must invent a stable id scheme (`tech-01`,
+  `unit-07`, `cap-obd_diagnostics`).
+
+- **Decision:** Consumers are a `Tenant` (`kind = CONSUMER`), not a null
+  tenant.
+  **Why:** Phase 2 tenant scoping then has no "or the row has no tenant"
+  branch — every job belongs to exactly one tenant.
+  **Alternative:** `Job.tenantId` nullable for walk-ins.
+  **Why not:** A nullable scope key is exactly where cross-tenant leaks hide.
+  **Tradeoff:** `Job.tenantId` is still nullable for now (intake runs before a
+  tenant is resolved); Phase 3 should tighten it.
+
+- **Decision:** Money is `Int` paise everywhere, including `ledger_entries`.
+  **Why:** The build plan says integer paise; a single roadside job is a few
+  hundred thousand paise, comfortably inside a 32-bit int.
+  **Alternative:** `BigInt` for ledger and payout aggregates.
+  **Why not:** `BigInt` forces `bigint` literals through the seed and breaks
+  `JSON.stringify` later, for headroom nothing in this domain needs.
+  **Tradeoff:** A `payout_batches.total_paise` summing tens of thousands of
+  payouts could overflow. Flagged in Weaknesses; revisit at Phase 15c.
+
+- **Decision:** `snake_case` table and column names via `@@map` / `@map`
+  throughout.
+  **Why:** The Phase 1 check queries raw SQL (`technician_capability`,
+  `job_events.event_type`, `intake_answers.entropy_before`); the hand-written
+  SQL in `/src/commit` from Phase 11 will want the same.
+  **Tradeoff:** Every multi-word column carries an explicit `@map`. Two were
+  missed on the first pass (`safety_level`, `decision_records.cost_breakdown`)
+  and caught by a camelCase-without-`@map` scan before the migration was
+  finalised.
+
+### Concurrency
+
+- **Scenario:** Two writers mutate the same `units` / `jobs` / `unit_stock`
+  row (Phase 11 territory, not exercised yet).
+  **What races:** Read-modify-write on `status` / assignment.
+  **Why dangerous:** Lost update — two dispatchers both believe they hold the
+  unit.
+  **How handled:** Nothing runs yet, but the mechanism is seeded: every
+  raceable row has `version Int @default(0)` for the Phase 11 conditional
+  `UPDATE ... WHERE id = ? AND version = ?`.
+  **Assumption relied on:** Single Postgres, `READ COMMITTED`, and that every
+  writer goes through `/src/commit` — no ad-hoc `prisma.unit.update` on
+  `status` elsewhere.
+
+- **Scenario:** `job_events` written concurrently for one job.
+  **What races:** Two writers pick the same `sequence`.
+  **Why dangerous:** A replaying client would see a gap or a collision and
+  mis-order the timeline.
+  **How handled:** `@@unique([jobId, sequence])` — the second writer's insert
+  fails and must recompute. Assignment logic is Phase 4; the constraint that
+  makes it safe exists now.
+  **Assumption relied on:** Writers retry on the unique violation rather than
+  swallowing it.
+
+- No live concurrency in this phase: the seed is single-threaded and its
+  `upsert`s are the only writers.
+
+### Weaknesses introduced
+
+- **~55 of the 83 tables have no reader.** Intentional per the build plan, but
+  until a phase wires each one, nothing proves the shape is right — the first
+  real use of the MONEY and PROVIDERS clusters may still force a migration.
+  Matters little now; the cost is a bigger diff later if a cluster is wrong.
+- **`Job.tenantId` is nullable** — needed for intake-before-tenant, but a
+  nullable scope key going into Phase 2. Must be tightened once intake always
+  resolves a tenant.
+- **Money is `Int`.** `payout_batches.total_paise` and ledger transaction sums
+  could overflow at implausible-but-not-impossible batch sizes. Does not matter
+  at current (zero) volume.
+- **The sum-to-zero ledger invariant is not enforced by the database** — only
+  append-only is. A bad multi-row transaction is possible until `/src/commit`
+  checks it (Phase 15c).
+- **The append-only trigger blocks cascade deletes of a `job`.** Fine (jobs are
+  never deleted) but a latent surprise.
+- **Seed shift times are anchored to the run date.** Idempotent, but a board
+  seeded yesterday has yesterday's shifts until reseeded — the deployed
+  instance will need a periodic reseed or a time-relative view.
+- **No `.env`-driven seed size.** Counts are hard-coded (24 units, 31 techs).
+  Fine for a demo; a load test (Phase 25) will want them parameterised.
+
+### Concepts now genuinely in use
+
+Database-enforced append-only tables (trigger + `REVOKE`); optimistic-lock
+`version` columns (columns only, no logic yet); versioned reference data
+(`valid_from` / `valid_to` on the price list); `event_time` vs `received_at` on
+every externally-originated table; deterministic-id upsert seeding for
+idempotency; a modular seed with an explicit dependency order.
+
+### Interview angle
+
+- *How do you stop someone editing your audit log?* `job_events` and
+  `ledger_entries` have a `BEFORE UPDATE OR DELETE` trigger that raises, plus
+  `REVOKE UPDATE, DELETE` — the trigger catches even a superuser, which
+  `REVOKE` alone would not. A correction is a new compensating row.
+- *Your seed ran twice in CI — why didn't it double?* Every row is an `upsert`
+  on a deterministic id (`tech-01`, `cap-obd_diagnostics`), so a second run
+  updates in place and inserts nothing; there is no `deleteMany` anywhere, so
+  it also never fights the append-only tables.

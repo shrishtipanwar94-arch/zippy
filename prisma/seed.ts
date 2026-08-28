@@ -1,21 +1,61 @@
 /**
- * Phase 0 has no domain models, so there is nothing to seed. This file exists
- * now because `npm run db:seed` is named in the build plan and every named
- * script must exist and exit cleanly from the start. Phase 1 fills it in with a
- * deliberately uneven board — scarce EV certifications, partially overlapping
- * shifts — so that later dispatch decisions are non-trivial.
+ * Seeds a deliberately hard dispatch board: six zones in one city, 24 units
+ * across four kinds, 31 technicians with an UNEVEN capability matrix (two EV
+ * certifications, three key programmers, eighteen OBD, everyone on the basics),
+ * partially overlapping shifts, twelve workshops, ~20 parts with stock and
+ * prices, one active price list, and four tenants (one GOLD fleet, two SILVER,
+ * walk-in consumers).
  *
- * Seeding must always be idempotent: safe to run twice.
+ * Every seeder upserts on a deterministic id, so running this twice — or a
+ * hundred times — changes nothing and never errors. That is the whole contract
+ * of a seed: safe to run again.
+ *
+ * Order matters. Each step below references ids the earlier steps create.
  */
+
+import { prisma } from './seed/client.js';
+import { seedZones } from './seed/zones.js';
+import { seedCapabilities } from './seed/capabilities.js';
+import { seedParts } from './seed/parts.js';
+import { seedPricing } from './seed/pricing.js';
+import { seedTenants } from './seed/tenants.js';
+import { seedTechnicians } from './seed/technicians.js';
+import { seedFleet } from './seed/fleet.js';
+import { seedWorkshops } from './seed/workshops.js';
+import { seedDrivers } from './seed/drivers.js';
+
 async function seed(): Promise<void> {
-  // Nothing to do until Phase 1 introduces the schema.
+  await seedZones(prisma);
+  await seedCapabilities(prisma);
+  await seedParts(prisma);
+  await seedPricing(prisma); // needs parts
+  await seedTenants(prisma); // tiers, contracts, SLA, staff logins
+  await seedTechnicians(prisma); // needs zones + capabilities
+  await seedFleet(prisma); // needs zones + capabilities + parts
+  await seedWorkshops(prisma); // needs zones
+  await seedDrivers(prisma); // needs tenants
+
+  const [zones, units, technicians, workshops, evCertified] = await Promise.all([
+    prisma.zone.count(),
+    prisma.unit.count(),
+    prisma.technician.count(),
+    prisma.workshop.count(),
+    prisma.technicianCapability.count({ where: { capability: { code: 'EV_HV_CERTIFICATION' } } }),
+  ]);
+
+  console.log(
+    `seeded: ${zones} zones, ${units} units, ${technicians} technicians, ` +
+      `${workshops} workshops, ${evCertified} EV-certified technicians`,
+  );
 }
 
 seed()
-  .then(() => {
+  .then(async () => {
+    await prisma.$disconnect();
     process.exit(0);
   })
-  .catch((error: unknown) => {
+  .catch(async (error: unknown) => {
     console.error(error);
+    await prisma.$disconnect();
     process.exit(1);
   });
