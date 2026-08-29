@@ -142,7 +142,10 @@ the reading order and the call paths match the current code. Edit in place, neve
 §13 Decisions · §9 Concurrency · §15 Weaknesses · §14 questions only if the
 code can answer them · §17 resume claims only if implemented and, for
 numbers, measured · §19 rewritten every time.
-
+ ### What broke
+  Real errors, dead ends and surprises hit during this phase, why they
+  broke, and how they were fixed. "Nothing broke" is valid. Never invent
+  difficulty.
 ### Hard rules
 1. Never document as implemented what is not implemented.
 2. No textbook explanations. Name actual files, tables, functions.
