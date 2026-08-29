@@ -24,6 +24,9 @@ const state = {
   jobs: {},
   jobOrder: [],
 
+  // The assignment dropdown's options. Loaded once over HTTP.
+  units: [],
+
   // jobId -> events, in sequence order
   events: {},
   // jobId -> highest sequence already applied. The idempotency cursor.
@@ -90,6 +93,10 @@ export function setJobs(jobs) {
   }
 }
 
+export function setUnits(units) {
+  state.units = units;
+}
+
 export function setActiveJob(jobId) {
   state.activeJobId = jobId;
 }
@@ -126,6 +133,18 @@ export function applyJobEvent(event) {
   // dispatcher who was not watching when it was created.
   if (!state.jobs[event.jobId]) {
     putJob({ id: event.jobId, status: 'INTAKE', safetyLevel: null, createdAt: event.at });
+  }
+
+  // The event stream is the only way a second dispatcher's assignment reaches
+  // this window. Without this the board would need a reload to show it, which
+  // is exactly the thing the socket exists to avoid.
+  if (event.eventType === 'UNIT_ASSIGNED') {
+    putJob({
+      id: event.jobId,
+      status: 'PLANNED',
+      assignedUnitId: event.payload?.unitId ?? null,
+      assignedTechnicianId: event.payload?.technicianId ?? null,
+    });
   }
   return true;
 }

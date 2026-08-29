@@ -36,7 +36,7 @@
         Jobs on the board: <span data-field="job-count">0</span>. Rows are patched by
         <code>data-job-id</code>; the table is never rebuilt.
       </p>
-      <table class="table table-sm" data-panel="jobs-table">
+      <table class="table table-sm" data-panel="jobs-table" data-assign="true">
         <thead>
           <tr>
             <th>job</th>
@@ -44,6 +44,10 @@
             <th>safety</th>
             <th>events</th>
             <th>latest</th>
+            <th>unit</th>
+            <!-- Manual pick, Phase 4 only. Phase 9 replaces this column with
+                 the solver's decision and this control is deleted. -->
+            <th>assign</th>
           </tr>
         </thead>
         <tbody></tbody>

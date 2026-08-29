@@ -32,7 +32,7 @@ function vanCapabilities(vanIndex: number): string[] {
   return codes;
 }
 
-function capabilitiesFor(kind: UnitKind, indexWithinKind: number): string[] {
+export function unitCapabilities(kind: UnitKind, indexWithinKind: number): string[] {
   if (kind === 'VAN') return vanCapabilities(indexWithinKind);
   if (kind === 'BIKE') return ['JUMP_START', 'TYRE_CHANGE', 'FUEL_DELIVERY', 'LOCKOUT'];
   if (kind === 'FLATBED_TOW') return ['JUMP_START', 'TYRE_CHANGE', 'WINCH_RECOVERY', 'FLATBED_LOADING'];
@@ -95,7 +95,7 @@ export async function seedFleet(prisma: PrismaClient): Promise<void> {
         },
       });
 
-      for (const code of capabilitiesFor(plan.kind, withinKind)) {
+      for (const code of unitCapabilities(plan.kind, withinKind)) {
         const capId = capabilityId(code);
         await prisma.unitCapability.upsert({
           where: { unitId_capabilityId: { unitId, capabilityId: capId } },
@@ -117,4 +117,31 @@ export async function seedFleet(prisma: PrismaClient): Promise<void> {
       globalIndex++;
     }
   }
+}
+
+// The seeded fleet as plain data, mirroring the loop below so `crews.ts` reads
+// the same source of truth rather than a second copy of the numbering.
+export type UnitPlanEntry = {
+  unitId: string;
+  kind: UnitKind;
+  capabilities: string[];
+  zoneId: string;
+};
+
+export function unitPlanEntries(): UnitPlanEntry[] {
+  const entries: UnitPlanEntry[] = [];
+  let globalIndex = 0;
+
+  for (const plan of UNIT_PLAN) {
+    for (let withinKind = 0; withinKind < plan.count; withinKind++) {
+      entries.push({
+        unitId: `unit-${String(globalIndex + 1).padStart(2, '0')}`,
+        kind: plan.kind,
+        capabilities: unitCapabilities(plan.kind, withinKind),
+        zoneId: zoneId(globalIndex),
+      });
+      globalIndex++;
+    }
+  }
+  return entries;
 }

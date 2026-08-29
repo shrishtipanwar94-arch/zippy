@@ -21,7 +21,7 @@
 
     <form data-panel="login" class="row g-2 mb-3" onsubmit="return false">
       <div class="col-auto">
-        <input id="email" class="form-control" value="tech1@zippy.internal" />
+        <input id="email" class="form-control" value="tech01@zippy.internal" />
       </div>
       <div class="col-auto">
         <input id="password" type="password" class="form-control" value="password-dev-only" />
@@ -33,9 +33,10 @@
 
     <div data-panel="workspace" hidden>
       <div class="alert alert-secondary small">
-        This list is empty until Phase 9. Row ownership narrows a technician to jobs where
-        <code>assignedTechnicianId</code> is theirs, and nothing assigns one yet — allocation is
-        Phase 9 and the Phase 4 brief rules out building it here.
+        This list stays empty for now. Row ownership narrows a technician to jobs where
+        <code>assignedTechnicianId</code> is theirs. The dispatcher's manual assignment sets that
+        field from the unit's <code>currentTechnicianId</code> — but no seeded unit is crewed, so
+        it lands as null. Crewing units is Phase 9's business along with real allocation.
       </div>
 
       <p class="small text-muted">Assigned jobs: <span data-field="job-count">0</span></p>
@@ -47,6 +48,7 @@
             <th>safety</th>
             <th>events</th>
             <th>latest</th>
+            <th>unit</th>
           </tr>
         </thead>
         <tbody></tbody>

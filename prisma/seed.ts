@@ -24,6 +24,7 @@ import { seedFleet } from './seed/fleet.js';
 import { seedWorkshops } from './seed/workshops.js';
 import { seedDrivers } from './seed/drivers.js';
 import { seedIntakeQuestions } from './seed/intakeQuestions.js';
+import { seedCrews } from './seed/crews.js';
 
 async function seed(): Promise<void> {
   await seedZones(prisma);
@@ -36,18 +37,21 @@ async function seed(): Promise<void> {
   await seedWorkshops(prisma); // needs zones
   await seedDrivers(prisma); // needs tenants
   await seedIntakeQuestions(prisma); // projection of src/domain/questions.ts
+  await seedCrews(prisma); // needs units + technicians
 
-  const [zones, units, technicians, workshops, evCertified] = await Promise.all([
+  const [zones, units, technicians, workshops, evCertified, crewed] = await Promise.all([
     prisma.zone.count(),
     prisma.unit.count(),
     prisma.technician.count(),
     prisma.workshop.count(),
     prisma.technicianCapability.count({ where: { capability: { code: 'EV_HV_CERTIFICATION' } } }),
+    prisma.unit.count({ where: { currentTechnicianId: { not: null } } }),
   ]);
 
   console.log(
     `seeded: ${zones} zones, ${units} units, ${technicians} technicians, ` +
-      `${workshops} workshops, ${evCertified} EV-certified technicians`,
+      `${workshops} workshops, ${evCertified} EV-certified technicians, ` +
+      `${crewed}/${units} units crewed`,
   );
 }
 

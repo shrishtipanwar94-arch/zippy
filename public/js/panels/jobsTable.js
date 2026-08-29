@@ -17,6 +17,11 @@ const SAFETY_CLASS = {
   NORMAL: '',
 };
 
+function unitLabel(state, unitId) {
+  const unit = state.units.find((candidate) => candidate.id === unitId);
+  return unit ? unit.code : unitId.slice(-8);
+}
+
 function cellValues(state, job) {
   const events = state.events[job.id] ?? [];
   const latest = events[events.length - 1];
@@ -26,24 +31,69 @@ function cellValues(state, job) {
     safety: job.safetyLevel ?? '—',
     events: String(events.length),
     latest: latest ? latest.eventType : '—',
+    unit: job.assignedUnitId ? unitLabel(state, job.assignedUnitId) : '—',
   };
 }
 
-function buildRow(jobId) {
+const TEXT_FIELDS = ['id', 'status', 'safety', 'events', 'latest', 'unit'];
+
+function buildRow(jobId, hasAssignControl) {
   const row = document.createElement('tr');
   row.dataset.jobId = jobId;
-  for (const field of ['id', 'status', 'safety', 'events', 'latest']) {
+  for (const field of TEXT_FIELDS) {
     const cell = document.createElement('td');
     cell.dataset.field = field;
     row.appendChild(cell);
   }
+
+  if (hasAssignControl) {
+    // Built once, when the row is created. The select is never rebuilt on a
+    // later render — replacing it would discard whatever the dispatcher had
+    // chosen but not yet submitted, which on a board taking a job every few
+    // seconds means the dropdown resets under their cursor.
+    const cell = document.createElement('td');
+    const select = document.createElement('select');
+    select.className = 'form-select form-select-sm';
+    select.dataset.field = 'unit-select';
+
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.className = 'btn btn-sm btn-outline-primary mt-1';
+    button.dataset.action = 'assign';
+    button.textContent = 'Assign';
+
+    cell.append(select, button);
+    row.appendChild(cell);
+  }
+
   return row;
 }
 
+// Options change only when the unit list loads or a unit's status moves, so
+// they are stamped with what they were built from and left alone otherwise.
+function fillUnitOptions(select, units) {
+  const available = units.filter((unit) => unit.status === 'AVAILABLE');
+  const signature = available.map((unit) => unit.id).join(',');
+  if (select.dataset.units === signature) return;
+
+  select.dataset.units = signature;
+  select.replaceChildren();
+  for (const unit of available) {
+    const option = document.createElement('option');
+    option.value = unit.id;
+    option.textContent = `${unit.code} (${unit.kind})`;
+    select.appendChild(option);
+  }
+}
+
 export function render(state) {
-  const body = document.querySelector('[data-panel="jobs-table"] tbody');
+  const table = document.querySelector('[data-panel="jobs-table"]');
+  const body = table?.querySelector('tbody');
   if (!body) return;
 
+  // Only the dispatcher board carries the assignment column; the technician
+  // table uses the same panel without it.
+  const canAssign = table.dataset.assign === 'true';
   const seen = new Set();
 
   for (const jobId of state.jobOrder) {
@@ -53,10 +103,13 @@ export function render(state) {
 
     let row = body.querySelector(`tr[data-job-id="${jobId}"]`);
     if (!row) {
-      row = buildRow(jobId);
+      row = buildRow(jobId, canAssign);
       // Newest first, matching jobOrder.
       body.prepend(row);
     }
+
+    const select = row.querySelector('[data-field="unit-select"]');
+    if (select) fillUnitOptions(select, state.units);
 
     const values = cellValues(state, job);
     for (const [field, value] of Object.entries(values)) {

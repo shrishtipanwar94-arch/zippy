@@ -25,7 +25,7 @@ const FLEET_TENANT_IDS = ['tenant-metrocab', 'tenant-citylogistics', 'tenant-qui
 
 // Given a zero-based technician index, the capability codes that technician
 // holds. Ranges are half-open: `i < 18` is exactly indices 0..17.
-function capabilitiesFor(i: number): string[] {
+export function technicianCapabilities(i: number): string[] {
   const codes: string[] = ['JUMP_START', 'TYRE_CHANGE', 'FUEL_DELIVERY'];
   if (i < 20) codes.push('LOCKOUT');
   if (i < 18) codes.push('OBD_DIAGNOSTICS'); // exactly 18
@@ -39,14 +39,36 @@ function capabilitiesFor(i: number): string[] {
   return codes;
 }
 
-// Three shift bands that overlap only in their edges: 10:00-14:00 is covered by
-// morning + day, 14:00-18:00 by day + evening. A few technicians run nights.
-function shiftFor(i: number): { startsAt: Date; endsAt: Date } {
-  if (i % 7 === 6) return { startsAt: todayAt(22), endsAt: todayAt(30) }; // 22:00 -> 06:00 next day
+export type ShiftBand = 'NIGHT' | 'MORNING' | 'DAY' | 'EVENING';
+
+// Which band a technician works. Exposed so crewing can spread the fleet's
+// crews across the day instead of clustering them all on mornings.
+export function shiftBand(i: number): ShiftBand {
+  if (i % 7 === 6) return 'NIGHT';
   const band = i % 3;
-  if (band === 0) return { startsAt: todayAt(6), endsAt: todayAt(14) };
-  if (band === 1) return { startsAt: todayAt(10), endsAt: todayAt(18) };
-  return { startsAt: todayAt(14), endsAt: todayAt(22) };
+  if (band === 0) return 'MORNING';
+  if (band === 1) return 'DAY';
+  return 'EVENING';
+}
+
+// Bands that overlap only at their edges: 10:00-14:00 is covered by morning +
+// day, 14:00-18:00 by day + evening. A few technicians run nights, where 30
+// means 06:00 the following day.
+//
+// The band a technician works and the hours that band means are ONE fact with
+// one home: `shiftBand` decides the band, this table turns a band into hours,
+// and `shiftFor` is the composition. Writing the hours out a second time in a
+// parallel if-chain is exactly the shape that produced the onHighway bug.
+const SHIFT_HOURS: Record<ShiftBand, { from: number; to: number }> = {
+  NIGHT: { from: 22, to: 30 },
+  MORNING: { from: 6, to: 14 },
+  DAY: { from: 10, to: 18 },
+  EVENING: { from: 14, to: 22 },
+};
+
+function shiftFor(i: number): { startsAt: Date; endsAt: Date } {
+  const hours = SHIFT_HOURS[shiftBand(i)];
+  return { startsAt: todayAt(hours.from), endsAt: todayAt(hours.to) };
 }
 
 export async function seedTechnicians(prisma: PrismaClient): Promise<void> {
@@ -88,7 +110,7 @@ export async function seedTechnicians(prisma: PrismaClient): Promise<void> {
       create: { id: `membership-${technicianId}`, tenantId: membershipTenantId, userId, role: 'TECHNICIAN' },
     });
 
-    for (const code of capabilitiesFor(i)) {
+    for (const code of technicianCapabilities(i)) {
       const capId = capabilityId(code);
       await prisma.technicianCapability.upsert({
         where: { technicianId_capabilityId: { technicianId, capabilityId: capId } },
@@ -110,4 +132,28 @@ export async function seedTechnicians(prisma: PrismaClient): Promise<void> {
       },
     });
   }
+}
+
+// The seeded workforce as plain data, so `crews.ts` can reason about who can
+// crew what without duplicating any of the rules above.
+export type TechnicianPlan = {
+  technicianId: string;
+  index: number;
+  capabilities: string[];
+  homeZoneId: string;
+  band: ShiftBand;
+};
+
+export function technicianPlan(): TechnicianPlan[] {
+  const plan: TechnicianPlan[] = [];
+  for (let i = 0; i < TECHNICIAN_COUNT; i++) {
+    plan.push({
+      technicianId: `tech-${String(i + 1).padStart(2, '0')}`,
+      index: i,
+      capabilities: technicianCapabilities(i),
+      homeZoneId: zoneId(i),
+      band: shiftBand(i),
+    });
+  }
+  return plan;
 }

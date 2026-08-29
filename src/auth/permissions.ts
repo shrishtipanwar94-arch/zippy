@@ -18,7 +18,19 @@ import type { Role } from '@prisma/client';
 import type { AuthContext } from './context.js';
 
 export type Action = 'read' | 'create' | 'update' | 'delete';
-export type Resource = 'job' | 'unit' | 'technician' | 'driver' | 'user' | 'auditLog';
+// `jobAssignment` is its own resource rather than a role check in the route.
+// A TECHNICIAN legitimately has `update` on `job` (they progress their own
+// work), so "may update a job" is not the same question as "may decide which
+// unit goes to it" — and the answer to both has to stay readable in one table
+// instead of an if-statement in a handler.
+export type Resource =
+  | 'job'
+  | 'unit'
+  | 'technician'
+  | 'driver'
+  | 'user'
+  | 'auditLog'
+  | 'jobAssignment';
 
 type PermissionTable = Record<Role, Partial<Record<Resource, Action[]>>>;
 
@@ -34,6 +46,9 @@ const PERMISSIONS: PermissionTable = {
   },
   DISPATCHER: {
     job: ['read', 'create', 'update', 'delete'],
+    // Manual assignment, Phase 4 only. Phase 9 replaces it with the solver and
+    // this entry goes with it.
+    jobAssignment: ['update'],
     unit: ['read', 'update'],
     technician: ['read'],
     driver: ['read'],
