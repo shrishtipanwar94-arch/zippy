@@ -1211,6 +1211,19 @@ consumed); and generative-versus-discriminative use of one likelihood table.
   answer legitimately makes you less sure. A test asserts the non-negativity of
   the expectation for every question against every belief, and the aggregate is
   what the Phase 10 harness reads.
+- *You have a green test suite. How do you know the tests are worth anything?*
+  A passing test is not evidence. A test that cannot fail protects nothing. The
+  check is whether removing the production behaviour turns it red. Concretely,
+  in this phase: I wrote a test asserting safety triage returns the highest
+  level rather than the first trigger, and it could not fail — every HIGH_RISK
+  rule already preceded every ELEVATED one in `SAFETY_RULES`, so
+  `triggered[0].level` and `triggered.some(HIGH_RISK)` were behaviourally
+  identical, and the mutation I introduced to break it passed. Rather than ship
+  a test that only appeared to protect the invariant, I reordered the rule list
+  by topic so `ON_HIGHWAY` (ELEVATED) fires first, making the property real,
+  and verified no behaviour change by diffing seed-123 simulator output
+  byte-for-byte. Two of three mutations survived that first pass; the suite is
+  worth something now because I watched it go red, not because it is green.
 
 ### What broke
 
@@ -1252,14 +1265,18 @@ consumed); and generative-versus-discriminative use of one likelihood table.
       row with a "normal-looking" one sailed through. Replaced with a direct
       assertion that an unmodelled fault's row is flat across answers and sums
       to 1.
-    - The "highest level, not first" safety test could not fail, because every
-      HIGH_RISK rule already sat ahead of every ELEVATED one in `SAFETY_RULES` —
-      `triggered[0].level` and `triggered.some(HIGH_RISK)` were behaviourally
-      identical. Fixed in the SOURCE, not the test: the rule list is now ordered
-      by topic and opens with `ON_HIGHWAY` (ELEVATED), so the property is real.
-      Verified the reorder changed no behaviour — the seed-123 simulator output
-      diffs byte-identical across it.
+    - The "highest level, not first" safety test could not fail at all. Its own
+      bullet below.
   Second pass: all three mutations red, 5 failing tests.
+- **A test that could not fail, and what it cost to make it real.** I wrote a
+  test asserting safety triage returns the highest level rather than the first
+  trigger. The test could not fail — every HIGH_RISK rule already preceded
+  every ELEVATED one, so `triggered[0].level` and
+  `triggered.some(HIGH_RISK)` were behaviourally identical. Rather than ship a
+  test that only appeared to protect the invariant, I reordered the rule list
+  by topic so `ON_HIGHWAY` (ELEVATED) fires first, making the property real.
+  Verified no behaviour change by diffing seed-123 simulator output
+  byte-for-byte.
 - **A test premise was simply wrong.** The capability-stability test paired
   `FLAT_BATTERY` with `FAILED_BATTERY` on the assumption they need "the same
   van". They do not — `JUMP_START` versus `BATTERY_REPLACEMENT`, which is
