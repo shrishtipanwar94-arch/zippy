@@ -672,7 +672,7 @@ DO NOT
 - WebSocket first; polling is the Phase 17 fallback, not the mechanism
 ````
 
-**Check:** three browser windows, three roles. An action in one appears in the others within a second. DevTools → Offline 10s → Online: missed events replay in order, no duplicates. In the console, `document.querySelectorAll('[data-job-id]').length` must be > 0.
+**Check:** three browser windows, three roles. An action in one appears in the others within a second. DevTools → Offline 10s → Online: missed events replay in order; duplicates are possible by design and the client ignores sequences it has already applied. In the console, `document.querySelectorAll('[data-job-id]').length` must be > 0.
 
 **⭐ This is a checkpoint.** Also say: `consolidate DECISIONS.log into INTERVIEW.md`
 

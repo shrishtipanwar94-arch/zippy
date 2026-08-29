@@ -1296,11 +1296,11 @@ consumed); and generative-versus-discriminative use of one likelihood table.
 
 ---
 
-## Phase 4a — Socket.IO server, rooms, fan-out / 2026-08-29 / Commit: eeba7dc ("phase 4a: socket.io server, rooms, fan-out, transactional outbox")
+## Phase 4a/4b — Socket.IO server, rooms, fan-out, replay cursor / 2026-08-29 / Commits: eeba7dc ("phase 4a: socket.io server, rooms, fan-out, transactional outbox"), 8a7c84a ("phase 4b: reconnect replay cursor")
 
-Partial phase. Phase 4 also owes the `lastEventSequence` replay cursor, the
-three pages and the `/public` state discipline; the remaining template sections
-are written when it closes and consolidates into INTERVIEW.md.
+Partial phase. Phase 4 also owes the three pages and the `/public` state
+discipline; the remaining template sections are written when it closes and
+consolidates into INTERVIEW.md.
 
 ### Built
 
@@ -1315,7 +1315,41 @@ Realtime — `src/realtime/`:
   buffer on AsyncLocalStorage.
 - `src/intake/events.ts` and `transaction.ts` wired to queue then flush after
   commit; `src/index.ts` attaches Socket.IO to the existing HTTP server.
-- `tests/realtime.test.ts` — 12 tests. Suite total 92.
+- `replay.ts` — `replayJobEvents(jobId, afterSequence, limit?)` and
+  `MAX_REPLAY_EVENTS`. `job:subscribe` takes
+  `{ jobId, lastEventSequence? }` and answers a cursor with one `job:replay`.
+- `tests/realtime.test.ts` — 20 tests. Suite total 100.
+
+### Weaknesses introduced
+
+- **The reconnect cursor is per job only.** A dispatcher watching a zone cannot
+  replay what it missed and has to refetch over HTTP. `job_events` has a unique
+  `(job_id, sequence)` and no global sequence, so "everything after N" is only
+  a well-formed question about a single job; and the row's `at` timestamp
+  cannot stand in for one, because it is not monotonic with insertion order —
+  the simulator writes historical `at` values, so ordering by it interleaves
+  replayed history with live traffic. The driver and technician surfaces are
+  unaffected: they watch one job each. **This needs addressing at Phase 14**,
+  which is where the dispatch console — the first genuinely zone-wide client —
+  gets built. The fix is a global monotonic event sequence, not a smarter
+  timestamp query.
+- **The outbox is in memory, and per process.** Job events written by the
+  simulator process are never broadcast by the web process, so a deployed board
+  fed by the simulator stays empty. The fix is the Socket.IO Redis adapter,
+  which arrives naturally with Redis in Phase 5. Also means events committed
+  between a crash and their publish are never broadcast — they are not lost,
+  `job_events` holds them and a reconnect replays them, but a client that stays
+  connected through the crash will not see them.
+- **Delivery is at-least-once, not exactly-once.** A resubscribe joins the room
+  before reading the replay, so an event committed in that window arrives twice.
+  Chosen deliberately — reading first would lose it instead, and a duplicate is
+  detectable by the client while a gap is not. It puts a real obligation on the
+  client: apply events in increasing sequence, ignore any already applied.
+  Nothing enforces that the frontend actually does it, because there is no
+  frontend yet.
+- **The truncation path has no client.** A client that missed more than 500
+  events is told `truncated: true` and given nothing, on the assumption it will
+  refetch from scratch. No code does that refetch yet.
 
 ### What broke
 
