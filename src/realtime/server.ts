@@ -26,9 +26,31 @@ import type { AuthContext } from '../auth/context.js';
 import { TokenError, verifyAccessToken } from '../auth/tokens.js';
 import { jobRoom, mayRequestJobRoom, standingRoomsFor } from './rooms.js';
 import { setRealtimeServer } from './publish.js';
+import { replayJobEvents } from './replay.js';
 
 // Socket.IO's own type for per-socket state. One field: who this connection is.
 type SocketData = { auth: AuthContext };
+
+// What a client sends to subscribe. `lastEventSequence` is its cursor for this
+// job — the highest sequence it has already applied. Omitted on a first
+// subscribe, present on a resubscribe after a drop.
+type SubscribeRequest = { jobId: string; lastEventSequence?: number };
+
+type SubscribeAck = { ok: boolean };
+
+function parseSubscribeRequest(raw: unknown): SubscribeRequest | null {
+  if (typeof raw !== 'object' || raw === null) return null;
+
+  const { jobId, lastEventSequence } = raw as Record<string, unknown>;
+  if (typeof jobId !== 'string' || jobId.length === 0) return null;
+
+  if (lastEventSequence === undefined) return { jobId };
+  // Sequences start at 1, so 0 is the legitimate way to say "I have nothing
+  // for this job, send me everything".
+  if (!Number.isInteger(lastEventSequence) || (lastEventSequence as number) < 0) return null;
+
+  return { jobId, lastEventSequence: lastEventSequence as number };
+}
 
 function tokenFrom(socket: Socket): string | null {
   const raw = socket.handshake.auth?.token;
@@ -79,8 +101,8 @@ export function createRealtimeServer(httpServer: HttpServer): Server {
     // the same two extensions that guard GET /jobs/:id. A driver asking for
     // someone else's job finds nothing and is refused, exactly as the HTTP
     // route would 404.
-    socket.on('job:subscribe', (jobId: unknown, ack?: (result: { ok: boolean }) => void) => {
-      void subscribeToJob(socket, auth, jobId, ack);
+    socket.on('job:subscribe', (raw: unknown, ack?: (result: SubscribeAck) => void) => {
+      void subscribeToJob(socket, auth, raw, ack);
     });
 
     socket.on('job:unsubscribe', (jobId: unknown) => {
@@ -113,13 +135,15 @@ async function joinStandingRooms(socket: Socket, auth: AuthContext): Promise<voi
 async function subscribeToJob(
   socket: Socket,
   auth: AuthContext,
-  jobId: unknown,
-  ack?: (result: { ok: boolean }) => void,
+  raw: unknown,
+  ack?: (result: SubscribeAck) => void,
 ): Promise<void> {
-  if (!mayRequestJobRoom(auth.role) || typeof jobId !== 'string' || jobId.length === 0) {
+  const request = parseSubscribeRequest(raw);
+  if (!request || !mayRequestJobRoom(auth.role)) {
     ack?.({ ok: false });
     return;
   }
+  const jobId = request.jobId;
 
   // AWAIT INSIDE THE CONTEXT, NOT OUTSIDE IT.
   // `prisma.job.findFirst()` returns a lazy PrismaPromise: it does no work, and
@@ -140,6 +164,15 @@ async function subscribeToJob(
     return;
   }
 
+  // JOIN BEFORE REPLAYING, never the other way round. Anything committed
+  // between the two arrives live as well as in the replay, and the client drops
+  // the repeat by sequence. Reading first and joining after would instead lose
+  // whatever committed in the gap, and a missing event is undetectable.
   await socket.join(jobRoom(job.id));
   ack?.({ ok: true });
+
+  if (request.lastEventSequence === undefined) return;
+
+  const replay = await replayJobEvents(job.id, request.lastEventSequence);
+  socket.emit('job:replay', replay);
 }

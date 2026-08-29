@@ -31,6 +31,8 @@ import { symptomPayloadSchema } from '../src/domain/symptoms.js';
 import { safetyContextSchema } from '../src/domain/safety.js';
 import { locationSchema } from '../src/domain/location.js';
 import type { JobEventMessage } from '../src/realtime/publish.js';
+import { replayJobEvents } from '../src/realtime/replay.js';
+import type { ReplayResult } from '../src/realtime/replay.js';
 
 const TENANT = 'rt-tenant';
 const ZONE = 'rt-zone';
@@ -172,7 +174,7 @@ describe('socket server', () => {
     await connected(socket);
 
     const jobId = await seedJob();
-    const result = await socket.emitWithAck('job:subscribe', jobId);
+    const result = await socket.emitWithAck('job:subscribe', { jobId });
     expect(result).toEqual({ ok: false });
   });
 
@@ -202,7 +204,7 @@ describe('socket server', () => {
 
     const created = await createIntakeJob(prismaBase, intakeRequest());
 
-    const subscribed = await driver.emitWithAck('job:subscribe', created.jobId);
+    const subscribed = await driver.emitWithAck('job:subscribe', { jobId: created.jobId });
     expect(subscribed).toEqual({ ok: true });
 
     await waitFor(() => dispatcherEvents.length >= 6);
@@ -221,6 +223,177 @@ describe('socket server', () => {
       'INTAKE_COMPLETED',
     ]);
     expect(forThisJob.map((event) => event.sequence)).toEqual([1, 2, 3, 4, 5, 6]);
+  });
+});
+
+describe('reconnect replay', () => {
+  let jobId: string;
+
+  beforeAll(async () => {
+    await buildFixture();
+    jobId = await seedJob();
+  });
+
+  afterAll(async () => {
+    await prismaBase.$disconnect();
+  });
+
+  // A flat-tyre intake writes exactly six events, so the expected tail after
+  // any cursor is arithmetic rather than a guess.
+  it('replays everything after the cursor, in order', async () => {
+    const replay = await replayJobEvents(jobId, 3);
+
+    expect(replay.events.map((event) => event.sequence)).toEqual([4, 5, 6]);
+    expect(replay.throughSequence).toBe(6);
+    expect(replay.truncated).toBe(false);
+  });
+
+  it('replays the whole history for a client that has nothing', async () => {
+    const replay = await replayJobEvents(jobId, 0);
+
+    expect(replay.events.map((event) => event.sequence)).toEqual([1, 2, 3, 4, 5, 6]);
+    expect(replay.events[0]?.eventType).toBe('JOB_CREATED');
+  });
+
+  it('replays nothing for a client that is already current', async () => {
+    const replay = await replayJobEvents(jobId, 6);
+
+    expect(replay.events).toEqual([]);
+    expect(replay.throughSequence).toBe(6);
+    expect(replay.truncated).toBe(false);
+  });
+
+  // Feeding a long-absent client a partial tail would leave it confidently
+  // wrong. It is told to resync instead, and gets no events at all.
+  it('refuses to replay a partial history and says so', async () => {
+    const replay = await replayJobEvents(jobId, 0, 2);
+
+    expect(replay.truncated).toBe(true);
+    expect(replay.events).toEqual([]);
+    expect(replay.throughSequence).toBe(0);
+  });
+
+  it('carries the payload and timestamp through unchanged', async () => {
+    const replay = await replayJobEvents(jobId, 0);
+    const created = replay.events[0]!;
+
+    expect(created.jobId).toBe(jobId);
+    expect(typeof created.at).toBe('string');
+    expect(created.payload).toMatchObject({ zoneId: expect.any(String) });
+  });
+});
+
+describe('reconnect over a live socket', () => {
+  let io: Server;
+  let httpServer: ReturnType<typeof createServer>;
+  let url: string;
+  const clients: ClientSocket[] = [];
+
+  beforeAll(async () => {
+    await buildFixture();
+    httpServer = createServer();
+    io = createRealtimeServer(httpServer);
+    await new Promise<void>((resolve) => httpServer.listen(0, resolve));
+    url = `http://localhost:${(httpServer.address() as AddressInfo).port}`;
+  });
+
+  afterAll(async () => {
+    for (const socket of clients) socket.disconnect();
+    setRealtimeServer(null);
+    await io.close();
+    await new Promise<void>((resolve) => httpServer.close(() => resolve()));
+    await prismaBase.$disconnect();
+  });
+
+  // The scenario the cursor exists for: a client is subscribed, drops, events
+  // happen while it is away, and it comes back saying how far it got.
+  it('a client that reconnects with a cursor is sent what it missed', async () => {
+    const token = issueAccessToken({
+      sub: 'rt-driver-user',
+      role: 'DRIVER',
+      tenantId: TENANT,
+      crossTenant: false,
+      actorId: 'rt-driver',
+    });
+
+    const created = await createIntakeJob(prismaBase, intakeRequest());
+
+    const socket = connect(url, { auth: { token }, transports: ['websocket'], reconnection: false });
+    clients.push(socket);
+    await new Promise<void>((resolve, reject) => {
+      socket.on('connect', () => resolve());
+      socket.on('connect_error', reject);
+    });
+
+    const replays: ReplayResult[] = [];
+    socket.on('job:replay', (replay: ReplayResult) => replays.push(replay));
+
+    // Says it has applied up to sequence 2 — it dropped after LOCATION_CAPTURED
+    // had not yet arrived.
+    const ack = await socket.emitWithAck('job:subscribe', {
+      jobId: created.jobId,
+      lastEventSequence: 2,
+    });
+    expect(ack).toEqual({ ok: true });
+
+    await waitFor(() => replays.length > 0);
+    expect(replays[0]?.events.map((event) => event.sequence)).toEqual([3, 4, 5, 6]);
+    expect(replays[0]?.jobId).toBe(created.jobId);
+  });
+
+  it('sends no replay at all when the client omits a cursor', async () => {
+    const token = issueAccessToken({
+      sub: 'rt-driver-user',
+      role: 'DRIVER',
+      tenantId: TENANT,
+      crossTenant: false,
+      actorId: 'rt-driver',
+    });
+
+    const created = await createIntakeJob(prismaBase, intakeRequest());
+    const socket = connect(url, { auth: { token }, transports: ['websocket'], reconnection: false });
+    clients.push(socket);
+    await new Promise<void>((resolve, reject) => {
+      socket.on('connect', () => resolve());
+      socket.on('connect_error', reject);
+    });
+
+    const replays: ReplayResult[] = [];
+    socket.on('job:replay', (replay: ReplayResult) => replays.push(replay));
+
+    await socket.emitWithAck('job:subscribe', { jobId: created.jobId });
+    // A first subscribe is not a reconnect; there is nothing to catch up on.
+    await new Promise((resolve) => setTimeout(resolve, 200));
+    expect(replays).toEqual([]);
+  });
+
+  it('refuses a malformed cursor rather than guessing what it meant', async () => {
+    const token = issueAccessToken({
+      sub: 'rt-driver-user',
+      role: 'DRIVER',
+      tenantId: TENANT,
+      crossTenant: false,
+      actorId: 'rt-driver',
+    });
+
+    const created = await createIntakeJob(prismaBase, intakeRequest());
+    const socket = connect(url, { auth: { token }, transports: ['websocket'], reconnection: false });
+    clients.push(socket);
+    await new Promise<void>((resolve, reject) => {
+      socket.on('connect', () => resolve());
+      socket.on('connect_error', reject);
+    });
+
+    for (const cursor of [-1, 1.5, 'three', null]) {
+      const ack = await socket.emitWithAck('job:subscribe', {
+        jobId: created.jobId,
+        lastEventSequence: cursor,
+      });
+      expect(ack, `cursor ${String(cursor)}`).toEqual({ ok: false });
+    }
+
+    // The bare string form is gone: there is one way to subscribe.
+    expect(await socket.emitWithAck('job:subscribe', created.jobId)).toEqual({ ok: false });
   });
 });
 
