@@ -28,7 +28,7 @@ import { issueAccessToken } from '../src/auth/tokens.js';
 import { prismaBase } from '../src/infra/prismaBase.js';
 import { createIntakeJob } from '../src/intake/createJob.js';
 import { symptomPayloadSchema } from '../src/domain/symptoms.js';
-import { safetyContextSchema } from '../src/domain/safety.js';
+import { safetyReportSchema } from '../src/domain/safety.js';
 import { locationSchema } from '../src/domain/location.js';
 import type { JobEventMessage } from '../src/realtime/publish.js';
 import { replayJobEvents } from '../src/realtime/replay.js';
@@ -488,7 +488,7 @@ function intakeRequest() {
     vehicleId: 'rt-vehicle',
     tenantId: TENANT,
     symptoms: symptomPayloadSchema.parse({ primaryComplaint: 'FLAT_TYRE' }),
-    safety: safetyContextSchema.parse({}),
+    safety: safetyReportSchema.parse({}),
     location: locationSchema.parse({ lat: 12.9352, lng: 77.6245 }),
     actor: { role: 'DRIVER', id: 'rt-driver-user' },
     at: new Date('2026-06-01T09:00:00Z'),

@@ -18,10 +18,21 @@
 // time, so a seeded replay in Phase 10 produces the same level every run.
 
 import { z } from 'zod';
-import type { SafetyLevel } from '@prisma/client';
+import type { RoadPosition, SafetyLevel } from '@prisma/client';
+import { isOnHighway } from './location.js';
 
-export const safetyContextSchema = z.object({
-  onHighway: z.boolean().default(false),
+// WHAT A CALLER MAY STATE. Everything here is something only the person at the
+// roadside can know, so the client is the right source for it.
+//
+// Two facts are deliberately ABSENT, because the client is the wrong source for
+// both and letting it supply them is how they end up disagreeing with the rest
+// of the job:
+//   onHighway — derived from the reported road position (see location.ts)
+//   night     — derived from the clock
+// Neither is something a caller should be able to assert about itself, and
+// while `onHighway` was accepted here it was possible to file a highway
+// breakdown that triaged as NORMAL.
+export const safetyReportSchema = z.object({
   // Speed of the traffic passing the vehicle, not the vehicle's own speed.
   // Null means nobody asked; it is not the same as zero.
   trafficSpeedKph: z.number().int().min(0).max(200).nullable().default(null),
@@ -29,13 +40,44 @@ export const safetyContextSchema = z.object({
   smokeOrBurningSmell: z.boolean().default(false),
   fuelSmell: z.boolean().default(false),
   overheating: z.boolean().default(false),
-  night: z.boolean().default(false),
   driverAlone: z.boolean().default(false),
   // Children, elderly or anyone who cannot leave the vehicle unaided.
   vulnerablePassengers: z.boolean().default(false),
-});
+  // Strict for the same reason as the location schema: a caller that tries to
+  // set `onHighway` or `night` gets an error, not a silent strip.
+}).strict();
 
-export type SafetyContext = z.infer<typeof safetyContextSchema>;
+export type SafetyReport = z.infer<typeof safetyReportSchema>;
+
+// What triage actually reasons over: what the caller said, plus the two facts
+// the server decides. `triageSafety` takes this and nothing else, so there is
+// exactly one shape that can reach the rules.
+export type SafetyContext = SafetyReport & {
+  onHighway: boolean;
+  // The driver never said where the vehicle is standing. Not the same as "not
+  // on a highway" — it is the absence of the answer, and it is treated as a
+  // risk in its own right. See UNKNOWN_POSITION below.
+  positionUnknown: boolean;
+  night: boolean;
+};
+
+// The only way to build a context. It takes the reported ROAD POSITION, not a
+// pre-computed flag, and runs the same `isOnHighway` the job's location column
+// is written from — one fact, one home, and no opportunity for a caller to hand
+// in a value that disagrees with the row. `night` comes from the instant the
+// job was filed, which the simulator supplies as simulated time so a seeded
+// replay triages identically every run.
+export function buildSafetyContext(
+  report: SafetyReport,
+  derived: { roadPosition: RoadPosition | null; at: Date },
+): SafetyContext {
+  return {
+    ...report,
+    onHighway: isOnHighway(derived.roadPosition),
+    positionUnknown: derived.roadPosition === null,
+    night: isNightAt(derived.at),
+  };
+}
 
 // Above this, a stationary vehicle in traffic is a serious impact risk rather
 // than an inconvenience. Chosen to match Indian expressway limits.
@@ -56,11 +98,32 @@ type SafetyRule = {
 // which quietly starts trusting position instead of severity gets caught by
 // tests/intake.test.ts rather than by a HIGH_RISK job being triaged as routine.
 const SAFETY_RULES: SafetyRule[] = [
+  // FAIL CLOSED. Not knowing where the vehicle is standing is itself a risk,
+  // and it is ranked as one rather than being quietly treated as "not on a
+  // highway". Everything else in this system fails closed when a fact is
+  // missing — `NO_TENANT` and `NO_OWNER` filter to nothing rather than to
+  // everything — and safety is where failing open is least acceptable. The
+  // trade is deliberately asymmetric: over-triaging costs a marginally slower
+  // or more expensive dispatch, while under-triaging leaves a highway
+  // breakdown ranked on cost alone, and only one of those can hurt somebody.
+  {
+    code: 'UNKNOWN_POSITION',
+    level: 'ELEVATED',
+    applies: (c) => c.positionUnknown,
+  },
   {
     code: 'ON_HIGHWAY',
     level: 'ELEVATED',
     applies: (c) => c.onHighway,
   },
+  // DELIBERATELY NOT COLLAPSED INTO `roadPosition === 'LANE'`. These look like
+  // one fact and are two: road position is GEOMETRY — where the vehicle is
+  // standing — and this is CONTEXT — whether that position is obstructing
+  // moving traffic. A car stopped in a lane of an empty road at 3am is in a
+  // lane and is blocking nobody. Merging them would make every LANE job
+  // HIGH_RISK, which is a triage decision dressed up as a refactor. If a future
+  // cleanup spots the resemblance: it is not the `onHighway` duplication, it
+  // has been looked at, and the answer is no.
   {
     code: 'BLOCKING_LIVE_LANE',
     level: 'HIGH_RISK',

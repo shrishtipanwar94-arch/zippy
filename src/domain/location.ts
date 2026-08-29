@@ -39,10 +39,45 @@ export const locationSchema = z.object({
   landmark: z.string().max(200).nullable().default(null),
   roadPosition: z.enum(ROAD_POSITIONS).nullable().default(null),
   parkingLevel: z.string().max(40).nullable().default(null),
-  onHighway: z.boolean().default(false),
-});
+  // STRICT, so an unknown key is a 400 rather than a silent strip. A client
+  // still sending the old `onHighway` field is told plainly that it is not
+  // theirs to set, instead of having it dropped and wondering why the safety
+  // level disagrees with it. Quietly ignoring a field the caller believes
+  // matters is how the original bug survived three phases.
+}).strict();
 
 export type LocationInput = z.infer<typeof locationSchema>;
+
+// ONE FACT, ONE HOME.
+//
+// "Is this vehicle on a highway" used to be its own field, supplied by the
+// client, on BOTH the location payload and the safety context. A client that
+// filled in one and not the other got a job whose location column said highway
+// and whose safety level said nothing unusual — and because safety level sits
+// in a lexicographic ordering above the cost function, that is the one input
+// that must never be quietly wrong. So it is no longer an input at all. It is
+// derived, here, from the position the driver reported, and that single derived
+// value feeds both the stored column and the safety triage.
+//
+// The honest limit of this rule: it conflates "beside live traffic" with "on a
+// highway". A car blocking a lane of a city street is LANE, and this will call
+// it a highway. That direction is the safe one — it over-triages rather than
+// under-triages — and `trafficSpeedKph` in the safety report is the finer
+// signal that separates the two. Worth revisiting when the road network is
+// real (Phase 6, OSRM), which is the first point at which the road class is
+// actually knowable rather than inferred.
+const HIGHWAY_POSITIONS: ReadonlySet<string> = new Set(['SHOULDER', 'LANE']);
+
+// An unstated position is NOT a highway — but nor is it treated as safe. This
+// answers only "did the driver tell us they are on one", and the absence of an
+// answer is picked up separately by the UNKNOWN_POSITION safety rule, which
+// raises the job to ELEVATED. Returning false here is therefore honest rather
+// than optimistic: the claim is not being made, and the missing answer is
+// handled where risk is decided.
+export function isOnHighway(roadPosition: RoadPosition | null): boolean {
+  if (roadPosition === null) return false;
+  return HIGHWAY_POSITIONS.has(roadPosition);
+}
 
 // A compass bearing collapsed to the carriageway it implies. Four buckets, not
 // eight: what matters downstream is only "is the unit on the same side of the
@@ -83,6 +118,6 @@ export function locationColumns(location: LocationInput): LocationColumns {
     landmark: location.landmark,
     roadPosition: location.roadPosition,
     parkingLevel: location.parkingLevel,
-    onHighway: location.onHighway,
+    onHighway: isOnHighway(location.roadPosition),
   };
 }

@@ -16,7 +16,7 @@ import { prisma } from '../infra/db.js';
 import { prismaBase } from '../infra/prismaBase.js';
 import { authenticate, requirePermission } from './middleware/authenticate.js';
 import { symptomPayloadSchema } from '../domain/symptoms.js';
-import { safetyContextSchema } from '../domain/safety.js';
+import { safetyReportSchema } from '../domain/safety.js';
 import { locationSchema } from '../domain/location.js';
 import { createIntakeJob } from '../intake/createJob.js';
 import { recordIntakeAnswer, nextQuestionFor } from '../intake/answers.js';
@@ -34,8 +34,11 @@ const intakeSchema = z.object({
   vehicleId: z.string().min(1),
   symptoms: symptomPayloadSchema,
   // `prefault`, not `default`: an omitted block is parsed as `{}` so every
-  // field inside falls back to its own declared default.
-  safety: safetyContextSchema.prefault({}),
+  // field inside falls back to its own declared default. A caller that sends no
+  // safety block at all still gets correct triage, because the fact that
+  // matters most — on a highway or not — is derived from the location rather
+  // than read from here.
+  safety: safetyReportSchema.prefault({}),
   location: locationSchema,
 });
 

@@ -18,7 +18,7 @@ import { createRandom } from './random.js';
 import { createIntakeJob } from '../intake/createJob.js';
 import { recordIntakeAnswer } from '../intake/answers.js';
 import { findQuestion } from '../domain/questions.js';
-import { generateLocation, generateSafetyContext, generateSymptoms, arrivalOffsetsSeconds } from './scenarios.js';
+import { generateLocation, generateSafetyReport, generateSymptoms, arrivalOffsetsSeconds } from './scenarios.js';
 import { answerAsDriver } from './driverAnswers.js';
 import type { SimulatorConfig, Situation } from './config.js';
 import type { SimulatedJob } from './outcomes.js';
@@ -82,7 +82,7 @@ async function runOneJob(
   const driver = roster[random.nextInt(roster.length)]!;
 
   const symptoms = generateSymptoms(random, trueFault);
-  const safety = generateSafetyContext(random, situation, trueFault);
+  const safety = generateSafetyReport(random, situation, trueFault);
   const location = generateLocation(random, situation, { lat: driver.lat, lng: driver.lng });
   const arrivalAt = new Date(startAt.getTime() + offsetSeconds * 1000);
 

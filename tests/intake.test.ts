@@ -26,9 +26,9 @@ import {
   selectNextQuestion,
 } from '../src/domain/questionSelection.js';
 import { capabilitySetIsStable, requiredCapabilities } from '../src/domain/capabilitySet.js';
-import { isNightAt, safetyContextSchema, triageSafety } from '../src/domain/safety.js';
+import { buildSafetyContext, isNightAt, safetyReportSchema, triageSafety } from '../src/domain/safety.js';
 import type { SafetyContext } from '../src/domain/safety.js';
-import { carriagewayFromHeading, locationColumns, locationSchema } from '../src/domain/location.js';
+import { carriagewayFromHeading, isOnHighway, locationColumns, locationSchema } from '../src/domain/location.js';
 import { distanceKm, nearestZone } from '../src/domain/geo.js';
 import { createRandom } from '../src/sim/random.js';
 import { answerAsDriver } from '../src/sim/driverAnswers.js';
@@ -304,8 +304,11 @@ describe('entropy-driven question selection', () => {
 });
 
 describe('safety triage', () => {
+  // `onHighway` and `night` are no longer client inputs — they are derived, so
+  // a test states them directly rather than parsing them out of a payload.
   function context(overrides: Partial<SafetyContext> = {}): SafetyContext {
-    return safetyContextSchema.parse(overrides);
+    const { onHighway = false, night = false, positionUnknown = false, ...report } = overrides;
+    return { ...safetyReportSchema.parse(report), onHighway, positionUnknown, night };
   }
 
   it('a car in a car park with nothing wrong around it is NORMAL', () => {
@@ -376,6 +379,91 @@ describe('safety triage', () => {
     expect(triage.level).toBe('HIGH_RISK');
   });
 
+  // ONE FACT, ONE HOME. `onHighway` used to be a client field on both the
+  // location payload and the safety block, with nothing joining them, so a
+  // report that set only the location one triaged as NORMAL. It is now derived
+  // from the reported road position, and these walk the exact chain
+  // createIntakeJob uses — with the client stating NOTHING about safety.
+  it('a highway road position triages ELEVATED with no safety input at all', () => {
+    for (const roadPosition of ['SHOULDER', 'LANE'] as const) {
+      const location = locationSchema.parse({ lat: 12.9352, lng: 77.6245, roadPosition });
+      const columns = locationColumns(location);
+
+      const triage = triageSafety(
+        buildSafetyContext(safetyReportSchema.parse({}), {
+          roadPosition: location.roadPosition,
+          at: new Date('2026-06-01T09:00:00Z'),
+        }),
+      );
+
+      expect(columns.onHighway, roadPosition).toBe(true);
+      expect(triage.level, roadPosition).not.toBe('NORMAL');
+      expect(triage.reasonCodes, roadPosition).toContain('ON_HIGHWAY');
+    }
+  });
+
+  it('an off-highway road position stays NORMAL on the same empty input', () => {
+    for (const roadPosition of ['SERVICE_ROAD', 'PARKING'] as const) {
+      const columns = locationColumns(
+        locationSchema.parse({ lat: 12.9352, lng: 77.6245, roadPosition }),
+      );
+
+      const triage = triageSafety(
+        buildSafetyContext(safetyReportSchema.parse({}), {
+          roadPosition,
+          at: new Date('2026-06-01T09:00:00Z'),
+        }),
+      );
+
+      expect(columns.onHighway, roadPosition).toBe(false);
+      expect(triage.level, roadPosition).toBe('NORMAL');
+    }
+  });
+
+  // FAIL CLOSED. A driver who cannot say where they are standing is not
+  // assumed to be somewhere safe. The rest of the system fails closed on a
+  // missing fact — NO_TENANT and NO_OWNER filter to nothing rather than to
+  // everything — and safety is where failing open is least acceptable.
+  it('a report with no road position at all comes back ELEVATED', () => {
+    const location = locationSchema.parse({ lat: 12.9352, lng: 77.6245 });
+    expect(location.roadPosition).toBeNull();
+
+    const triage = triageSafety(
+      buildSafetyContext(safetyReportSchema.parse({}), {
+        roadPosition: location.roadPosition,
+        at: new Date('2026-06-01T09:00:00Z'),
+      }),
+    );
+
+    expect(triage.level).toBe('ELEVATED');
+    expect(triage.reasonCodes).toContain('UNKNOWN_POSITION');
+  });
+
+  it('an unknown position does not masquerade as a highway', () => {
+    const triage = triageSafety(context({ positionUnknown: true }));
+
+    expect(triage.reasonCodes).toContain('UNKNOWN_POSITION');
+    expect(triage.reasonCodes).not.toContain('ON_HIGHWAY');
+  });
+
+  // Geometry and context are separate facts and stay separate: a car stopped in
+  // a lane of an empty road is in a lane and is blocking nobody.
+  it('a traffic lane is not by itself a blocked lane', () => {
+    const inLane = triageSafety(context({ onHighway: true }));
+    const blocking = triageSafety(context({ onHighway: true, blockingLiveLane: true }));
+
+    expect(inLane.level).toBe('ELEVATED');
+    expect(inLane.reasonCodes).not.toContain('BLOCKING_LIVE_LANE');
+    expect(blocking.level).toBe('HIGH_RISK');
+  });
+
+  // The point of the fix: there is no longer a client field that could
+  // contradict the location. A caller sending one is rejected, not merged.
+  it('refuses a client attempt to state onHighway or night', () => {
+    expect(() => safetyReportSchema.parse({ onHighway: true })).toThrow();
+    expect(() => safetyReportSchema.parse({ night: true })).toThrow();
+  });
+
   it('night is 21:00 to 06:00 in Bengaluru local time, not UTC', () => {
     // 09:00Z is 14:30 IST — the middle of the afternoon.
     expect(isNightAt(new Date('2026-06-01T09:00:00Z'))).toBe(false);
@@ -417,7 +505,6 @@ describe('location refinement', () => {
         headingDegrees: 95,
         roadPosition: 'SHOULDER',
         kmMarker: 'KM 42',
-        onHighway: true,
       }),
     );
 
@@ -442,6 +529,20 @@ describe('location refinement', () => {
     expect(km).toBeGreaterThan(10);
     expect(km).toBeLessThan(18);
     expect(distanceKm(12.9352, 77.6245, 12.9352, 77.6245)).toBeCloseTo(0, 6);
+  });
+
+  it('decides on-highway from the road position, not from the caller', () => {
+    expect(isOnHighway('SHOULDER')).toBe(true);
+    expect(isOnHighway('LANE')).toBe(true);
+    expect(isOnHighway('SERVICE_ROAD')).toBe(false);
+    expect(isOnHighway('PARKING')).toBe(false);
+    // An unstated position does not claim to be a highway; the UNKNOWN_POSITION
+    // rule is what stops that from reading as "safe".
+    expect(isOnHighway(null)).toBe(false);
+  });
+
+  it('is no longer a field a caller can set', () => {
+    expect(() => locationSchema.parse({ lat: 12.9, lng: 77.6, onHighway: true })).toThrow();
   });
 
   it('assigns a breakdown to the nearest zone centroid', () => {

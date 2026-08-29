@@ -51,16 +51,15 @@
         <div class="col-auto"><input id="lat" class="form-control" value="12.9352" /></div>
         <div class="col-auto"><input id="lng" class="form-control" value="77.6245" /></div>
         <div class="col-auto">
+          <!-- SHOULDER and LANE are the highway positions; the server derives
+               the safety level from this and there is no separate checkbox to
+               disagree with it. -->
           <select id="roadPosition" class="form-select">
             <option>SERVICE_ROAD</option>
             <option>SHOULDER</option>
             <option>LANE</option>
             <option>PARKING</option>
           </select>
-        </div>
-        <div class="col-auto form-check mt-2">
-          <input id="onHighway" type="checkbox" class="form-check-input" />
-          <label class="form-check-label" for="onHighway">on highway</label>
         </div>
         <div class="col-auto form-check mt-2">
           <input id="driverAlone" type="checkbox" class="form-check-input" checked />

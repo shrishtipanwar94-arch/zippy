@@ -1439,8 +1439,9 @@ step:
   the fix that `GET /jobs` with no token is still 401 — the change must not
   have opened anything.
 
-- **`onHighway` is stored correctly and read from the wrong place, so highway
-  breakdowns are triaged NORMAL.** The field exists TWICE: on the location
+- **`onHighway` was stored correctly and read from the wrong place, so highway
+  breakdowns triaged NORMAL.** (Fixed — see Status below.) The field existed
+  TWICE: on the location
   schema (`src/domain/location.ts`, a routing fact — which carriageway, what a
   unit has to do to reach it) and on the safety context
   (`src/domain/safety.ts`, a risk fact — traffic passing at speed).
@@ -1466,12 +1467,71 @@ step:
   invisible to every check that goes through the simulator. It only appears for
   a client that fills in one field and not the other, and the driver page was
   the first such client ever written.
-  **Status: worked around, not fixed.** The page now sends `onHighway` in both
-  blocks, which makes the page correct and leaves the API trap intact for the
-  next client. The real fix is for the intake route to derive the safety flag
-  from the location it was given, so the fact has one source; that is server
-  work outside the "pages only" scope this was built under, and it is still
-  open.
+  **Status: FIXED, one fact one home.** `onHighway` is no longer an input
+  anywhere. `isOnHighway(roadPosition)` in `src/domain/location.ts` is the only
+  place the fact is decided — `SHOULDER` and `LANE` are the highway positions —
+  and it feeds both the job's `on_highway` column (through `locationColumns`)
+  and safety triage (through `buildSafetyContext`). `createIntakeJob` passes the
+  reported road position to both. There is nothing left that computes it twice,
+  so nothing left that can disagree.
+    - **`buildSafetyContext` takes the ROAD POSITION, not a boolean.** The first
+      attempt passed a pre-computed `onHighway` flag, which was still wrong in
+      the same way: the caller would then have had to separately work out
+      "was the position missing", and that is the identical fact splitting into
+      two again. Taking the position and deriving both `onHighway` and
+      `positionUnknown` inside means one input, one derivation, and no way for a
+      caller to hand in a flag that contradicts the row.
+    - **The schemas are `.strict()`, so a client sending `onHighway` gets a
+      400.** Zod's default is to STRIP an unknown key, and a silent strip is how
+      this class of bug survives: the caller believes it set something, the
+      server ignores it, and nobody is told. Rejecting is the only answer that
+      makes the mistake visible at the moment it is made.
+    - **`night` was the same defect and went with it.** It was accepted on the
+      safety schema and then silently overwritten from the clock in
+      `createIntakeJob` — a field the API advertised and ignored. Both derived
+      facts now live on `SafetyContext`, which only `buildSafetyContext` can
+      construct; neither is on the client-facing `safetyReportSchema`.
+    - **An unstated road position now fails CLOSED.** New `UNKNOWN_POSITION`
+      rule, ELEVATED. Not knowing where a vehicle is standing is a risk in its
+      own right and is ranked as one, rather than defaulting to "not on a
+      highway" and reading as safe. This matches how the rest of the system
+      behaves when a fact is missing — `NO_TENANT` and `NO_OWNER` filter to
+      nothing rather than to everything — and safety is where failing open is
+      least acceptable. The trade is deliberately asymmetric: over-triaging
+      costs a marginally slower or more expensive dispatch, under-triaging
+      leaves a highway breakdown ranked on cost alone, and only one of those can
+      hurt somebody. `isOnHighway(null)` still returns false, which is now
+      honest rather than optimistic — it answers only "did the driver say they
+      are on a highway", and the missing answer is handled where risk is
+      decided.
+    - **`LANE` and `blockingLiveLane` were examined and deliberately KEPT
+      SEPARATE.** They resemble the duplication and are not it: road position is
+      GEOMETRY — where the vehicle is standing — and blocking is CONTEXT —
+      whether that position obstructs moving traffic. A car stopped in a lane of
+      an empty road at 3am is in a lane and is blocking nobody. Collapsing them
+      would make every LANE job HIGH_RISK, which is a triage decision dressed up
+      as a refactor. The reasoning is a comment at the rule itself in
+      `safety.ts` so a future cleanup does not merge them, and a test pins the
+      distinction.
+  **A pure unit test could not have caught this, which is why there is now an
+  integration test.** Both halves were individually correct and individually
+  tested: `triageSafety` returned ELEVATED for a context with `onHighway: true`,
+  and `locationSchema` parsed and stored `onHighway` faithfully. Every unit test
+  passed while the system was broken, because the defect was in the WIRING
+  between two correct pieces — the route never carried the fact from one to the
+  other. `tests/intakeRoute.test.ts` is new for exactly this: Supertest against
+  the real database, six cases, every one sending NO `safety` key at all, and
+  one of them reading the row back to assert `on_highway = true` and a
+  non-NORMAL level together — the combination that was impossible to hold
+  before. The general lesson is that a bug living in the seam between two
+  correct components is invisible to tests that only ever look at one component
+  at a time.
+  **Verification.** Mutating `createIntakeJob` to stop feeding the derived value
+  to triage turns 3 tests red; removing `SHOULDER` from the highway set turns 5
+  red; making `UNKNOWN_POSITION` never fire turns 3 red; collapsing
+  `blockingLiveLane` into `onHighway` turns 4 red. The seed-123 simulator run is
+  byte-identical across the whole change, because the derivation reproduces
+  exactly what the simulator was computing twice.
   **This is the same failure a second time.** Phase 2b: `Driver.tenantId` held
   the right tenant, `resolveTenantBinding` read `TenantMembership` instead, no
   row joined the two, and every tenant-scoped query for a seeded driver
@@ -1481,6 +1541,7 @@ step:
   existing callers happened to avoid, and both failed quietly rather than
   loudly. The pattern to watch for is a single real-world fact with two homes
   in the schema or the types; the fix in both cases is one source and a
-  derivation, not two fields kept in step by discipline. Worth a deliberate
-  sweep for a third instance rather than waiting for a fourth client to find
-  it.
+  derivation, not two fields kept in step by discipline. The sweep for a third
+  instance was done and turned up one candidate — `roadPosition: 'LANE'` versus
+  `safety.blockingLiveLane` — which on inspection is two genuinely different
+  facts and was left alone. `night` was a real third instance and is fixed.

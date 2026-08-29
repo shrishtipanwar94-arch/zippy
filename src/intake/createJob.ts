@@ -17,8 +17,8 @@
 import type { Prisma, PrismaClient, SafetyLevel } from '@prisma/client';
 import { classifySymptoms } from '../domain/faultRules.js';
 import type { SymptomPayload } from '../domain/symptoms.js';
-import { isNightAt, triageSafety } from '../domain/safety.js';
-import type { SafetyContext } from '../domain/safety.js';
+import { buildSafetyContext, triageSafety } from '../domain/safety.js';
+import type { SafetyReport } from '../domain/safety.js';
 import { locationColumns } from '../domain/location.js';
 import type { LocationInput } from '../domain/location.js';
 import { nearestZone } from '../domain/geo.js';
@@ -36,7 +36,9 @@ export type IntakeRequest = {
   vehicleId: string;
   tenantId: string | null;
   symptoms: SymptomPayload;
-  safety: SafetyContext;
+  // What the caller stated. Whether the vehicle is on a highway is NOT in here
+  // — it is derived below from the reported road position.
+  safety: SafetyReport;
   location: LocationInput;
   // Present from Phase 16, when the driver describes the fault in their own
   // words and an LLM fills in `symptoms`. Stored verbatim so the extraction can
@@ -69,12 +71,18 @@ async function resolveZoneId(tx: Prisma.TransactionClient, lat: number, lng: num
 }
 
 export async function createIntakeJob(db: PrismaClient, request: IntakeRequest): Promise<IntakeResult> {
-  // Whether it is dark is a fact about the clock, not something a client gets
-  // to assert — so it is computed here and overrides whatever came in.
-  const safetyContext: SafetyContext = { ...request.safety, night: isNightAt(request.at) };
-  const triage = triageSafety(safetyContext);
   const distribution = classifySymptoms(request.symptoms);
   const columns = locationColumns(request.location);
+
+  // ONE FACT, ONE HOME. The road position the driver reported is the only
+  // input; `isOnHighway` turns it into the job's `on_highway` column and, via
+  // buildSafetyContext, into what triage reasons over. A client cannot supply
+  // the two inconsistently because it cannot supply either.
+  const safetyContext = buildSafetyContext(request.safety, {
+    roadPosition: columns.roadPosition,
+    at: request.at,
+  });
+  const triage = triageSafety(safetyContext);
 
   return runIntakeTransaction(db, async (tx) => {
     const zoneId = await resolveZoneId(tx, columns.lat, columns.lng);

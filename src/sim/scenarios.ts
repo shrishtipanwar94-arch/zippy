@@ -21,7 +21,7 @@ import type { FaultCode } from '../domain/faults.js';
 import { symptomLikelihood } from '../domain/faultRules.js';
 import { PRIMARY_COMPLAINTS, WARNING_LIGHTS, UNUSUAL_SOUNDS } from '../domain/symptoms.js';
 import type { SymptomPayload } from '../domain/symptoms.js';
-import type { SafetyContext } from '../domain/safety.js';
+import type { SafetyReport } from '../domain/safety.js';
 import type { LocationInput } from '../domain/location.js';
 import type { Random } from './random.js';
 import type { SimulatorConfig, Situation } from './config.js';
@@ -102,24 +102,25 @@ export function generateSymptoms(random: Random, trueFault: FaultCode): SymptomP
   };
 }
 
-// The circumstances, not the safety level. triageSafety() decides the level.
-export function generateSafetyContext(
+// What a simulated driver would say about their situation. NOT the safety
+// level, which triageSafety decides, and no longer `onHighway` or `night`
+// either — both are derived server-side, from the road position and the clock.
+// The simulator used to set `onHighway` here AND in generateLocation, both from
+// the same `situation`, which is exactly why it never exposed the bug where a
+// client set one and not the other.
+export function generateSafetyReport(
   random: Random,
   situation: Situation,
   trueFault: FaultCode,
-): SafetyContext {
+): SafetyReport {
   const onHighway = situation === 'HIGHWAY_SHOULDER' || situation === 'HIGHWAY_LANE';
 
   return {
-    onHighway,
     trafficSpeedKph: onHighway ? 60 + random.nextInt(41) : 20 + random.nextInt(30),
     blockingLiveLane: situation === 'HIGHWAY_LANE',
     smokeOrBurningSmell: trueFault === 'ENGINE_OVERHEAT' && random.chance(0.35),
     fuelSmell: random.chance(0.03),
     overheating: trueFault === 'ENGINE_OVERHEAT',
-    // Overwritten from the simulated clock by createIntakeJob — whether it is
-    // dark is not the driver's to assert.
-    night: false,
     driverAlone: random.chance(0.55),
     vulnerablePassengers: random.chance(0.12),
   };
@@ -137,6 +138,9 @@ export function generateLocation(
   situation: Situation,
   origin: { lat: number; lng: number },
 ): LocationInput {
+  // Only for choosing plausible highway-shaped detail — exit numbers and km
+  // markers. Whether the job counts as a highway job is derived from
+  // roadPosition, downstream, and is not restated here.
   const onHighway = situation === 'HIGHWAY_SHOULDER' || situation === 'HIGHWAY_LANE';
   // Roughly +/- 3km around the zone centroid; 0.01 degrees is about 1.1km.
   const jitter = () => (random.next() - 0.5) * 0.06;
@@ -150,7 +154,6 @@ export function generateLocation(
     landmark: onHighway ? null : `Near landmark ${1 + random.nextInt(40)}`,
     roadPosition: ROAD_POSITION_BY_SITUATION[situation],
     parkingLevel: situation === 'PARKING' ? `B${1 + random.nextInt(3)}` : null,
-    onHighway,
   };
 }
 

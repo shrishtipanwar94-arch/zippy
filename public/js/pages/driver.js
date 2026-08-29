@@ -33,16 +33,11 @@ document.querySelector('[data-action="login"]').addEventListener('click', async 
 
 document.querySelector('[data-action="report"]').addEventListener('click', async () => {
   try {
-    // `onHighway` is sent TWICE, and that is a workaround, not a design.
-    // The field exists on both the location schema (a routing fact: which
-    // carriageway, what a unit has to do to reach it) and the safety context
-    // (a risk fact: traffic passing at speed), and POST /jobs/intake does not
-    // connect them. A client that fills in only the location one gets NORMAL
-    // safety for a highway breakdown. The real fix is for the route to derive
-    // the safety flag from the location, which is server work this page is not
-    // allowed to do; until then every client has to know to send both.
-    const onHighway = document.querySelector('#onHighway').checked;
-
+    // No `onHighway` anywhere. The server derives it from the road position
+    // and uses that one value for both the stored column and the safety
+    // triage, so there is nothing here that could contradict it — and the
+    // schemas are strict, so trying to send it would be a 400 rather than a
+    // silently ignored field.
     const created = await api.createIntake({
       vehicleId: value('#vehicleId'),
       symptoms: { primaryComplaint: value('#complaint') },
@@ -50,12 +45,8 @@ document.querySelector('[data-action="report"]').addEventListener('click', async
         lat: Number(value('#lat')),
         lng: Number(value('#lng')),
         roadPosition: value('#roadPosition'),
-        onHighway,
       },
-      safety: {
-        onHighway,
-        driverAlone: document.querySelector('#driverAlone').checked,
-      },
+      safety: { driverAlone: document.querySelector('#driverAlone').checked },
     });
 
     putJob({ id: created.jobId, status: 'INTAKE', safetyLevel: created.safetyLevel });
