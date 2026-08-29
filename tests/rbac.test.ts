@@ -2,7 +2,8 @@
 // decision function, token round-tripping and password verification.
 
 import { describe, expect, it } from 'vitest';
-import { can } from '../src/auth/permissions.js';
+import { NO_OWNER, can, jobReadOwnershipFilter } from '../src/auth/permissions.js';
+import type { AuthContext } from '../src/auth/context.js';
 import {
   NO_TENANT,
   isTenantScopedModel,
@@ -41,6 +42,38 @@ describe('can() — the permission table', () => {
   it('denies an action on a resource the role has no entry for', () => {
     expect(can({ role: 'TECHNICIAN' }, 'read', 'auditLog')).toBe(false);
     expect(can({ role: 'DRIVER' }, 'read', 'unit')).toBe(false);
+  });
+});
+
+describe('jobReadOwnershipFilter() — the row-ownership decision', () => {
+  const base = { userId: 'u1', tenantId: 'tenant-a', crossTenant: false };
+
+  it('narrows a DRIVER to jobs they raised', () => {
+    const ctx: AuthContext = { ...base, role: 'DRIVER', actorId: 'driver-7' };
+    expect(jobReadOwnershipFilter(ctx)).toEqual({ driverId: 'driver-7' });
+  });
+
+  it('narrows a TECHNICIAN to jobs assigned to them', () => {
+    const ctx: AuthContext = { ...base, role: 'TECHNICIAN', actorId: 'tech-3' };
+    expect(jobReadOwnershipFilter(ctx)).toEqual({ assignedTechnicianId: 'tech-3' });
+  });
+
+  it('does not narrow a FLEET_MANAGER or a DISPATCHER', () => {
+    expect(jobReadOwnershipFilter({ ...base, role: 'FLEET_MANAGER' })).toEqual({});
+    expect(
+      jobReadOwnershipFilter({ userId: 'd1', role: 'DISPATCHER', tenantId: null, crossTenant: true }),
+    ).toEqual({});
+  });
+
+  it('fails closed: a DRIVER/TECHNICIAN token with no actorId filters by an impossible id', () => {
+    expect(jobReadOwnershipFilter({ ...base, role: 'DRIVER' })).toEqual({ driverId: NO_OWNER });
+    expect(jobReadOwnershipFilter({ ...base, role: 'TECHNICIAN' })).toEqual({
+      assignedTechnicianId: NO_OWNER,
+    });
+  });
+
+  it('does not narrow when there is no auth context (tenant scoping still returns nothing)', () => {
+    expect(jobReadOwnershipFilter(undefined)).toEqual({});
   });
 });
 
@@ -96,6 +129,29 @@ describe('access tokens', () => {
       tenantId: 'tenant-a',
       crossTenant: false,
     });
+  });
+
+  it('round-trips the actorId claim for a DRIVER and omits it for other roles', () => {
+    const driverClaims = verifyAccessToken(
+      issueAccessToken({
+        sub: 'user-1',
+        role: 'DRIVER',
+        tenantId: 'tenant-a',
+        crossTenant: false,
+        actorId: 'driver-7',
+      }),
+    );
+    expect(driverClaims.actorId).toBe('driver-7');
+
+    const fmClaims = verifyAccessToken(
+      issueAccessToken({
+        sub: 'user-2',
+        role: 'FLEET_MANAGER',
+        tenantId: 'tenant-a',
+        crossTenant: false,
+      }),
+    );
+    expect(fmClaims.actorId).toBeUndefined();
   });
 
   it('rejects a tampered token with a TokenError', () => {

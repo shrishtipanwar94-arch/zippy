@@ -15,6 +15,7 @@ export type AccessTokenClaims = {
   role: Role;
   tenantId: string | null; // null for a DISPATCHER, who is not bound to a tenant
   crossTenant: boolean; // true only for a DISPATCHER — may read across tenants
+  actorId?: string; // Driver.id / Technician.id for those roles; absent otherwise
 };
 
 export type RefreshTokenClaims = {
@@ -61,6 +62,7 @@ export function verifyAccessToken(token: string): AccessTokenClaims {
     role: payload.role as Role,
     tenantId: typeof payload.tenantId === 'string' ? payload.tenantId : null,
     crossTenant: payload.crossTenant,
+    actorId: typeof payload.actorId === 'string' ? payload.actorId : undefined,
   };
 }
 

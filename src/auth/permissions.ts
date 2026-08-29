@@ -3,12 +3,19 @@
 // must never be scattered if-statements across route handlers — when someone
 // asks "what can a technician do?" the answer has to be readable in one place.
 //
-// This governs the ACTION (may this role read a job at all?). It says nothing
-// about WHICH rows — that is tenant scoping, enforced separately in
-// src/infra/tenantScopeExtension.ts. A FLEET_MANAGER may `read` `job`, but the
-// scope layer still limits them to their own tenant's jobs.
+// This governs the ACTION (may this role read a job at all?). WHICH rows a
+// caller may see is decided in two more places, both here in the permission
+// layer, both enforced by Prisma client extensions rather than route handlers:
+//   - tenant scoping — every caller is limited to their own tenant's rows
+//     (src/infra/tenantScopeExtension.ts, rule in ./tenantScope.ts)
+//   - row ownership  — a DRIVER or TECHNICIAN is narrowed further, to the jobs
+//     that are theirs (jobReadOwnershipFilter below, applied by
+//     src/infra/jobOwnershipExtension.ts)
+// A FLEET_MANAGER may `read` `job` and sees every job in their tenant; a DRIVER
+// may `read` `job` and sees only their own.
 
 import type { Role } from '@prisma/client';
+import type { AuthContext } from './context.js';
 
 export type Action = 'read' | 'create' | 'update' | 'delete';
 export type Resource = 'job' | 'unit' | 'technician' | 'driver' | 'user' | 'auditLog';
@@ -45,4 +52,38 @@ export function can(user: { role: Role }, action: Action, resource: Resource): b
   const allowed = PERMISSIONS[user.role][resource];
   if (!allowed) return false;
   return allowed.includes(action);
+}
+
+// ROW OWNERSHIP — the third layer, on top of RBAC and tenant scoping.
+//
+// `can()` lets a DRIVER and a TECHNICIAN read jobs. This says WHICH job rows:
+//   DRIVER      -> only jobs they raised          (Job.driverId === their Driver.id)
+//   TECHNICIAN  -> only jobs assigned to them     (Job.assignedTechnicianId === their Technician.id)
+//   everyone else (DISPATCHER, FLEET_MANAGER) -> no extra narrowing; their only
+//     limit is the tenant filter.
+//
+// The return value is a Prisma `where` fragment that jobOwnershipExtension.ts
+// AND-composes into every job read. It is composed ON TOP of the tenant filter,
+// never in place of it — this can only ever narrow a result set, never widen
+// one.
+
+// A Driver/Technician id that cannot exist. Used when the token says DRIVER or
+// TECHNICIAN but carries no actorId (a user with no Driver/Technician row).
+// Filtering by it returns zero rows — a missing scope must fail closed, the
+// same rule as NO_TENANT in tenantScope.ts.
+export const NO_OWNER = '__no_owner__';
+
+export type JobOwnershipFilter =
+  | Record<string, never>
+  | { driverId: string }
+  | { assignedTechnicianId: string };
+
+export function jobReadOwnershipFilter(context: AuthContext | undefined): JobOwnershipFilter {
+  if (context?.role === 'DRIVER') {
+    return { driverId: context.actorId ?? NO_OWNER };
+  }
+  if (context?.role === 'TECHNICIAN') {
+    return { assignedTechnicianId: context.actorId ?? NO_OWNER };
+  }
+  return {};
 }

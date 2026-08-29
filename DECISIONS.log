@@ -615,9 +615,8 @@ Tables first read: `User`, `TenantMembership`, `AuditLog`, `Job`.
 - **`req.auth` is optional (`auth?:`).** Every handler behind `authenticate`
   must still null-check it or trust the middleware ran. `requirePermission`
   does check; ad-hoc handlers could forget.
-- **RBAC matrix is thin.** Six resources, four actions, no field-level or
-  ownership rules (e.g. "a driver may read only their OWN jobs"). Row
-  ownership beyond tenant is not modelled.
+- **RBAC matrix is thin.** Six resources, four actions, no field-level rules.
+  Row ownership ("a driver reads only their own jobs") is added in Phase 2b.
 
 ### Concepts now genuinely in use
 
@@ -643,3 +642,188 @@ set); fail-closed defaults (missing context -> `NO_TENANT` -> empty result);
   nothing and the route cannot tell "not yours" from "not real", which is the
   point. Dispatchers, who may read across tenants, have every such read
   written to `AuditLog` inside the same extension.
+
+---
+
+## Phase 2b — Row ownership + seed memberships / 2026-08-29 / Commit: (uncommitted — follow-up to "phase 2: auth and tenancy")
+
+### Built
+
+Seed fix — `prisma/seed/`:
+- `drivers.ts` — each seeded DRIVER user now gets a `TenantMembership`
+  (role `DRIVER`) into its own `driver.tenantId`, guarded on non-null.
+- `technicians.ts` — each of the 31 technicians gets a `TenantMembership`
+  (role `TECHNICIAN`), round-robined across the three FLEET tenants via a local
+  `FLEET_TENANT_IDS` list.
+- Bug this fixes: without a membership row, `resolveTenantBinding` returned
+  `{ tenantId: null }` for these roles, so every tenant-scoped query for a
+  seeded driver or technician returned nothing (`NO_TENANT`).
+
+Permission layer — `src/auth/permissions.ts`:
+- `jobReadOwnershipFilter(context)` — pure; returns a Prisma `where` fragment:
+  `{ driverId }` for DRIVER, `{ assignedTechnicianId }` for TECHNICIAN, `{}`
+  for DISPATCHER / FLEET_MANAGER and for no-context.
+- `NO_OWNER = '__no_owner__'` sentinel; exported `JobOwnershipFilter` type.
+
+Infra — `src/infra/jobOwnershipExtension.ts` (new):
+- `Prisma.defineExtension` with a `query.job.$allOperations` hook. For a
+  DRIVER / TECHNICIAN READ of `Job` it AND-composes the ownership fragment into
+  `where`; for `findUnique(OrThrow)` it post-checks the returned row; non-reads
+  and tenant-wide roles pass through untouched.
+- `db.ts` — `prisma` is now
+  `prismaBase.$extends(tenantScopeExtension).$extends(jobOwnershipExtension)`.
+
+Token / context plumbing:
+- `context.ts` — `AuthContext` gains `actorId?: string` (Driver.id /
+  Technician.id).
+- `tokens.ts` — `AccessTokenClaims` gains `actorId?: string`;
+  `verifyAccessToken` reads it back.
+- `api/auth.ts` — new `resolveActorId(user)`; `loadActiveUser` now includes
+  `driver { id }` + `technician { id }`; `/auth/login` and `/auth/refresh`
+  both stamp `actorId` into the access token.
+- `api/middleware/authenticate.ts` — copies `claims.actorId` into the request
+  `AuthContext`.
+
+Tests:
+- `tests/rbac.test.ts` — +6 pure tests: `jobReadOwnershipFilter` matrix
+  (DRIVER / TECHNICIAN narrow, FM / DISPATCHER / no-context don't, missing
+  `actorId` -> `NO_OWNER`), `actorId` token round-trip + omitted for other
+  roles.
+- `tests/ownership.test.ts` — new, 9 tests against the real `zippy_test`
+  Postgres. One tenant, two drivers (one job each), one technician assigned to
+  driver A's job. Covers: list scoping per role; `GET /jobs/:id` —
+  driver -> another driver's job in the same tenant 404, technician ->
+  unassigned job 404, dispatcher -> both 200, owner still 200; the full
+  `POST /auth/login` path is row-scoped on the token it returns.
+- Suite total: 45 tests, `tsc` and `eslint src` clean.
+
+### Decisions
+
+- **Decision:** Row ownership is a SECOND Prisma extension
+  (`jobOwnershipExtension`), separate from the tenant one, driven by a pure
+  rule in the permission layer.
+  **Why:** Same reason tenant scoping is an extension — a route handler must
+  never be the enforcement point. A separate file keeps "one concept per
+  file"; both extensions only ever AND-narrow, so registration order is
+  irrelevant.
+  **Alternative:** Fold the ownership `where` into `tenantScopeExtension`, or
+  filter inside the `jobs.ts` handlers.
+  **Why not:** Mixing tenant and ownership in one hook muddies both;
+  handler-level filtering is the discipline-reliant path that leaks.
+  **Tradeoff:** Two hooks per `Job` query instead of one. Real but negligible.
+
+- **Decision:** The caller's Driver.id / Technician.id (`actorId`) is resolved
+  at login and carried in the access token, exactly like `tenantId`.
+  **Why:** Jobs reference `Driver.id` / `Technician.id`, not `User.id`.
+  Token-carried, `jobReadOwnershipFilter` stays a pure function of the context
+  with no per-query lookup.
+  **Alternative:** Look the id up inside the extension on every job read.
+  **Why not:** A DB round-trip on the hot path, and the extension would need
+  its own unscoped client to do it.
+  **Tradeoff:** A stale token keeps a stale `actorId` until it expires
+  (<= 15 min); `/auth/refresh` re-derives it. Same tradeoff already accepted
+  for `tenantId`.
+
+- **Decision:** A DRIVER / TECHNICIAN token with no `actorId` filters by
+  `NO_OWNER`, an id that cannot exist.
+  **Why:** Fail closed. A DRIVER user with no `Driver` row must see zero jobs,
+  never the whole tenant.
+  **Alternative:** Treat a missing `actorId` as "no ownership filter".
+  **Why not:** That widens the result to the entire tenant — the exact failure
+  this layer exists to prevent. Mirrors `NO_TENANT`.
+  **Tradeoff:** A misconfigured user (role DRIVER, no Driver row) sees nothing
+  with no error; the only signal is the empty list.
+
+- **Decision:** Ownership applies to READS only; writes stay tenant-scoped.
+  **Why:** The task is about reads, and no job write path exists yet
+  (Phase 3+). Scoping a route that does not exist would be speculative.
+  **Alternative:** Also AND the fragment into `update` / `updateMany` /
+  `delete` / `deleteMany` for `Job`.
+  **Why not:** Premature — nothing calls them. Recorded as a weakness so the
+  Phase 3 write path picks it up.
+  **Tradeoff:** Until then, a TECHNICIAN with `update` permission is only
+  tenant-limited on writes.
+
+- **Decision:** Seeded technicians are round-robined across the three FLEET
+  tenants.
+  **Why:** A technician serves every fleet, but `resolveTenantBinding` takes
+  the first membership and a login needs one tenant. Spreading them makes the
+  dev data useful for cross-tenant scenarios.
+  **Alternative:** Bind every technician to one fleet, or make TECHNICIAN
+  cross-tenant like DISPATCHER.
+  **Why not:** One fleet is arbitrary and lopsided; cross-tenant would be a
+  real authz change the task explicitly ruled out ("do not widen tenant
+  scoping").
+  **Tradeoff:** A technician's tenant binding is a dev-seed fiction — there is
+  no real "which tenant owns this technician" answer. Phase 20 may revisit.
+
+### Concurrency
+
+- **Scenario:** A driver's or technician's `actorId` changes (reassignment,
+  row recreated) while an access token is still live.
+  **What races:** The token's `actorId` claim vs the current Driver /
+  Technician row.
+  **Why dangerous:** A stale `actorId` scopes reads to jobs that are no longer
+  theirs, or hides jobs that now are.
+  **How handled:** Same mechanism as the tenant binding — `/auth/refresh`
+  reloads the user and re-derives `actorId`; the stale access token
+  self-expires in <= 15 min. No revocation list.
+  **Assumption relied on:** Access TTL stays short; Driver / Technician ids are
+  stable in practice (the seed never reassigns them). Nothing new races inside
+  the extension itself — `where`-composition is synchronous and per-query.
+
+### Weaknesses introduced
+
+- **Ownership covers job READS only.** `update` / `delete` on `Job` are
+  tenant-scoped but not owner-scoped. Does not matter yet (no write route); the
+  Phase 3 intake/update path must AND in `jobReadOwnershipFilter`'s fragment or
+  the rule is half-enforced.
+- **`actorId` staleness.** Carried in the token; a reassignment is invisible
+  until refresh or re-login (<= 15 min). Same shape as the `tenantId`
+  tradeoff already on the books.
+- **Missing `actorId` fails silent.** A DRIVER / TECHNICIAN user with no domain
+  row gets an empty list and no error. Fine at seed-controlled scale; a real
+  onboarding flow should reject the login or surface it.
+- **Technician tenant binding is fictional.** Round-robin assignment; no domain
+  truth behind "technician N belongs to fleet X". Only bites when Phase 20
+  gives tenants real meaning.
+- **`findUnique` on `Job` now carries two post-checks** (tenant, then
+  ownership) rather than a filtered query. `jobs.ts` deliberately uses
+  `findFirst`, so this path is currently untravelled — latent cost if a caller
+  switches.
+
+### Concepts now genuinely in use
+
+Layered read authorization — RBAC action check, then tenant scope, then row
+ownership, each a separate concern in a separate file; policy-as-data extended
+(the ownership rule is a pure function returning a `where` fragment); a second
+composed Prisma client `$extends` extension; token-carried derived identity
+(`actorId` alongside `tenantId`); fail-closed sentinel values (`NO_OWNER`
+mirrors `NO_TENANT`).
+
+### Interview angle
+
+- *A driver and a fleet manager both have `read` on `job` — how does the driver
+  end up seeing fewer rows?* Three layers run in order: `can()` allows the
+  action, `tenantScopeExtension` ANDs `tenantId = <caller>`, then
+  `jobOwnershipExtension` ANDs `driverId = <their Driver.id>` for a DRIVER (or
+  `assignedTechnicianId` for a TECHNICIAN) while leaving DISPATCHER and
+  FLEET_MANAGER alone — so the driver's list is the intersection, and a missing
+  actor id ANDs an impossible value rather than widening.
+- *Why is the driver's id in the JWT instead of looked up per request?* Jobs
+  key off `Driver.id` / `Technician.id`, not `User.id`, so the id is resolved
+  once at login (`resolveActorId`) and carried like `tenantId`; the cost is
+  that a reassignment stays invisible until the token refreshes (<= 15 min) —
+  the same staleness tradeoff already accepted for the tenant binding.
+
+### What broke
+
+- **Cross-suite unique-constraint collision.** `tests/ownership.test.ts` first
+  seeded a `VehicleProfile` with the same `(make, model, yearFrom, yearTo)` as
+  `tenancy.test.ts` — `TEST` / `Fixture` / 2020 / 2025. Both suites share the
+  one `zippy_test` database and run in parallel, so whichever built its fixture
+  second hit `Unique constraint failed on the fields: (make, model, year_from,
+  year_to)`, and `tenancy.test.ts` reported "12 skipped". Fixed by giving the
+  ownership fixture a distinct `make` (`TEST_OWNERSHIP`). Per-suite
+  `startsWith`-prefixed cleanup does not help here because the clash is on a
+  natural key, not the id prefix.

@@ -90,6 +90,18 @@ export async function seedDrivers(prisma: PrismaClient): Promise<void> {
       },
     });
 
+    // A non-DISPATCHER login resolves its tenant from its first membership
+    // (resolveTenantBinding in src/api/auth.ts). Without this row the seeded
+    // driver logs in with tenantId null and every tenant-scoped query — their
+    // own jobs and vehicles included — comes back empty.
+    if (driver.tenantId) {
+      await prisma.tenantMembership.upsert({
+        where: { tenantId_userId: { tenantId: driver.tenantId, userId } },
+        update: { role: 'DRIVER' },
+        create: { id: `membership-${driverId}`, tenantId: driver.tenantId, userId, role: 'DRIVER' },
+      });
+    }
+
     await prisma.vehicle.upsert({
       where: { registration: driver.registration },
       update: { colour: driver.colour, profileId: driver.profileId },

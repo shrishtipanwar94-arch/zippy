@@ -55,6 +55,7 @@ export const authenticate: RequestHandler = (req: Request, res: Response, next: 
     role: claims.role,
     tenantId: claims.tenantId,
     crossTenant: claims.crossTenant,
+    actorId: claims.actorId,
   };
   req.auth = context;
 

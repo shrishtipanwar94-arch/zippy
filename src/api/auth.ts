@@ -42,10 +42,29 @@ function resolveTenantBinding(
   return { tenantId: memberships[0]?.tenantId ?? null, crossTenant: false };
 }
 
+// The domain-actor id the row-ownership rule filters jobs by. A DRIVER's jobs
+// are matched on Job.driverId (= Driver.id), a TECHNICIAN's on
+// Job.assignedTechnicianId (= Technician.id) — neither is the user id, so it is
+// resolved here and carried in the token like tenantId. Undefined for roles
+// that have tenant-wide read (DISPATCHER, FLEET_MANAGER).
+function resolveActorId(user: {
+  role: Role;
+  driver: { id: string } | null;
+  technician: { id: string } | null;
+}): string | undefined {
+  if (user.role === 'DRIVER') return user.driver?.id;
+  if (user.role === 'TECHNICIAN') return user.technician?.id;
+  return undefined;
+}
+
 async function loadActiveUser(where: { id: string } | { email: string }) {
   const user = await prismaBase.user.findUnique({
     where,
-    include: { memberships: { select: { tenantId: true } } },
+    include: {
+      memberships: { select: { tenantId: true } },
+      driver: { select: { id: true } },
+      technician: { select: { id: true } },
+    },
   });
   if (!user || !user.active) return null;
   return user;
@@ -64,12 +83,14 @@ authRouter.post('/auth/login', async (req, res) => {
   }
 
   const binding = resolveTenantBinding(user.role, user.memberships);
+  const actorId = resolveActorId(user);
   res.json({
     accessToken: issueAccessToken({
       sub: user.id,
       role: user.role,
       tenantId: binding.tenantId,
       crossTenant: binding.crossTenant,
+      actorId,
     }),
     refreshToken: issueRefreshToken({ sub: user.id }),
     user: { id: user.id, email: user.email, role: user.role, tenantId: binding.tenantId },
@@ -99,12 +120,14 @@ authRouter.post('/auth/refresh', async (req, res) => {
   // Re-derive the binding so a membership change since the last login takes
   // effect on refresh rather than only on a fresh login.
   const binding = resolveTenantBinding(user.role, user.memberships);
+  const actorId = resolveActorId(user);
   res.json({
     accessToken: issueAccessToken({
       sub: user.id,
       role: user.role,
       tenantId: binding.tenantId,
       crossTenant: binding.crossTenant,
+      actorId,
     }),
     refreshToken: issueRefreshToken({ sub: user.id }),
   });

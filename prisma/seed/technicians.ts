@@ -16,6 +16,13 @@ import { zoneId } from './zones.js';
 
 export const TECHNICIAN_COUNT = 31;
 
+// A technician serves every fleet, but a login still needs one tenant to scope
+// to — resolveTenantBinding (src/api/auth.ts) takes the first membership, and
+// with no membership the login carries tenantId null and every tenant-scoped
+// query returns nothing. Round-robin the seeded workforce across the three
+// fleet tenants so each technician login lands in a real one.
+const FLEET_TENANT_IDS = ['tenant-metrocab', 'tenant-citylogistics', 'tenant-quickmove'];
+
 // Given a zero-based technician index, the capability codes that technician
 // holds. Ranges are half-open: `i < 18` is exactly indices 0..17.
 function capabilitiesFor(i: number): string[] {
@@ -72,6 +79,13 @@ export async function seedTechnicians(prisma: PrismaClient): Promise<void> {
         homeZoneId: home,
         active: true,
       },
+    });
+
+    const membershipTenantId = FLEET_TENANT_IDS[i % FLEET_TENANT_IDS.length];
+    await prisma.tenantMembership.upsert({
+      where: { tenantId_userId: { tenantId: membershipTenantId, userId } },
+      update: { role: 'TECHNICIAN' },
+      create: { id: `membership-${technicianId}`, tenantId: membershipTenantId, userId, role: 'TECHNICIAN' },
     });
 
     for (const code of capabilitiesFor(i)) {

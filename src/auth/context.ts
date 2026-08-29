@@ -22,6 +22,12 @@ export type AuthContext = {
   // True only for a DISPATCHER: queries are not tenant-filtered, but every
   // cross-tenant read is written to the audit log.
   crossTenant: boolean;
+  // The caller's domain-actor id: Driver.id when role is DRIVER, Technician.id
+  // when role is TECHNICIAN, undefined for every other role. Jobs reference
+  // these ids (Job.driverId, Job.assignedTechnicianId), not userId, so the
+  // row-ownership rule in permissions.ts needs it. Resolved at login, exactly
+  // the way tenantId is.
+  actorId?: string;
 };
 
 const storage = new AsyncLocalStorage<AuthContext>();
