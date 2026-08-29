@@ -1293,3 +1293,86 @@ consumed); and generative-versus-discriminative use of one likelihood table.
 - **A `zod` v4 detail.** `safetyContextSchema.default({})` does not typecheck —
   `.default()` wants the OUTPUT type, so it demanded all nine fields. `.prefault({})`
   is the input-side equivalent and lets each field fall back to its own default.
+
+---
+
+## Phase 4a — Socket.IO server, rooms, fan-out / 2026-08-29 / Commit: eeba7dc ("phase 4a: socket.io server, rooms, fan-out, transactional outbox")
+
+Partial phase. Phase 4 also owes the `lastEventSequence` replay cursor, the
+three pages and the `/public` state discipline; the remaining template sections
+are written when it closes and consolidates into INTERVIEW.md.
+
+### Built
+
+Realtime — `src/realtime/`:
+- `server.ts` — `createRealtimeServer(httpServer)`. JWT verified in `io.use()`,
+  which runs during the handshake; `job:subscribe` / `job:unsubscribe`.
+- `rooms.ts` — `jobRoom` / `zoneRoom` / `tenantRoom`, `standingRoomsFor`,
+  `mayRequestJobRoom`, `roomsForJobEvent`. Pure.
+- `publish.ts` — `publishJobEvents`, the one fan-out point;
+  `setRealtimeServer`.
+- `outbox.ts` — `recordForPublish`, `collectJobEvents`. Per-transaction event
+  buffer on AsyncLocalStorage.
+- `src/intake/events.ts` and `transaction.ts` wired to queue then flush after
+  commit; `src/index.ts` attaches Socket.IO to the existing HTTP server.
+- `tests/realtime.test.ts` — 12 tests. Suite total 92.
+
+### What broke
+
+- **`job_events` is append-only, so a job that has events cannot be deleted —
+  by anyone.** The realtime test fixture tried to tear itself down and Postgres
+  refused: `append-only table job_events: DELETE is not permitted`. Deleting a
+  `jobs` row cascades to its `job_events` children, and the BEFORE-ROW trigger
+  from the Phase 1 migration rejects the cascade. The trigger was chosen over a
+  plain REVOKE precisely because the table owner and any superuser bypass table
+  privileges but not a trigger that raises — so this is not a permissions
+  problem with a workaround, it is the design working. The system was right and
+  the fixture was wrong; it now upserts and never tears down, with every
+  assertion scoped to the job id the test itself created.
+  **The permanent consequence, which is bigger than the test.** There is no
+  "delete this job" path in this codebase and there cannot be one while the
+  trigger stands. In production that collides directly with data-deletion
+  obligations — a driver exercising a right to erasure, or any contractual
+  retention limit, cannot be satisfied by deleting their rows. The honest
+  answers are anonymising the PII columns in place while the immutable event
+  trail keeps its shape, or crypto-shredding (encrypt per-subject, destroy the
+  key), NOT quietly adding a trigger exemption, which would give back exactly
+  the "a bug can rewrite history" property the trigger exists to remove. Nothing
+  in the build plan has picked this up yet and no phase currently owns it.
+
+- **A lazy `PrismaPromise` silently defeated the auth context, and only in the
+  WebSocket path.** `subscribeToJob` called
+  `runWithAuthContext(auth, () => prisma.job.findFirst(...))` and awaited the
+  result OUTSIDE the context. `findFirst()` returns a lazy PrismaPromise: it
+  does no work, and the tenant-scope and row-ownership extensions do not run,
+  until it is awaited. Handing the un-awaited promise back out of
+  `runWithAuthContext` meant the AsyncLocalStorage scope had already exited by
+  the time those extensions asked who the caller was. They saw no context, fell
+  back to `NO_TENANT`, and the query matched nothing — a driver was refused
+  their own job. Fixed by awaiting inside the context (`async () => ...`), with
+  the reasoning left in the file.
+  Three things about it are worth keeping:
+    - **It appeared only over WebSocket.** The HTTP path has never been able to
+      hit it, because `authenticate` wraps the whole remaining request in
+      `runWithAuthContext` — the await always happens inside the scope there.
+      The realtime layer is the first code to open a context around a single
+      call, and it got it wrong on the first attempt.
+    - **It failed CLOSED, not open.** The fallback is `NO_TENANT`, an id that
+      cannot exist, so the damage was an owner being denied rather than a
+      stranger being admitted. That is the direction the Phase 2 sentinels were
+      designed to fail in, and this is the first time that design paid out on a
+      bug nobody predicted.
+    - **Reading the code did not find it.** The call looks correct, the auth
+      context printed correctly, and the row existed with matching `driver_id`
+      and `tenant_id`. It took instrumenting the handler to log the context, the
+      job id and the scoped result side by side against an unscoped read of the
+      same row before the cause was visible. Worth remembering as a class of
+      bug: a lazy query object carries its execution outside whatever scope
+      appears, on the page, to contain it.
+
+- **A test expectation was simply wrong.** The fan-out test expected five job
+  events from an intake; a stated flat tyre is already certain enough to
+  dispatch on, so intake completes without asking anything and
+  `INTAKE_COMPLETED` fires as a sixth. Not a system bug — corrected, and
+  strengthened while there to assert the full event-type sequence rather than
+  only the count.
