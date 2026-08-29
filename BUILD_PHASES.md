@@ -622,7 +622,8 @@ LEFT JOIN intake_answers ia ON ia.job_id=j.id GROUP BY j.id;
 -- entropy-driven.
 
 SELECT entropy_before, entropy_after FROM intake_answers ORDER BY created_at;
--- entropy_after < entropy_before on EVERY row
+-- mean information gain across all answers must be positive; individual
+-- rows may increase entropy and that is correct
 ```
 
 **Close:** `log this phase in DECISIONS.log` → `git commit -m "phase 3: intake"`

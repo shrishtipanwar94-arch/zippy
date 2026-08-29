@@ -827,3 +827,452 @@ mirrors `NO_TENANT`).
   ownership fixture a distinct `make` (`TEST_OWNERSHIP`). Per-suite
   `startsWith`-prefixed cleanup does not help here because the clash is on a
   natural key, not the id prefix.
+
+---
+
+## Phase 3 — Intake / 2026-08-29 / Commit: c034770 ("phase 3: intake, entropy, safety, location, simulator") + tests (uncommitted)
+
+### Built
+
+Domain — `src/domain/`, all pure, no I/O, no clock, no `Math.random`:
+- `faults.ts` — 12 `FAULT_CODES`, `FAULT_PRIORS` (base rates), and
+  `CAPABILITIES_BY_FAULT` mapping each fault to the technician capability that
+  resolves it. Capability codes match `prisma/seed/capabilities.ts`.
+- `symptoms.ts` — `symptomPayloadSchema` (Zod): `primaryComplaint`,
+  `engineCranks`, `warningLights[]`, `unusualSound`, `vehicleMoves`. The INPUT
+  boundary Phase 16 will re-source from free text.
+- `faultRules.ts` — the hand-written naive-Bayes table. `classifySymptoms()`
+  folds `COMPLAINT_LIKELIHOOD`, `ENGINE_CRANKS_LIKELIHOOD`,
+  `WARNING_LIGHT_LIKELIHOOD`, `SOUND_LIKELIHOOD`, `VEHICLE_MOVES_LIKELIHOOD`
+  into the priors in a fixed order. Also exports `symptomLikelihood()` — the
+  same table read generatively, for the simulator.
+- `entropy.ts` — `shannonEntropy`, `normalise`, `applyLikelihood`, `rankFaults`,
+  `topFault`.
+- `questions.ts` — `INTAKE_QUESTIONS`, 7 questions with P(answer | fault) rows;
+  `answerLikelihood()` returns a UNIFORM row for a fault a question does not
+  model.
+- `questionSelection.ts` — `expectedInformationGain`, `expectedPosteriorEntropy`,
+  `posteriorForAnswer`, `selectNextQuestion`, `stopReasonFor`,
+  `decideNextQuestion`. Constants: `ENTROPY_STOP_THRESHOLD_BITS = 0.65`,
+  `MAX_QUESTIONS = 5`, `MIN_EXPECTED_GAIN_BITS = 0.02`.
+- `capabilitySet.ts` — `contendingFaults` (80% coverage mass, max 3),
+  `requiredCapabilities`, `capabilitySetIsStable`.
+- `safety.ts` — `safetyContextSchema`, 9 rules in `SAFETY_RULES`,
+  `triageSafety()` returning `{ level, reasonCodes }`, `isNightAt()` (IST).
+- `location.ts` — `locationSchema`, `carriagewayFromHeading()` (4 buckets),
+  `locationColumns()`.
+- `geo.ts` — `distanceKm()` (haversine), `nearestZone()`.
+
+Intake service — `src/intake/`:
+- `errors.ts` — `IntakeError` + `IntakeErrorCode` union + `statusForIntakeError`.
+- `transaction.ts` — `runIntakeTransaction()`, retry-on-P2002 around the whole
+  transaction; `TRANSACTION_TIMEOUT_MS = 20_000`.
+- `events.ts` — `appendJobEvent()`, per-job `sequence` = max + 1.
+- `hypothesis.ts` — `recordHypothesis()`, `latestHypothesis()`, `toDistribution()`.
+- `session.ts` — `loadIntakeSession()`, `nextStepFor()`, `nextQuestionView()`.
+- `createJob.ts` — `createIntakeJob()`, the whole intake write set in one
+  transaction.
+- `answers.ts` — `recordIntakeAnswer()`, `nextQuestionFor()`.
+
+API — `src/api/intake.ts`, wired into `app.ts`:
+- `POST /jobs/intake` — 201 with jobId, safety level + reasons, entropy, top
+  fault, required capabilities, and the next question (or the stop reason).
+- `GET /jobs/:id/next-question`
+- `POST /jobs/:id/answers` — 201 with entropy before/after, expected gain, and
+  the next step.
+
+Simulator — `src/sim/`, `npm run sim`:
+- `random.ts` — mulberry32 `createRandom(seed)`.
+- `config.ts` — `SimulatorConfig`, `DEFAULT_FAULT_MIX`, `DEFAULT_SITUATION_MIX`,
+  `parseMix`/`parseFaultMix`/`parseSituationMix`.
+- `scenarios.ts` — `arrivalOffsetsSeconds()` (Poisson), `generateSymptoms()`,
+  `generateSafetyContext()`, `generateLocation()`, `COMPLAINT_MIX`.
+- `driverAnswers.ts` — `answerAsDriver()`.
+- `actors.ts` — stubs, uncalled: `simulateTechnicianResponse()`,
+  `simulateArrivalDiagnosis()`, `simulateStockDraw()`.
+- `runner.ts` — `runSimulation()`, `loadRoster()`, `SimulationHooks`
+  (`onJob` / `shouldStop` / `waitMs`).
+- `outcomes.ts` — `SimulatedJob`, `summarise()`, `diagnosisWasCorrect()`.
+- `cli.ts` — flags `--seed --rate --duration --max-jobs --fault-mix
+  --situation-mix --start --live --pace`; kill switch on SIGINT/SIGTERM and
+  Redis key `zippy:sim:stop`.
+
+Seed — `prisma/seed/intakeQuestions.ts`, called from `prisma/seed.ts`: projects
+`INTAKE_QUESTIONS` into the `intake_questions` table.
+
+Tables written this phase (no migration needed — Phase 1 created them all):
+`jobs`, `symptom_reports`, `fault_hypotheses`, `intake_answers`,
+`location_events`, `job_events`, `intake_questions`.
+
+Job event types now emitted: `JOB_CREATED`, `SYMPTOMS_CAPTURED`,
+`SAFETY_TRIAGED`, `LOCATION_CAPTURED`, `FAULT_HYPOTHESIS_UPDATED`,
+`INTAKE_ANSWER_RECORDED`, `INTAKE_COMPLETED`.
+
+Tests — `tests/intake.test.ts`, 35 pure tests (no DB, no HTTP). Suite total 80
+across 5 files; `tsc --noEmit` and `eslint src` clean.
+
+Measured, on this machine, against the dev `zippy` database:
+- `npm run sim -- --rate 40 --duration 60` (seed 1) — 43 jobs in 5.5s.
+- `npm run sim -- --seed 123 --duration 60` twice — byte-identical output.
+- Questions by stated complaint, across accumulated runs: `FLAT_TYRE` 32 jobs
+  avg 0.00; `LOCKED_OUT` 15 avg 0.00; `WONT_START` 47 avg 3.17 (range 0-5);
+  `UNKNOWN` 23 avg 4.30; `WARNING_LIGHT` 8 avg 4.50.
+- 319 `intake_answers` rows: mean realised information gain +0.327 bits.
+- Top-fault accuracy 76.7% (seed 1), 71.9% (seed 123) — against a simulator
+  that generates from the same tables the classifier inverts, so this is an
+  upper bound, not a real-world accuracy. See Weaknesses.
+
+### Decisions
+
+- **Decision:** Next question chosen by expected information gain over a fixed
+  7-question catalogue.
+  **Why:** It is the direct formalisation of "ask the question whose answer
+  tells you most". Pure arithmetic over a distribution — deterministic, cheap
+  (7 questions x <= 4 answers x 12 faults), unit-testable with no I/O, and it
+  makes the question count fall out of the ambiguity instead of being
+  hand-scripted.
+  **Alternative:** A hand-built decision tree, or an LLM asked "what should I
+  ask next".
+  **Why not:** A tree encodes the same maths worse and goes stale silently
+  against the rule table. An LLM breaks invariant 5 (it would be deciding, not
+  extracting) and invariant 10 (an external call inside a decision).
+  **Tradeoff:** Question quality is capped by the likelihood table. A question
+  the table models badly is chosen badly, and nothing detects that.
+
+- **Decision:** Three stop conditions, checked in a fixed order — entropy below
+  0.65 bits, capability set stable, question cap of 5. Plus a fourth outcome,
+  `NO_INFORMATIVE_QUESTION`, when nothing left is worth 0.02 bits.
+  **Why:** `CAPABILITY_SET_STABLE` is the load-bearing one and the reason this
+  is a dispatch system rather than a diagnosis quiz. Once every fault still in
+  contention resolves to the same capability, more questions cannot change who
+  gets sent, so asking them is pure cost to the driver.
+  **Alternative:** Stop on entropy alone.
+  **Why not:** It would keep interrogating a driver to separate a flat battery
+  from a failed one when both need the same van, and stop too early on a pair
+  that needs different vans.
+  **Tradeoff:** Four distinct stop reasons to reason about, and the recorded
+  reason now matters — `QUESTION_CAP_REACHED` is a worse outcome than
+  `ENTROPY_BELOW_THRESHOLD` and the two must not be read as equivalent.
+
+- **Decision:** A fault a question does not model is UNIFORM over that
+  question's answers.
+  **Why:** That is the precise meaning of "this question says nothing about that
+  fault" — every answer multiplies it by the same constant, so its probability
+  relative to the other unmodelled faults is unchanged and only the modelled
+  faults move.
+  **Alternative:** A plausible default row (NO / SILENCE / HAS_FUEL likely).
+  **Why not:** It quietly promotes every fault the question forgot to mention,
+  every time a driver reports nothing unusual, and the most-forgotten fault
+  wins the diagnosis. This bug was in the file once; it made a stuck vehicle
+  look like a flat tyre.
+  **Tradeoff:** The catalogue must list every fault a question genuinely
+  discriminates, or the question silently under-performs. Two tests now pin the
+  rule.
+
+- **Decision:** The rule table is hand-written naive Bayes.
+  **Why:** Every cell is readable and defensible aloud, which is the point of
+  the readability contract. No training data exists and no model could be
+  fitted honestly.
+  **Alternative:** A learned classifier, or a flat lookup from complaint to
+  service type.
+  **Why not:** Nothing to learn from; a flat lookup produces no distribution,
+  so there is no entropy and nothing to select questions with.
+  **Tradeoff:** Naive independence. Correlated evidence (a battery light and a
+  no-crank engine travel together) is double-counted, so the result is
+  overconfident. Recorded as a weakness.
+
+- **Decision:** Safety triage is a flat list of rules; the level is the HIGHEST
+  that fires, never the first, and the list is ordered by topic, opening with an
+  ELEVATED rule.
+  **Why:** An operator asks "why is this HIGH_RISK" and needs a list of reason
+  codes. Ordering by topic (position, then vehicle hazard, then occupants)
+  reads the way they think. Deliberately putting an ELEVATED rule first means
+  any regression to "take the first rule's level" is caught by a test rather
+  than by a HIGH_RISK job being triaged as routine.
+  **Alternative:** Nested conditionals, or a numeric risk score with a
+  threshold.
+  **Why not:** Conditionals lose the reason codes. A score would be a numeric
+  penalty, and invariant 4 puts safety in a lexicographic ordering ABOVE the
+  cost function precisely so it cannot be traded off.
+  **Tradeoff:** Rules are hand-set booleans; there is no notion of a rule
+  firing weakly.
+
+- **Decision:** Whether it is night is computed from the clock inside
+  `createIntakeJob`, overriding whatever the client sent.
+  **Why:** It is a fact about time, not something a caller should be able to
+  assert. The simulator passes simulated time, so a seeded replay triages the
+  same way every run.
+  **Alternative:** Trust `safety.night` from the request.
+  **Why not:** A client could flip its own job to HIGH_RISK.
+  **Tradeoff:** `isNightAt` hardcodes IST (+5:30, no DST). Correct for
+  Bengaluru; wrong the moment a second city is added.
+
+- **Decision:** Carriageway direction is derived from the heading at intake and
+  stored on the job, in four buckets.
+  **Why:** Phase 7 feasibility has to reject a unit on the far side of a divided
+  highway — 200m in a straight line, 20km by road. It can only do that if the
+  direction was captured when the job was created; retrofitting makes every
+  historical job unusable for evaluation.
+  **Alternative:** Store the raw heading and bucket it later.
+  **Why not:** The raw heading is also stored. The bucket is stored too so the
+  feasibility filter is a column comparison, not a computation per candidate.
+  **Tradeoff:** Four buckets cannot express a road running north-east. Good
+  enough for "same side of the divider", which is the only question asked.
+
+- **Decision:** Retry on the unique-constraint violation at the TRANSACTION
+  boundary, not at the failing statement.
+  **Why:** Postgres marks a transaction aborted the moment any statement in it
+  errors — the only legal next statement is ROLLBACK. A catch-and-reinsert
+  inside the transaction cannot work, however natural it looks.
+  **Alternative:** Retry the `jobEvent.create` in place; or `SELECT ... FOR
+  UPDATE` on the job row to serialise writers.
+  **Why not:** The first is impossible as above. The second holds a row lock for
+  the length of the transaction, which is the pattern this project avoids
+  (see the Phase 1 note on optimistic versioning).
+  **Tradeoff:** The whole write set is replayed on a collision. Safe because
+  nothing is read and carried across the retry, but it is more work than a
+  statement-level retry would be.
+
+- **Decision:** Routes authorise with the scoped `prisma` client, then hand a
+  proven job id to a service that writes with unscoped `prismaBase`.
+  **Why:** `fault_hypotheses`, `intake_answers` and `job_events` have no
+  `tenant_id` column, so the tenant extension cannot filter them; they are
+  reachable only through a job id. Resolving the driver, vehicle and job
+  through the scoped client means a caller outside the tenant gets a 404 from
+  the lookup and never reaches the service.
+  **Alternative:** Add `tenant_id` to the intake tables; or run the service
+  inside the request auth context.
+  **Why not:** Denormalising the tenant onto child tables invites the two copies
+  to disagree. Running unscoped-writes inside a scope buys nothing, because the
+  extension does not filter those models anyway.
+  **Tradeoff:** This is discipline-reliant in exactly the way Phase 2 removed
+  for reads — a future route that forgets the scoped lookup writes across
+  tenants with no complaint. Recorded as a weakness.
+
+- **Decision:** The simulator calls `createIntakeJob()` and
+  `recordIntakeAnswer()` — the same functions the HTTP routes call.
+  **Why:** Phase 10 compares dispatch policies by replaying seeded scenarios. If
+  the simulator had its own copy of the pipeline, every measured number would
+  describe the copy.
+  **Alternative:** Have the simulator POST to the API, or write rows directly.
+  **Why not:** HTTP adds a server, auth and ports to every evaluation run.
+  Direct row writes would skip the logic under test.
+  **Tradeoff:** The simulator holds a database connection and runs sequentially;
+  it cannot exercise concurrent intake.
+
+- **Decision:** One-shot simulator runs start at a FIXED simulated instant
+  (`2026-06-01T09:00:00Z`); `--live` uses the wall clock and is explicitly not
+  reproducible.
+  **Why:** Night/day triage is derived from the clock. On the wall clock the
+  same seed would produce different safety levels depending on when it ran, and
+  the reproducibility check would fail for a reason nothing in the seed
+  explains.
+  **Alternative:** Always use the wall clock; or drop night from triage.
+  **Why not:** The first breaks replay. The second drops a genuine risk factor.
+  **Tradeoff:** A default one-shot run writes jobs dated last June. Fine for
+  evaluation, wrong for a live board — hence the split.
+
+- **Decision:** The question catalogue lives in code; `intake_questions` is a
+  projection of it, refreshed by the seed.
+  **Why:** The likelihood tables are the thing being tested and reviewed, and
+  they belong where `tsc` and the unit tests can see them. The table exists so
+  an `intake_answers` row can carry a real foreign key and an operator can list
+  the questions without reading TypeScript.
+  **Alternative:** Make the table the source of truth and load it at runtime.
+  **Why not:** It would put a database read inside the decision path and make
+  the maths untestable without a database.
+  **Tradeoff:** The two can drift if the seed is not re-run after a catalogue
+  change. `questionId` is nullable, so a missing row degrades to code-only.
+
+### Concurrency
+
+- **Scenario:** Two writers append a job event to the same job at the same
+  moment — a driver double-tapping an answer, or the driver answering while a
+  dispatcher edits the job.
+  **What races:** Both read `MAX(sequence)` for that job and compute the same
+  next value.
+  **Why dangerous:** Without the constraint both rows would land with the same
+  sequence, and the Phase 4 "everything after N" replay would silently drop
+  one of them — an event trail that quietly loses events is worse than no
+  trail.
+  **How handled:** The `(job_id, sequence)` unique index rejects the second
+  insert; `runIntakeTransaction` catches P2002, rolls back and replays the whole
+  transaction, up to 3 attempts.
+  **Assumption relied on:** Contention on a single job is rare (one driver,
+  answering one question at a time), so 3 attempts is enough. If it is not, the
+  caller gets `EVENT_SEQUENCE_CONTENDED` (503) rather than a silent retry loop.
+
+- **Scenario:** The same answer is submitted twice concurrently — a retried
+  request, or an impatient double-tap.
+  **What races:** Both transactions load the intake session before either
+  commits, so both see the same pending question and both pass the
+  `QUESTION_NOT_PENDING` guard.
+  **Why dangerous:** Folding the same evidence in twice manufactures confidence
+  that was never earned — the distribution would be updated by an observation
+  that only happened once.
+  **How handled:** Incidentally, by the event sequence. Both transactions try to
+  write `INTAKE_ANSWER_RECORDED` at the same sequence number; one loses the
+  unique constraint and rolls back; on the replay it re-reads the session, now
+  sees the committed answer, and is rejected with `QUESTION_NOT_PENDING` (409).
+  **Assumption relied on:** That every intake write path also appends a job
+  event. This is a real serialisation but an INCIDENTAL one — nothing declares
+  it, and `fault_hypotheses.version` has no unique constraint of its own to fall
+  back on. Recorded as a weakness; Phase 11 brings the deliberate mechanism.
+
+- **Scenario:** Intake writes while another process reads the job.
+  **What races:** Nothing yet. Job status is set once at creation and never
+  advanced in this phase, and no solver, hold or offer exists.
+  **Why dangerous:** Not yet.
+  **How handled:** N/A.
+  **Assumption relied on:** That Phase 5 onwards will not start mutating
+  `Job.status` without picking up the `version` column Phase 1 put there for it.
+
+### Weaknesses introduced
+
+- **No idempotency keys.** `CLAUDE.md` says every external-facing mutation takes
+  one; `POST /jobs/intake` and `POST /jobs/:id/answers` take none, and the
+  `idempotency_keys` table is still unused. A retried intake creates a second
+  job. Matters now, not later — a phone on a bad connection is the normal case
+  for this product. The answer route is partly protected by the
+  `QUESTION_NOT_PENDING` guard; intake is not protected at all.
+- **Naive Bayes double-counts correlated evidence.** A battery light plus a
+  no-crank engine are two updates for what is largely one fact, so the posterior
+  is overconfident. At 12 faults and 5 observations it is a rounding error
+  against a table anyone can read, but the confidence numbers should not be
+  quoted as calibrated.
+- **The simulator generates from the same tables the classifier inverts.** So
+  the 72-77% top-fault accuracy measures how well entropy-driven questioning
+  searches the model, NOT how well the model matches real breakdowns. It cannot
+  expose model misspecification, by construction. Any resume claim must say
+  "against a seeded simulator", never "accuracy".
+- **Unscoped writes behind a scoped read.** The intake service writes with
+  `prismaBase`; only the route's prior scoped lookup keeps it tenant-safe. A
+  future route that forgets that lookup leaks with no complaint — exactly the
+  discipline-reliant failure mode the Phase 2 extensions removed for reads.
+- **Duplicate-answer safety is incidental.** It falls out of the job-event
+  unique constraint rather than from anything that declares the intent. Remove
+  the event write and the protection vanishes silently.
+- **Hand-tuned constants with no validation set.** `0.65` bits, `0.8` coverage
+  mass, `MAX_QUESTIONS = 5`, `MIN_EXPECTED_GAIN_BITS = 0.02`, and the four
+  volunteer rates in the simulator. Tuned by watching runs. Defensible as
+  starting values, not as optimised ones.
+- **The question cap fires often.** 12 of 43 jobs in the seed-1 run stopped at
+  `QUESTION_CAP_REACHED`, meaning a fifth of drivers answer five questions and
+  intake still cannot separate the faults. That is an honest outcome, not a
+  bug, but it is also the biggest lever for a better result.
+- **A required capability set can be unsatisfiable.** With three contending
+  faults the union can be e.g.
+  `BATTERY_REPLACEMENT + EV_HV_CERTIFICATION + JUMP_START`, which no seeded
+  technician holds. Observed in the seed-1 run. Phase 7 feasibility will have to
+  decide whether to relax to the top fault or reject.
+- **Zone assignment is straight-line nearest centroid.** Not road distance —
+  a job across a river or a rail line can be filed to the wrong zone. Correct by
+  design for now (invariant 10: no external call in a decision), and OSRM
+  arrives in Phase 6.
+- **Live simulator mode is unexercised.** `--live`, the pacing loop and the
+  Redis kill switch are written and typecheck, but have not been run.
+- **`intake_questions` can drift from code** if the seed is not re-run after a
+  catalogue change. Degrades to a null `questionId`, so it fails soft.
+- **Job status never advances past `INTAKE`.** By design this phase — but
+  nothing yet moves it, and no test asserts it should.
+
+### Concepts now genuinely in use
+
+Shannon entropy over a discrete distribution; Bayes update as
+posterior proportional to prior x likelihood; expected information gain and why
+it is non-negative in expectation but not per answer; naive Bayes and the
+independence assumption it buys speed with; a Poisson arrival process and
+exponential inter-arrival times; seeded pseudo-random generation (mulberry32)
+as a reproducibility requirement rather than a convenience; append-only event
+sequencing with a unique constraint as the arbiter; transaction-scoped retry
+versus statement-scoped retry, and why Postgres forces the choice;
+lexicographic ordering of a safety level above a cost function (stored, not yet
+consumed); and generative-versus-discriminative use of one likelihood table.
+
+### Interview angle
+
+- *Why does "flat tyre" ask no questions and "my car will not start" ask about
+  three?* Because the number of questions is not scripted — it falls out of
+  Shannon entropy. `classifySymptoms` turns the symptom payload into a
+  distribution over 12 faults; a stated flat tyre lands at 0.518 bits, already
+  under the 0.65-bit stop threshold, so `decideNextQuestion` returns STOP
+  immediately. A bare no-start lands at 2.618 bits, so the selector scores every
+  unasked question by expected information gain — averaging the posterior
+  entropy over the answers it might get, weighted by how likely each is — and
+  asks the best one, until entropy drops, or every contending fault needs the
+  same capability, or the cap of 5 is hit. Measured over the simulator:
+  `FLAT_TYRE` averages 0.00 questions, `WONT_START` 3.17.
+- *You store the entropy before and after every answer. What stops that from
+  being decoration?* It is the number the claim is made of, and it does not
+  always move the way people expect: 244 of 319 recorded answers reduced
+  entropy and 75 raised it, with a mean realised gain of +0.33 bits. That is
+  correct behaviour, not a bug — expected information gain is non-negative as a
+  theorem about the AVERAGE over possible answers, while a single surprising
+  answer legitimately makes you less sure. A test asserts the non-negativity of
+  the expectation for every question against every belief, and the aggregate is
+  what the Phase 10 harness reads.
+
+### What broke
+
+- **The plan's SQL check is mathematically impossible, and finding that out was
+  the most useful thing in the phase.** `BUILD_PHASES.md` asks for
+  `entropy_after < entropy_before` on EVERY `intake_answers` row. It does not
+  hold and cannot: across 319 recorded answers, 244 decreased and 75 (23.5%)
+  increased. Expected information gain is non-negative by construction — that
+  is a theorem about the average over the answers that might come back, not a
+  guarantee about the one that did. If intake is fairly sure it is a flat
+  battery and the driver reports bright dash lights, that confidence was
+  misplaced and the honest posterior is flatter than the prior. A system where
+  no answer could ever surprise it would be a system that was not listening.
+  Deliberately NOT "fixed": the alternatives were to select questions by
+  minimax posterior entropy (which the phase brief rules out — it specifies
+  expected gain) or to flatten the "unsure" likelihood rows until surprises
+  became impossible, which would be fitting the model to the check. What
+  replaced it, and what actually holds:
+    - mean realised gain per answer is positive (+0.327 bits),
+    - no job ended less certain than it started (0 of 43, 0 of 32 across the two
+      seeded runs),
+    - and expected gain is non-negative for every question against every belief
+      — asserted directly in `tests/intake.test.ts`.
+  The rise distribution is spread across many question/answer pairs rather than
+  concentrated in one, which is what confirmed it as inherent rather than a
+  single bad table row.
+- **`P2028` — Prisma killed a transaction mid-run.** The first full 60-minute
+  simulator pass died with "Transaction already closed... timeout 5000 ms,
+  however 54240 ms passed". Two causes, both fixed: `createIntakeJob` and
+  `recordIntakeAnswer` each re-read the intake session at the end of the
+  transaction to work out the next question — reading back rows they had just
+  written — and Prisma's interactive transaction timeout defaults to 5s. The
+  next step is now computed from the belief already in hand, and the timeout is
+  set explicitly to 20s. The same 43-job run now takes 5.5s end to end.
+- **Break-it-on-purpose caught 1 of 3 mutations on the first pass.** Two tests
+  were weaker than they read:
+    - The uniform-default test only compared a RATIO between two unmodelled
+      faults, which any constant default preserves — so replacing the uniform
+      row with a "normal-looking" one sailed through. Replaced with a direct
+      assertion that an unmodelled fault's row is flat across answers and sums
+      to 1.
+    - The "highest level, not first" safety test could not fail, because every
+      HIGH_RISK rule already sat ahead of every ELEVATED one in `SAFETY_RULES` —
+      `triggered[0].level` and `triggered.some(HIGH_RISK)` were behaviourally
+      identical. Fixed in the SOURCE, not the test: the rule list is now ordered
+      by topic and opens with `ON_HIGHWAY` (ELEVATED), so the property is real.
+      Verified the reorder changed no behaviour — the seed-123 simulator output
+      diffs byte-identical across it.
+  Second pass: all three mutations red, 5 failing tests.
+- **A test premise was simply wrong.** The capability-stability test paired
+  `FLAT_BATTERY` with `FAILED_BATTERY` on the assumption they need "the same
+  van". They do not — `JUMP_START` versus `BATTERY_REPLACEMENT`, which is
+  exactly why the distinction is worth asking about. Rewritten around
+  `STARTER_MOTOR` / `ENGINE_OVERHEAT`, which genuinely share
+  `OBD_DIAGNOSTICS`, with an assertion pinning that premise so it cannot rot
+  silently.
+- **An empty migration got created and removed.** `prisma migrate dev
+  --create-only` was run to check whether Phase 3 needed schema changes. It did
+  not — Phase 1 had already created `fault_hypotheses`, `intake_answers`,
+  `symptom_reports`, `location_events` and every location and safety column on
+  `jobs`. The 30-byte migration directory was deleted and
+  `prisma migrate status` re-confirmed clean.
+- **A `zod` v4 detail.** `safetyContextSchema.default({})` does not typecheck —
+  `.default()` wants the OUTPUT type, so it demanded all nine fields. `.prefault({})`
+  is the input-side equivalent and lets each field fall back to its own default.

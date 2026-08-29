@@ -47,13 +47,34 @@ type SafetyRule = {
   applies: (context: SafetyContext) => boolean;
 };
 
-// Order is presentation order only — the resulting level is the highest that
-// fires, never the first.
+// Grouped by topic — where the vehicle is, then what the vehicle is doing,
+// then who is in it — because an operator reads the reason codes in this order
+// and "on a highway, blocking a live lane" is the sentence they expect.
+//
+// The ORDER CARRIES NO SEVERITY. The level is the highest that fires, never the
+// first, and the list deliberately opens with an ELEVATED rule so that anything
+// which quietly starts trusting position instead of severity gets caught by
+// tests/intake.test.ts rather than by a HIGH_RISK job being triaged as routine.
 const SAFETY_RULES: SafetyRule[] = [
+  {
+    code: 'ON_HIGHWAY',
+    level: 'ELEVATED',
+    applies: (c) => c.onHighway,
+  },
   {
     code: 'BLOCKING_LIVE_LANE',
     level: 'HIGH_RISK',
     applies: (c) => c.blockingLiveLane,
+  },
+  {
+    code: 'STOPPED_IN_FAST_TRAFFIC',
+    level: 'HIGH_RISK',
+    applies: (c) => c.onHighway && c.trafficSpeedKph !== null && c.trafficSpeedKph >= FAST_TRAFFIC_KPH,
+  },
+  {
+    code: 'OVERHEATING',
+    level: 'ELEVATED',
+    applies: (c) => c.overheating,
   },
   {
     code: 'FIRE_RISK',
@@ -66,28 +87,6 @@ const SAFETY_RULES: SafetyRule[] = [
     applies: (c) => c.fuelSmell,
   },
   {
-    code: 'STOPPED_IN_FAST_TRAFFIC',
-    level: 'HIGH_RISK',
-    applies: (c) => c.onHighway && c.trafficSpeedKph !== null && c.trafficSpeedKph >= FAST_TRAFFIC_KPH,
-  },
-  // Alone, in the dark, on a highway shoulder is the classic roadside
-  // vulnerability case even when nothing about the vehicle is dangerous.
-  {
-    code: 'ALONE_AT_NIGHT_ON_HIGHWAY',
-    level: 'HIGH_RISK',
-    applies: (c) => c.onHighway && c.night && c.driverAlone,
-  },
-  {
-    code: 'ON_HIGHWAY',
-    level: 'ELEVATED',
-    applies: (c) => c.onHighway,
-  },
-  {
-    code: 'OVERHEATING',
-    level: 'ELEVATED',
-    applies: (c) => c.overheating,
-  },
-  {
     code: 'VULNERABLE_PASSENGERS',
     level: 'ELEVATED',
     applies: (c) => c.vulnerablePassengers,
@@ -96,6 +95,13 @@ const SAFETY_RULES: SafetyRule[] = [
     code: 'NIGHT_AND_ALONE',
     level: 'ELEVATED',
     applies: (c) => c.night && c.driverAlone,
+  },
+  // Alone, in the dark, on a highway shoulder is the classic roadside
+  // vulnerability case even when nothing about the vehicle is dangerous.
+  {
+    code: 'ALONE_AT_NIGHT_ON_HIGHWAY',
+    level: 'HIGH_RISK',
+    applies: (c) => c.onHighway && c.night && c.driverAlone,
   },
 ];
 
