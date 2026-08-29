@@ -1296,11 +1296,12 @@ consumed); and generative-versus-discriminative use of one likelihood table.
 
 ---
 
-## Phase 4a/4b — Socket.IO server, rooms, fan-out, replay cursor / 2026-08-29 / Commits: eeba7dc ("phase 4a: socket.io server, rooms, fan-out, transactional outbox"), 8a7c84a ("phase 4b: reconnect replay cursor")
+## Phase 4a/4b/4c — Socket.IO server, rooms, fan-out, replay cursor, the three pages / 2026-08-29 / Commits: eeba7dc ("phase 4a"), 8a7c84a ("phase 4b"), plus the frontend (uncommitted)
 
-Partial phase. Phase 4 also owes the three pages and the `/public` state
-discipline; the remaining template sections are written when it closes and
-consolidates into INTERVIEW.md.
+Partial phase. Phase 4 still owes the dispatcher's unit-assignment dropdown,
+which needs a `PATCH /jobs/:id/assign` endpoint that does not exist. The
+remaining template sections are written when it closes and consolidates into
+INTERVIEW.md.
 
 ### Built
 
@@ -1319,6 +1320,18 @@ Realtime — `src/realtime/`:
   `MAX_REPLAY_EVENTS`. `job:subscribe` takes
   `{ jobId, lastEventSequence? }` and answers a cursor with one `job:replay`.
 - `tests/realtime.test.ts` — 20 tests. Suite total 100.
+
+Frontend — `/public`, served statically by Express, no bundler and no build
+step:
+- `js/state.js` — the one state object, `registerPanel`, `render`, and the
+  idempotent `applyJobEvent` that drops any sequence already applied.
+- `js/socket.js` — the socket, resubscribing every job with its cursor on
+  reconnect; `js/api.js` — HTTP with the bearer token.
+- `js/panels/` — `jobsTable` (patches rows by `data-job-id`), `jobDetail`
+  (morphdom, because the event list changes shape), `intake`, `session`.
+- `js/pages/` — `driver`, `technician`, `dispatcher`.
+- `driver.html`, `technician.html`, `dispatcher.html`, `index.html`;
+  `src/api/app.ts` serves `/public` and the three extensionless routes.
 
 ### Weaknesses introduced
 
@@ -1410,3 +1423,64 @@ Realtime — `src/realtime/`:
   `INTAKE_COMPLETED` fires as a sixth. Not a system bug — corrected, and
   strengthened while there to assert the full event-type sequence rather than
   only the count.
+
+- **Every static file returned 401, and the cause had been sitting there since
+  Phase 2.** The moment `express.static` was mounted, `/`, `/driver`,
+  `/js/state.js` — everything — answered 401. `jobsRouter.use(authenticate)`
+  and the identical line in `intake.ts` attach the middleware with NO PATH, and
+  a path-less `use` on a router mounted at `/` runs for every request that
+  reaches it, not only the ones that router handles. `authenticate` answers 401
+  and never calls `next()`, so it was guarding everything mounted after it.
+  Nothing noticed for two phases because the app was API-only: a request that
+  did not match a route was going to 404 anyway, so a 401 instead of a 404 was
+  invisible. Fixed by attaching `authenticate` per route
+  (`jobsRouter.get('/jobs', authenticate, requirePermission(...), ...)`), which
+  also puts the auth requirement where a reader looks for it. Verified after
+  the fix that `GET /jobs` with no token is still 401 — the change must not
+  have opened anything.
+
+- **`onHighway` is stored correctly and read from the wrong place, so highway
+  breakdowns are triaged NORMAL.** The field exists TWICE: on the location
+  schema (`src/domain/location.ts`, a routing fact — which carriageway, what a
+  unit has to do to reach it) and on the safety context
+  (`src/domain/safety.ts`, a risk fact — traffic passing at speed).
+  `POST /jobs/intake` never connects them. Filing a real report through the
+  driver page with `location.onHighway: true` and no `safety` block returns
+  `safetyLevel: NORMAL` with an empty `safetyReasonCodes`, because
+  `safetyContextSchema` defaulted its own `onHighway` to false. The location
+  column on `jobs` says the vehicle is on a highway; the safety level says
+  there is nothing unusual about it.
+  **The consequence is the worst one available in this design.** Safety level
+  is not a score — invariant 4 puts it in a LEXICOGRAPHIC ORDERING ABOVE the
+  cost function, so it is the one input that cannot be traded against anything
+  else. `ON_HIGHWAY` is the rule that switches it on for the commonest
+  dangerous case. If it does not fire, the switch never flips, and from Phase 9
+  a highway breakdown will be ranked purely on cost against a car in a
+  supermarket car park. Nothing consumes safety level yet, so nothing has been
+  mis-dispatched — but every job filed through the API so far carries a wrong
+  level, and those rows are what the Phase 10 harness replays.
+  **Why three phases of checks missed it.** The simulator sets BOTH fields, in
+  `generateSafetyContext` and `generateLocation`, each deriving `onHighway`
+  from the same local `situation` value. So simulator-generated jobs are
+  correct — the seed-123 run reports HIGH_RISK 11 / ELEVATED 8 — and the bug is
+  invisible to every check that goes through the simulator. It only appears for
+  a client that fills in one field and not the other, and the driver page was
+  the first such client ever written.
+  **Status: worked around, not fixed.** The page now sends `onHighway` in both
+  blocks, which makes the page correct and leaves the API trap intact for the
+  next client. The real fix is for the intake route to derive the safety flag
+  from the location it was given, so the fact has one source; that is server
+  work outside the "pages only" scope this was built under, and it is still
+  open.
+  **This is the same failure a second time.** Phase 2b: `Driver.tenantId` held
+  the right tenant, `resolveTenantBinding` read `TenantMembership` instead, no
+  row joined the two, and every tenant-scoped query for a seeded driver
+  silently returned nothing. Identical shape — the data is stored correctly,
+  the consumer reads a different source for the same fact, and nothing
+  reconciles them. Both were found by a new client exercising a path the
+  existing callers happened to avoid, and both failed quietly rather than
+  loudly. The pattern to watch for is a single real-world fact with two homes
+  in the schema or the types; the fix in both cases is one source and a
+  derivation, not two fields kept in step by discipline. Worth a deliberate
+  sweep for a third instance rather than waiting for a fourth client to find
+  it.

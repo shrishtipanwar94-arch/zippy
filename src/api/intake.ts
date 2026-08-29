@@ -24,7 +24,8 @@ import { IntakeError, statusForIntakeError } from '../intake/errors.js';
 
 export const intakeRouter = Router();
 
-intakeRouter.use(authenticate);
+// Per route, never `intakeRouter.use(authenticate)` — see the note in jobs.ts:
+// a path-less router `use` also guards everything mounted after the router.
 
 const intakeSchema = z.object({
   // A DRIVER files for themselves and this is ignored. A DISPATCHER taking a
@@ -49,7 +50,7 @@ function sendIntakeError(error: unknown, res: import('express').Response): boole
   return true;
 }
 
-intakeRouter.post('/jobs/intake', requirePermission('create', 'job'), async (req, res) => {
+intakeRouter.post('/jobs/intake', authenticate, requirePermission('create', 'job'), async (req, res) => {
   const auth = req.auth;
   if (!auth) {
     res.status(401).json({ error: 'not_authenticated' });
@@ -109,7 +110,7 @@ async function visibleJobId(id: unknown): Promise<string | null> {
   return job?.id ?? null;
 }
 
-intakeRouter.get('/jobs/:id/next-question', requirePermission('read', 'job'), async (req, res) => {
+intakeRouter.get('/jobs/:id/next-question', authenticate, requirePermission('read', 'job'), async (req, res) => {
   const jobId = await visibleJobId(req.params.id);
   if (!jobId) {
     res.status(404).json({ error: 'not_found' });
@@ -123,7 +124,7 @@ intakeRouter.get('/jobs/:id/next-question', requirePermission('read', 'job'), as
   }
 });
 
-intakeRouter.post('/jobs/:id/answers', requirePermission('create', 'job'), async (req, res) => {
+intakeRouter.post('/jobs/:id/answers', authenticate, requirePermission('create', 'job'), async (req, res) => {
   const auth = req.auth;
   if (!auth) {
     res.status(401).json({ error: 'not_authenticated' });

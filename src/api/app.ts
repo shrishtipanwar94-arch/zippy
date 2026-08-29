@@ -1,4 +1,6 @@
 import express, { type Express } from 'express';
+import { fileURLToPath } from 'node:url';
+import { dirname, join } from 'node:path';
 import { pinoHttp } from 'pino-http';
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import { randomUUID } from 'node:crypto';
@@ -63,6 +65,24 @@ export function createApp(): Express {
   app.use(authRouter);
   app.use(jobsRouter);
   app.use(intakeRouter);
+
+  // THE FRONTEND, served as plain files. No bundler, no build step: the browser
+  // loads the ES modules in /public/js directly, and Bootstrap and morphdom
+  // come from a CDN. Mounted AFTER the API routers so a static file can never
+  // shadow an endpoint.
+  //
+  // `../../public` resolves the same from src/api (under tsx) and dist/api
+  // (built), because dist mirrors src one level down from the project root.
+  const publicDir = join(dirname(fileURLToPath(import.meta.url)), '../../public');
+  app.use(express.static(publicDir));
+
+  // Three extensionless URLs, because /driver reads better than /driver.html
+  // and these are the paths the Phase 4 check names.
+  for (const page of ['driver', 'technician', 'dispatcher']) {
+    app.get(`/${page}`, (_req, res) => {
+      res.sendFile(join(publicDir, `${page}.html`));
+    });
+  }
 
   // Last: turns any error thrown or forwarded by a route into clean JSON.
   app.use(errorHandler);

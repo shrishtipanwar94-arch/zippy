@@ -13,9 +13,13 @@ import { authenticate, requirePermission } from './middleware/authenticate.js';
 
 export const jobsRouter = Router();
 
-jobsRouter.use(authenticate);
+// `authenticate` is attached PER ROUTE, not with `jobsRouter.use(authenticate)`.
+// A router-level `use` with no path runs for every request that reaches the
+// router, not only the ones it handles — so it would 401 anything mounted after
+// it, static files included. Nothing noticed while the app was API-only and
+// every unmatched request 404'd anyway; the frontend made it visible.
 
-jobsRouter.get('/jobs', requirePermission('read', 'job'), async (_req, res) => {
+jobsRouter.get('/jobs', authenticate, requirePermission('read', 'job'), async (_req, res) => {
   const jobs = await prisma.job.findMany({
     take: 50,
     orderBy: { createdAt: 'desc' },
@@ -24,7 +28,7 @@ jobsRouter.get('/jobs', requirePermission('read', 'job'), async (_req, res) => {
   res.json({ jobs });
 });
 
-jobsRouter.get('/jobs/:id', requirePermission('read', 'job'), async (req, res) => {
+jobsRouter.get('/jobs/:id', authenticate, requirePermission('read', 'job'), async (req, res) => {
   const id = req.params.id;
   if (typeof id !== 'string' || id.length === 0) {
     res.status(400).json({ error: 'invalid_request' });
