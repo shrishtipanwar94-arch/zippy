@@ -23,6 +23,7 @@ import { seedTechnicians } from './seed/technicians.js';
 import { seedFleet } from './seed/fleet.js';
 import { seedWorkshops } from './seed/workshops.js';
 import { seedDrivers } from './seed/drivers.js';
+import { seedIntakeQuestions } from './seed/intakeQuestions.js';
 
 async function seed(): Promise<void> {
   await seedZones(prisma);
@@ -34,6 +35,7 @@ async function seed(): Promise<void> {
   await seedFleet(prisma); // needs zones + capabilities + parts
   await seedWorkshops(prisma); // needs zones
   await seedDrivers(prisma); // needs tenants
+  await seedIntakeQuestions(prisma); // projection of src/domain/questions.ts
 
   const [zones, units, technicians, workshops, evCertified] = await Promise.all([
     prisma.zone.count(),

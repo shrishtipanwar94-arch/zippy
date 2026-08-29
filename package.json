@@ -17,6 +17,7 @@
     "start:worker": "node dist/worker.js",
     "build": "tsc",
     "typecheck": "tsc --noEmit",
+    "sim": "tsx src/sim/cli.ts",
     "test": "vitest run",
     "test:watch": "vitest",
     "test:concurrency": "vitest run tests/concurrency --passWithNoTests",

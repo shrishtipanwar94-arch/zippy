@@ -7,6 +7,7 @@ import { logger } from '../infra/logger.js';
 import { healthRouter } from './health.js';
 import { authRouter } from './auth.js';
 import { jobsRouter } from './jobs.js';
+import { intakeRouter } from './intake.js';
 import { errorHandler } from './middleware/errors.js';
 
 /**
@@ -61,6 +62,7 @@ export function createApp(): Express {
   app.use(healthRouter);
   app.use(authRouter);
   app.use(jobsRouter);
+  app.use(intakeRouter);
 
   // Last: turns any error thrown or forwarded by a route into clean JSON.
   app.use(errorHandler);
