@@ -12,6 +12,7 @@
 // A mistake is corrected by writing a compensating event, never by an UPDATE.
 
 import type { Prisma } from '@prisma/client';
+import { recordForPublish } from '../realtime/outbox.js';
 
 export type JobEventInput = {
   jobId: string;
@@ -33,6 +34,8 @@ export async function appendJobEvent(
   });
   const sequence = (last?.sequence ?? 0) + 1;
 
+  const at = event.at ?? new Date();
+
   await tx.jobEvent.create({
     data: {
       jobId: event.jobId,
@@ -41,8 +44,18 @@ export async function appendJobEvent(
       payload: event.payload ?? {},
       actorRole: event.actorRole ?? null,
       actorId: event.actorId ?? null,
-      ...(event.at ? { at: event.at } : {}),
+      at,
     },
+  });
+
+  // Queued, not emitted. The transaction can still roll back and replay, and a
+  // browser cannot un-see an event — see src/realtime/outbox.ts.
+  recordForPublish({
+    jobId: event.jobId,
+    sequence,
+    eventType: event.eventType,
+    payload: event.payload ?? {},
+    at,
   });
 
   return sequence;

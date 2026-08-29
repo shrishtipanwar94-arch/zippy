@@ -14,6 +14,8 @@
 // the retry), so replaying it is safe.
 
 import type { Prisma, PrismaClient } from '@prisma/client';
+import { collectJobEvents } from '../realtime/outbox.js';
+import { publishJobEvents } from '../realtime/publish.js';
 
 // Contention on one job is rare — a job has one driver answering one question
 // at a time. Three attempts covers a double-tap; exhausting it means the
@@ -43,7 +45,13 @@ export async function runIntakeTransaction<T>(
 
   for (let attempt = 0; attempt < MAX_ATTEMPTS; attempt += 1) {
     try {
-      return await db.$transaction(work, { timeout: TRANSACTION_TIMEOUT_MS });
+      // Each attempt gets its own outbox, so a rolled-back attempt's events go
+      // with it and only the attempt that committed is broadcast.
+      const { result, events } = await collectJobEvents(() =>
+        db.$transaction(work, { timeout: TRANSACTION_TIMEOUT_MS }),
+      );
+      await publishJobEvents(events);
+      return result;
     } catch (error) {
       if (!isUniqueViolation(error)) throw error;
       lastError = error;
