@@ -21,3 +21,74 @@ Entry template:
 at the Phase 4 checkpoint; Phases 5-9 are now consolidated into INTERVIEW.md.
 `git log` and each entry's own commit remain the record of what was decided
 when. Phase 10 appends below.*
+
+## Phase 9 addendum — zone partitioning observed on real data / 2026-08-31
+
+Recorded after the Phase 9 checkpoint had already consolidated and cleared this
+file, so it sits here as raw material for the Phase 13 checkpoint rather than
+being back-edited into INTERVIEW.md. It confirms, on real data, the weakness
+INTERVIEW.md §15.4 already states from a constructed test.
+
+### What was observed
+
+Chasing a separate bug (the shift seed's 00:00-06:00 coverage gap, fixed in
+`prisma/seed/technicians.ts` and pinned by `tests/shifts.test.ts`), a full
+`/solve` run against `zippy_test` produced 1,317 feasible options and **zero
+assignments in all three plans**. The same snapshot solved without
+partitioning produced three.
+
+Measured, one snapshot, 439 pending jobs, 102 units:
+
+    technicians on shift at 03:20 local:  4  (tech-07, tech-14, tech-21, tech-28)
+    of those, crewing a unit:             3  (unit-07@zone-kor, unit-08@zone-ind,
+                                              unit-21@zone-whf)
+    pending jobs by zone:  as-zone 335, ir-zone 52, rt-zone 52
+
+    zonePartitionThreshold 1_000_000 → partitioned=false  feasible=1317  assigned=3
+    zonePartitionThreshold       400 → partitioned=true   feasible=1317  assigned=0
+
+Note the direction of the threshold, because it reads backwards at a glance:
+partitioning fires when `optionCount > threshold`, so the LOW threshold is the
+partitioned run and the high one is the whole-fleet matrix. 10,536 options were
+generated, so 400 partitions and 1,000,000 does not.
+
+### Why it happens, and why it is not a bug
+
+`partitionByZone` matches a job only against units whose `zoneId` equals the
+job's. Every pending job in that database sits in a test-fixture zone
+(`as-zone`, `ir-zone`, `rt-zone`) and every crewed unit sits in a seeded zone
+(`zone-kor`, `zone-ind`, `zone-whf`), so after partitioning no job shares a
+matrix with any unit that could serve it. Unpartitioned, the three live units
+are matched across zone boundaries and three jobs are served.
+
+This is exactly the approximation `src/engine/solve.ts` documents and
+`tests/solve.test.ts` asserts synthetically — a job near (here, across) a zone
+boundary loses a better cross-zone option — showing up on real data rather than
+in a constructed two-zone fixture. The behaviour is correct for the design.
+
+### What it does and does not say about the design
+
+It does NOT say partitioning is broken. It DOES say the approximation's cost is
+not a rounding error at the tail: in a fleet whose crewed units and whose
+pending jobs live in disjoint zones, partitioning takes assignments to zero
+while a whole-fleet matrix still finds work. Two conditions produced that here,
+both of which can occur in production:
+
+- **Thin coverage.** At 03:20 only 4 of 31 technicians were on shift and only 3
+  crewed a unit, so the fleet was small enough that losing any cross-zone
+  option lost most of the answer. Partitioning is defended as a scale measure,
+  but its damage is worst when the fleet is SMALL relative to the zone count —
+  the opposite of the case it exists for.
+- **Jobs and units in disjoint zones.** Here an artefact of fixture data, but
+  the production analogue is real: a zone whose units are all committed while
+  its neighbour has spare capacity.
+
+### Open question for Phase 10
+
+The evaluation harness measures how often this costs anything in a realistic
+scenario, which is the number that decides whether the threshold is right, or
+whether partitioning should be conditioned on fleet size rather than option
+count alone. Until then this is a known approximation with one real-data
+observation and no measured frequency — recorded here so the harness has a
+concrete case to reproduce, not treated as a defect to fix ahead of the
+measurement.

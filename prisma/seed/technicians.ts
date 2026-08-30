@@ -9,7 +9,7 @@
 // Everything else is spread unevenly but is not load-bearing for a scenario.
 
 import type { PrismaClient } from '@prisma/client';
-import { todayAt } from './client.js';
+import { dayAt } from './client.js';
 import { capabilityId } from './capabilities.js';
 import { DEV_PASSWORD_HASH } from './devPassword.js';
 import { zoneId } from './zones.js';
@@ -66,9 +66,39 @@ const SHIFT_HOURS: Record<ShiftBand, { from: number; to: number }> = {
   EVENING: { from: 14, to: 22 },
 };
 
-function shiftFor(i: number): { startsAt: Date; endsAt: Date } {
+// TWO CONSECUTIVE DAYS PER TECHNICIAN, and the gap that forced it.
+//
+// The bands above cover 06:00 through to 06:00 the following morning: morning,
+// day and evening tile 06:00-22:00, and the night band runs 22:00 to 06:00.
+// Nothing in that set starts before 06:00, so the 00:00-06:00 window of any
+// given day is covered ONLY by the previous day's night shift.
+//
+// While each technician had exactly one shift row, keyed `shift-<id>`, a
+// re-seed OVERWROTE that previous night with tonight's — so seeding at 03:00
+// deleted the only shift covering 03:00 and left the whole fleet off duty. It
+// is a self-inflicted outage that appears for six hours a day and vanishes for
+// the other eighteen, which is exactly the kind of thing that looks like a
+// solver bug: every option comes back NO_TECHNICIAN_ON_SHIFT while the
+// capabilities all match.
+//
+// Writing yesterday AND today per technician closes the seam. The union runs
+// from 06:00 yesterday to 06:00 tomorrow — a continuous window containing
+// every hour of today no matter what time the seed runs. Two rows per
+// technician is fine downstream: feasibility asks whether ANY of a
+// technician's shifts covers the job (`shifts.some(...)` in
+// hasShiftTimeToComplete), not whether their one shift does.
+const SHIFT_DAY_OFFSETS = [-1, 0] as const;
+
+function shiftFor(i: number, dayOffset: number): { startsAt: Date; endsAt: Date } {
   const hours = SHIFT_HOURS[shiftBand(i)];
-  return { startsAt: todayAt(hours.from), endsAt: todayAt(hours.to) };
+  return { startsAt: dayAt(dayOffset, hours.from), endsAt: dayAt(dayOffset, hours.to) };
+}
+
+// The row id for one technician's shift on one day. The zero-offset id is left
+// exactly as it was so an existing database updates its row in place rather
+// than accumulating an orphan next to a renamed one.
+function shiftId(technicianId: string, dayOffset: number): string {
+  return dayOffset === 0 ? `shift-${technicianId}` : `shift-${technicianId}-d${dayOffset}`;
 }
 
 export async function seedTechnicians(prisma: PrismaClient): Promise<void> {
@@ -119,18 +149,21 @@ export async function seedTechnicians(prisma: PrismaClient): Promise<void> {
       });
     }
 
-    const shift = shiftFor(i);
-    await prisma.technicianShift.upsert({
-      where: { id: `shift-${technicianId}` },
-      update: { startsAt: shift.startsAt, endsAt: shift.endsAt, zoneId: home },
-      create: {
-        id: `shift-${technicianId}`,
-        technicianId,
-        zoneId: home,
-        startsAt: shift.startsAt,
-        endsAt: shift.endsAt,
-      },
-    });
+    for (const dayOffset of SHIFT_DAY_OFFSETS) {
+      const shift = shiftFor(i, dayOffset);
+      const id = shiftId(technicianId, dayOffset);
+      await prisma.technicianShift.upsert({
+        where: { id },
+        update: { startsAt: shift.startsAt, endsAt: shift.endsAt, zoneId: home },
+        create: {
+          id,
+          technicianId,
+          zoneId: home,
+          startsAt: shift.startsAt,
+          endsAt: shift.endsAt,
+        },
+      });
+    }
   }
 }
 
@@ -143,6 +176,22 @@ export type TechnicianPlan = {
   homeZoneId: string;
   band: ShiftBand;
 };
+
+// The shift windows the seed would write, as plain data. Exposed so the
+// 24-hour coverage property can be tested without a database — see
+// tests/shifts.test.ts for why that matters more than seeding and looking.
+export type ShiftWindow = { technicianId: string; startsAt: Date; endsAt: Date };
+
+export function shiftPlan(): ShiftWindow[] {
+  const windows: ShiftWindow[] = [];
+  for (let i = 0; i < TECHNICIAN_COUNT; i++) {
+    const technicianId = `tech-${String(i + 1).padStart(2, '0')}`;
+    for (const dayOffset of SHIFT_DAY_OFFSETS) {
+      windows.push({ technicianId, ...shiftFor(i, dayOffset) });
+    }
+  }
+  return windows;
+}
 
 export function technicianPlan(): TechnicianPlan[] {
   const plan: TechnicianPlan[] = [];
