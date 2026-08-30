@@ -438,7 +438,8 @@ Test infrastructure:
 - `vitest.concurrency.config.ts` — its own config: long timeouts,
   `fileParallelism: false`. `vitest.config.ts` now EXCLUDES
   `tests/concurrency/**` so the default suite stays fast.
-- `test:concurrency` is now `vitest run --config vitest.concurrency.config.ts`.
+- `test:concurrency` is now `vitest run --config vitest.concurrency.config.ts`,
+  and `test:all` chains it after `test` so "all tests pass" is one command.
 
 Suite totals: 251 across 18 files (default), 9 across 2 files (concurrency,
 17s wall clock with a warm image). `tsc --noEmit`, `eslint src evaluation`,
@@ -595,8 +596,13 @@ no mocks.
   named as guesses in their own comments. Nothing has observed a real
   technician's response latency, though `response_latency_ms` is now recorded
   on every answered offer so Phase 13 can.
-- **`npm test` no longer means "all tests".** Two commands are needed, and CI
-  has to be told about both.
+- **`npm test` no longer means "all tests"** — it excludes the concurrency
+  suite so it can stay fast. `test:all` (`npm run test && npm run
+  test:concurrency`) exists so the full run is still one command, but the
+  weakness is not fully closed: the short name is still the partial one, so a
+  contributor who types the obvious thing gets the partial answer, and CI has
+  to be pointed at `test:all` deliberately. Renaming the scripts so the safe
+  option is the default would close it properly and is not done.
 
 ### Concepts now genuinely in use
 
