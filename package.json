@@ -24,6 +24,7 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "test:concurrency": "vitest run --config vitest.concurrency.config.ts",
+    "test:all": "npm run test && npm run test:concurrency",
     "lint": "eslint src evaluation",
     "db:migrate": "prisma migrate dev",
     "db:deploy": "prisma migrate deploy",
