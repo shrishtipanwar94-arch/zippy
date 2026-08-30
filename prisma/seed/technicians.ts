@@ -133,7 +133,9 @@ export async function seedTechnicians(prisma: PrismaClient): Promise<void> {
       },
     });
 
-    const membershipTenantId = FLEET_TENANT_IDS[i % FLEET_TENANT_IDS.length];
+    // Non-null because the modulo can only land inside the array; asserted
+    // rather than assumed so `noUncheckedIndexedAccess` stays on.
+    const membershipTenantId = FLEET_TENANT_IDS[i % FLEET_TENANT_IDS.length]!;
     await prisma.tenantMembership.upsert({
       where: { tenantId_userId: { tenantId: membershipTenantId, userId } },
       update: { role: 'TECHNICIAN' },

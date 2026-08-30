@@ -1,0 +1,23 @@
+{
+  // TYPECHECK EVERYTHING, not just what ships.
+  //
+  // tsconfig.json exists to BUILD: it has rootDir "src" and outDir "dist", so
+  // its `include` is src and nothing else. That is correct for a build and
+  // was quietly wrong for a check — `npm run typecheck` inherited the same
+  // narrow include, so tests/ and evaluation/ were never type-checked at all.
+  //
+  // It cost something real. The Phase 10 harness was written against fault
+  // codes that do not exist (`WHEEL_DAMAGE`, `ELECTRICAL_FAULT`), and a
+  // `Partial<Record<FaultCode, number>>` would have rejected every one of them
+  // on the first compile. Instead they typed fine, normalised to zero
+  // probability at runtime, and produced a table of plausible-looking numbers
+  // measured on jobs whose faults were all silently blank.
+  //
+  // This file is the checking half: same strictness, no emit, everything in.
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "noEmit": true,
+    "rootDir": "."
+  },
+  "include": ["src/**/*", "tests/**/*", "evaluation/**/*", "prisma/**/*"]
+}

@@ -76,6 +76,44 @@ function haversineFallback(from: LatLng, to: LatLng): TravelTimeEstimate {
 // address nothing listens on without touching global state to do it.
 type BaseUrl = string;
 
+// WHERE TRAVEL TIME COMES FROM, as a type the engine can be handed.
+//
+// `travelTimeMatrix` is the production answer and the default everywhere. This
+// type exists so the Phase 10 evaluation harness can supply a different one —
+// see `haversineTravelTimes` directly below for why it must be able to.
+export type TravelTimeSource = (
+  origins: LatLng[],
+  destination: LatLng,
+) => Promise<TravelTimeEstimate[]>;
+
+// STRAIGHT-LINE TRAVEL TIME, WITH NO NETWORK AT ALL.
+//
+// Invariant 10 says anything a decision depends on must be local and
+// deterministic "or the evaluation harness stops being reproducible". A
+// self-hosted OSRM satisfies local, and satisfies deterministic while it is
+// running — but a harness that replays a scenario thousands of times cannot
+// afford one HTTP round trip per job, and a run that silently falls back
+// mid-way because the container hiccuped would produce two different answers
+// from one seed. That is the exact failure the invariant is written against.
+//
+// So the harness passes this instead: the SAME `haversineFallback` the
+// production path already degrades to, called directly rather than after a
+// failed fetch. Not a second estimator written for the harness — one
+// estimator, reached by two routes.
+//
+// The consequence is stated rather than hidden: every option a harness run
+// scores is flagged `degraded: true`, and its travel times are straight-line
+// estimates inflated by a road factor, not real routes. That makes the
+// harness's ABSOLUTE minutes optimistic. It does not bias the COMPARISON
+// between policies, which is what the harness measures, because every policy
+// sees identical numbers.
+export function haversineTravelTimes(
+  origins: LatLng[],
+  destination: LatLng,
+): Promise<TravelTimeEstimate[]> {
+  return Promise.resolve(origins.map((origin) => haversineFallback(origin, destination)));
+}
+
 // A hung OSRM (container starting, or genuinely stuck) must not hang a
 // dispatch decision — OSRM_TIMEOUT_MS bounds how long this ever waits before
 // treating it the same as unreachable.

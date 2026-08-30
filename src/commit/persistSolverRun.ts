@@ -127,9 +127,14 @@ async function writeFeasibleOptions(
       jobId,
       unitId: assignment.unitId,
       technicianId: assignment.technicianId,
-      estimatedTravelMinutes: assignment.cost.expectedTimeToResolution.value,
-      coveredFaultProbability: 1 - assignment.cost.capabilityShortfallRisk.value,
-      missingCapabilities: [],
+      // The option's own measured figures, not values reverse-engineered from
+      // the cost breakdown. Before the plan carried its option these columns
+      // held `expectedTimeToResolution` under a name that says travel, which
+      // is a different quantity — the audit row said one thing and meant
+      // another.
+      estimatedTravelMinutes: assignment.option.estimatedTravelMinutes,
+      coveredFaultProbability: assignment.option.coveredFaultProbability,
+      missingCapabilities: assignment.option.missingCapabilities,
       feasible: true,
       costBreakdown: assignment.cost satisfies Prisma.InputJsonValue,
       totalCost: assignment.cost.total,

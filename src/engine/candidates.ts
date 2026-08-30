@@ -25,7 +25,7 @@ import { FAULT_CODES, capabilitiesForFault } from '../domain/faults.js';
 import type { FaultCode, FaultDistribution } from '../domain/faults.js';
 import { requiredCapabilities } from '../domain/capabilitySet.js';
 import { travelTimeMatrix } from '../infra/routing.js';
-import type { LatLng } from '../infra/routing.js';
+import type { LatLng, TravelTimeSource } from '../infra/routing.js';
 
 // ---------------------------------------------------------------------------
 // Input: the job needing dispatch, and a snapshot of the fleet to dispatch
@@ -237,9 +237,16 @@ export function unitLocation(unit: UnitSnapshot, zonesById: Map<string, ZoneSnap
 // The whole function. Async only because real travel time means one HTTP
 // round trip to the local OSRM container (routing.ts) — everything else here
 // is synchronous arithmetic over the snapshot already in hand.
+//
+// `travelTimes` defaults to the production OSRM matrix and is a parameter for
+// one reason: the Phase 10 evaluation harness replays a scenario many times
+// and needs travel time to come from somewhere local, instant and identical
+// on every run (invariant 10). It passes `haversineTravelTimes`. Nothing else
+// overrides it, and the default means no other call site had to change.
 export async function generateCandidates(
   job: JobForDispatch,
   snapshot: DispatchSnapshot,
+  travelTimes: TravelTimeSource = travelTimeMatrix,
 ): Promise<DispatchOption[]> {
   const pairs = crewedPairs(snapshot);
   if (pairs.length === 0) return [];
@@ -251,21 +258,21 @@ export async function generateCandidates(
   // ONE round trip for every pair's travel time, not one per pair — see
   // travelTimeMatrix's own comment for why that is the point of using OSRM's
   // /table endpoint instead of calling /route in a loop.
-  const travelTimes = await travelTimeMatrix(origins, destination);
+  const travel = await travelTimes(origins, destination);
 
   const required = requiredCapabilities(job.faultDistribution);
 
   return pairs.map((pair, index) => {
     const capabilities = intersectedCapabilities(pair);
-    const travel = travelTimes[index]!;
+    const estimate = travel[index]!;
     const resolvable = resolvableFaults(capabilities);
 
     return {
       unitId: pair.unit.id,
       technicianId: pair.technician.id,
-      estimatedTravelMinutes: travel.minutes,
-      travelEstimateDegraded: travel.degraded,
-      estimatedTravelKm: travel.kilometres,
+      estimatedTravelMinutes: estimate.minutes,
+      travelEstimateDegraded: estimate.degraded,
+      estimatedTravelKm: estimate.kilometres,
       resolvableFaults: resolvable,
       coveredFaultProbability: coveredFaultProbability(job.faultDistribution, resolvable),
       missingCapabilities: required.filter((code) => !capabilities.has(code)),

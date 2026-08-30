@@ -92,3 +92,237 @@ count alone. Until then this is a known approximation with one real-data
 observation and no measured frequency — recorded here so the harness has a
 concrete case to reproduce, not treated as a defect to fix ahead of the
 measurement.
+
+## Phase 10 — Evaluation harness / 2026-08-31 / Commit: "phase 10: evaluation harness"
+
+### Built
+
+`/evaluation`, importing the production engine throughout — no second solver:
+- `scenarios/fleet.ts` — `buildSnapshot(shape, at)`, `FULL_FLEET`,
+  `zoneSnapshots()`, `FleetShape`. Builds the evaluated fleet from the seed's
+  own pure plan functions (`technicianPlan`, `shiftPlan`, `unitPlanEntries`,
+  `planCrews`, `ZONES`), so the fleet under test IS the seeded fleet.
+  `rebaseShift` moves seeded shift windows onto the scenario's day.
+- `scenarios/index.ts` — the five scenarios (`normal-day`, `monsoon-surge`,
+  `capability-scarcity`, `ambiguous-diagnosis`, `technician-dropout`),
+  `buildScenario(name, seed, overrides)`, `SCENARIO_START`, Poisson arrivals,
+  and the hidden `trueFault` drawn from each job's own distribution.
+- `policies/index.ts` — `Policy`, `PolicyInput`, `PolicyDecision`, the four
+  named policies and `policyByName`.
+- `policies/greedy.ts` — `greedyPolicy(rank)`, the one loop behind fifo,
+  nearest-unit and skill-aware.
+- `policies/global.ts` — calls `solve()` and reads the BALANCED plan.
+- `runner.ts` — `runScenario(scenario, policy, options?)`, the discrete-event
+  loop; `RunResult`, `JobRecord`, `RunOptions`.
+- `metrics.ts` — `computeMetrics`, `gini`; the eight named metrics plus
+  `resolvedCount` and `strandedCount`.
+- `report.ts` — `metricsTable`, `verdicts`, `timingSection`, `buildReport`.
+- `cli.ts` — argument parsing, the sweep, stdout and `EVALUATION.md`.
+
+Scripts: `eval`, `eval:sweep`, `eval:scenario`. Output: `EVALUATION.md`.
+
+Engine changes, both small and both forced by the harness:
+- `src/infra/routing.ts` — `TravelTimeSource` type and `haversineTravelTimes`,
+  the existing `haversineFallback` exposed as a callable source.
+- `src/engine/candidates.ts` — `generateCandidates` takes an optional
+  `travelTimes`, defaulting to `travelTimeMatrix`.
+- `src/engine/solve.ts` — `SolveInput.travelTimes` threaded through;
+  `PlanAssignment` now carries the `option` it was chosen from.
+- `src/commit/persistSolverRun.ts` — writes the option's real
+  `estimatedTravelMinutes` / `coveredFaultProbability` / `missingCapabilities`
+  instead of values reverse-engineered from the cost breakdown.
+- `tsconfig.check.json` — a checking config covering src, tests, evaluation
+  and prisma. `npm run typecheck` now uses it; `npm run build` still uses the
+  narrow `tsconfig.json`. `npm run lint` now covers `evaluation` too.
+
+Tests: `tests/evaluation.test.ts` (12). Suite total 251 across 18 files.
+`tsc --noEmit`, `eslint src evaluation`, `npm run build` all clean. Two runs of
+`--scenario monsoon-surge --seed 48291` are byte-identical on stdout.
+
+### Decisions
+
+- **Decision:** the harness passes `haversineTravelTimes` instead of calling
+  OSRM.
+  **Why:** invariant 10 says a decision's inputs must be local and
+  deterministic "or the evaluation harness stops being reproducible". A
+  scenario replayed 120 times cannot afford an HTTP round trip per job, and a
+  run that fell back mid-way because the container hiccuped would produce two
+  different answers from one seed — the exact failure the invariant names.
+  **Alternative:** run against the real OSRM container.
+  **Why not:** slow, and reproducibility becomes a property of infrastructure
+  uptime rather than of the code.
+  **Tradeoff:** absolute minutes are optimistic (straight line × road factor)
+  and every option is flagged `degraded`. Stated in EVALUATION.md. It does not
+  bias the comparison, because all four policies see identical numbers.
+
+- **Decision:** all four policies run the production candidate generator and
+  the production feasibility filter; only the CHOICE among feasible options
+  varies.
+  **Why:** a nearest-unit baseline that ignored capability constraints would
+  lose for a reason unrelated to the objective — it would be losing because it
+  sent a bike to a tow. Holding hard constraints identical is what makes the
+  comparison about the thing being compared.
+  **Alternative:** a simpler nearest baseline with no feasibility filter.
+  **Why not:** it would be a strawman, and beating a strawman is not evidence.
+  **Tradeoff:** the baselines are strong — skill-aware in particular optimises
+  first-visit resolution directly — so global's margin is small or negative in
+  several scenarios. That is the honest result.
+
+- **Decision:** the global policy always reads the BALANCED plan.
+  **Why:** `solve()` returns three plans for a dispatcher to choose between,
+  and a harness has no dispatcher. Fixing the vector up front means the
+  scoreboard is not chosen to suit the player.
+  **Alternative:** report whichever of the three does best per scenario.
+  **Why not:** that is picking the weight vector after seeing the results,
+  which is the tuning the phase forbids.
+  **Tradeoff:** FASTEST_RESOLUTION would very likely score better on the
+  headline metric, so the reported figures understate what the solver can do.
+
+- **Decision:** `solverWallClockP95` goes to stderr and into EVALUATION.md,
+  not to stdout.
+  **Why:** the phase requires byte-identical stdout for a fixed seed, and a
+  millisecond measurement cannot be byte-identical. Decisions and simulated
+  durations are reproducible; wall clock is not.
+  **Alternative:** print it in the main table and accept that the determinism
+  check fails, or quantise it and hope.
+  **Why not:** the first gives up the property that makes the harness a
+  measurement; the second is a rounding that still drifts.
+  **Tradeoff:** the metric is not in the stdout table. It is measured, printed
+  and written to the document — labelled as the one non-reproducible number.
+
+- **Decision:** report `strandedCount` (jobs nobody was ever sent to)
+  alongside every mean.
+  **Why:** every mean is over jobs that FINISHED. A policy that strands a
+  third of the board and resolves the easy two-thirds quickly posts a
+  beautiful mean. The stranded count is the only thing between that number and
+  a false claim.
+  **Alternative:** report the means alone.
+  **Why not:** it would make the worst-performing policy look best, which is
+  precisely the flattering-by-filtering the phase forbids.
+  **Tradeoff:** a wider table.
+
+- **Decision:** `verdicts()` ranks on resolved count first, then on mean
+  resolution — lexicographic, not a blend.
+  **Why:** a faster average over a smaller set is not a better outcome, and
+  the two quantities are not commensurable.
+  **Alternative:** rank on mean resolution alone.
+  **Why not:** it rewards stranding.
+  **Tradeoff:** a policy that resolves one more job "wins" even if its mean is
+  materially worse. The table prints both, so the reader can disagree.
+
+### Concurrency
+
+None. The harness is single-threaded, touches no database and no queue, and
+every random draw happens when the scenario is built rather than while it
+runs. That is a requirement rather than an accident: a concurrent harness
+would not be reproducible, and reproducibility is the only thing that makes
+its numbers admissible.
+
+The simulated world does contain a race in shape — a unit finishing at the
+same minute a job arrives — but the event loop orders those deterministically
+(jobs are considered at each event minute, decisions applied in the order the
+policy returned them), so it is not a race in the code.
+
+### Weaknesses introduced
+
+- **The diagnosis is perfectly calibrated.** `trueFault` is drawn FROM the
+  distribution the solver sees, so a job believed 70% flat battery genuinely
+  is one 70% of the time. Real intake is not calibrated, and a mis-calibrated
+  belief would hurt skill-aware and global — the two policies that trust the
+  distribution — more than nearest-unit. Every result here is therefore an
+  upper bound on how well belief-driven policies do.
+- **Travel time is straight-line, not routed.** Absolute minutes are
+  optimistic; the comparison is unaffected.
+- **Durations are the hand-set figures from `src/engine/durations.ts`**, still
+  unfitted to any real job data. Every minute reported inherits that.
+- **The sweep varies three knobs at six points, not a grid.** It shows the
+  result does not hold everywhere, which is the honest finding, but it does
+  not isolate WHICH knob is responsible at any given point.
+- **`solverWallClockP95` is a p95 over as few as a dozen decisions** in the
+  smaller scenarios. It is a real measurement of a small sample, not a
+  latency figure to quote.
+- **Unit utilisation is low (3-16%) in every run**, because a 24-unit fleet is
+  oversized for 60 jobs and because stranded jobs consume no capacity. It is
+  not a meaningful capacity signal at these volumes.
+- **The harness measures BALANCED only.** Nothing has compared the three
+  weight vectors against each other, so "BALANCED" remains a name rather than
+  a measured balance point — the Phase 8 weakness is unchanged.
+
+### Concepts now genuinely in use
+
+Discrete-event simulation with an event queue rather than a time step, and why
+jumping to the next event is both faster and no less true; replaying one
+seeded world against several policies so the only variable is the policy;
+hidden ground truth (`trueFault`) versus believed distribution as the
+mechanism that makes first-visit failure and re-dispatch emerge rather than be
+asserted; the Gini coefficient as a distributional measure, and the specific
+way excluding zero-earners falsifies it; percentile reporting over a small
+sample and the honesty that requires; separating reproducible output from
+inherently non-reproducible measurement; dependency injection of an
+infrastructure boundary (travel time) as the thing that makes a pure engine
+replayable; differential measurement — running one scenario twice with a
+single knob changed — as the way to price an approximation.
+
+### Interview angle
+
+- *Your evaluation says the global policy loses two of five scenarios. Why
+  ship it?* Because the harness also says WHY, and the reason is not the
+  objective function. Running monsoon-surge twice with nothing changed but the
+  zone-partition threshold: partitioned resolves 58/180, the whole-fleet
+  matrix resolves 69/180. Partitioning — an O(n³) mitigation added in Phase 9
+  with an explicitly unmeasured price — is what costs global its throughput.
+  The objective is fine; the scale approximation on top of it is what needs
+  work, and now there is a number attached to that.
+- *How do you know the harness measures your real dispatcher and not a
+  simplified copy of it?* `evaluation/policies/global.ts` is thirty lines and
+  calls `solve()`. The greedy baselines call `generateCandidates` and
+  `checkFeasibility` — the same functions the HTTP route uses. A test asserts
+  those imports exist, and there is no cost function, no feasibility filter and
+  no assignment algorithm anywhere under `/evaluation`.
+
+### What broke
+
+- **`npm run typecheck` had never checked the harness, or the tests.**
+  `tsconfig.json` carries `rootDir: "src"` and `include: ["src/**/*"]` because
+  it is the BUILD config, and `typecheck` was `tsc --noEmit` against it — so
+  everything outside `src/` was invisible to the compiler. The harness was
+  written against fault codes that do not exist (`WHEEL_DAMAGE`,
+  `ELECTRICAL_FAULT`, `BATTERY_FAILURE`, `KEY_LOCKED_IN`, `ACCIDENT_DAMAGE`,
+  `FUEL_CONTAMINATION`, `KEY_LOST`) and compiled clean. At runtime
+  `distributionOf` normalised every unknown key to zero, so those jobs carried
+  a distribution that was all zeros or a single fault, and a complete table of
+  plausible-looking numbers was printed from them — 100% first-visit
+  resolution and 0% second dispatch across every policy and scenario, which is
+  what made it obvious something was wrong. `Partial<Record<FaultCode, number>>`
+  rejects all seven the moment the file is actually checked. Fixed by adding
+  `tsconfig.check.json` (src + tests + evaluation + prisma, noEmit) and
+  pointing `typecheck` at it, then correcting the codes. The same config
+  immediately surfaced two pre-existing `noUncheckedIndexedAccess` errors in
+  `prisma/seed/technicians.ts` that had never been compiled either.
+  The general lesson: a build config and a check config want different
+  `include`s, and sharing one silently narrows the check to what ships.
+- **The first table was measured on jobs with no fault at all.** Worth stating
+  separately from the type error that caused it, because the failure mode is
+  the dangerous one: nothing crashed, nothing warned, and the output looked
+  entirely reasonable. 100% first-visit resolution should have been read as
+  "the mechanism that produces second dispatches never fires" rather than as a
+  good result, and it was not, until the numbers were compared against what
+  the scenarios were supposed to contain.
+- **`SLA_UNREACHABLE` permanently strands a late job, and the harness found
+  it.** Once a job passes its promised window every option for it is rejected,
+  so it can never be dispatched — the queue drops it rather than serving it
+  late. Measured directly: a queued ambiguous-diagnosis job has 2 feasible
+  options at +0 min and 0 at +30 min, with `SLA_UNREACHABLE` the only new
+  code. That is where almost every `stranded` job in the table comes from
+  (105-118 of 180 at monsoon-surge). NOT fixed in this phase: it is a Phase 7
+  design decision, changing a hard filter is out of scope for a phase whose
+  job is to measure, and it hits all four policies identically so the
+  comparison stands. Recorded as the harness's first real finding about
+  production code.
+- **First-visit resolution is 93-100% for every policy**, which means the
+  escalation term in the cost function is nearly inert. The capability filter
+  already requires a crew to cover the contending faults, so a crew that
+  passes feasibility can almost always finish the job. The second-dispatch
+  risk the objective prices is largely a risk the filter upstream has already
+  removed — an overlap between Phase 7 and Phase 8 that neither phase could
+  see on its own.
