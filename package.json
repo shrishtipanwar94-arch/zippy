@@ -23,7 +23,7 @@
     "eval:scenario": "tsx evaluation/cli.ts --scenario",
     "test": "vitest run",
     "test:watch": "vitest",
-    "test:concurrency": "vitest run tests/concurrency --passWithNoTests",
+    "test:concurrency": "vitest run --config vitest.concurrency.config.ts",
     "lint": "eslint src evaluation",
     "db:migrate": "prisma migrate dev",
     "db:deploy": "prisma migrate deploy",

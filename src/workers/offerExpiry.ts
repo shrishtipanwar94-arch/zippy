@@ -1,7 +1,13 @@
-// THE OFFER-EXPIRY QUEUE — PLUMBING ONLY, same status as solver.ts and
-// notification.ts. `TechnicianOffer` (Phase 12's PROPOSED -> ACCEPTED |
-// DECLINED | TIMEOUT) does not exist yet; nothing creates an offer, so nothing
-// calls `scheduleOfferExpiry`.
+// THE OFFER-EXPIRY QUEUE — real work from Phase 11. `proposeOffer`
+// (src/commit/offers.ts) schedules one delayed job per offer; this processor
+// is the thing that actually enforces the deadline.
+//
+// IT RACES THE TECHNICIAN, ON PURPOSE. An accept arriving as this fires is
+// the interesting case, and it is not resolved here — it is resolved by the
+// conditional UPDATE inside `timeoutOffer`, which moves the row only while it
+// is still PROPOSED. Whichever writer gets there first wins; the loser is
+// told what happened instead of erroring. That is why this processor can be
+// as simple as it is.
 //
 // NOT DEBOUNCED, unlike solver and notification — and that is a real
 // difference, not an inconsistency. Debouncing collapses many triggers for the
@@ -15,9 +21,17 @@
 import type { Job } from 'bullmq';
 import { queues } from '../queues/queues.js';
 import { runIdempotently } from '../queues/idempotent.js';
+import { prismaBase } from '../infra/prismaBase.js';
+import { timeoutOffer } from '../commit/offers.js';
 
+// A HYPHEN, NOT A COLON. BullMQ rejects a custom job id containing `:` — it
+// uses colons as separators in its own Redis key layout, so one inside an id
+// would split a key. This function was written in Phase 5 with a colon and
+// never called, so the validation error sat undiscovered until Phase 11 made
+// real offers schedule real expiries. `deduplication.id` (queues/debounce.ts)
+// has no such restriction, which is why the solver's `zone:...` key is fine.
 function offerExpiryJobId(offerId: string): string {
-  return `offer-expiry:${offerId}`;
+  return `offer-expiry-${offerId}`;
 }
 
 export async function scheduleOfferExpiry(offerId: string, expiresAt: Date): Promise<void> {
@@ -29,9 +43,16 @@ export async function scheduleOfferExpiry(offerId: string, expiresAt: Date): Pro
 
 export async function processOfferExpiry(job: Job<{ offerId: string }>): Promise<void> {
   await runIdempotently('offer-expiry', job.id!, async () => {
-    // No TechnicianOffer to time out yet — that is Phase 12. This proves the
-    // delayed-job mechanism and per-offer dedup work before anything real
-    // depends on either.
-    await job.log(`would expire offer ${job.data.offerId} — no offers exist yet (Phase 12)`);
+    // NOT run on the transaction `runIdempotently` provides. That transaction
+    // exists to make the log row and the effect commit together, and it works
+    // when the effect is a plain write on the same connection. `timeoutOffer`
+    // opens its own transaction because it is also called directly, outside a
+    // queue, and nesting an interactive transaction inside another one on the
+    // same client is not something Prisma supports. The redundancy is
+    // acceptable here precisely because the effect is already idempotent by
+    // construction: a second delivery finds the offer no longer PROPOSED and
+    // changes nothing.
+    const result = await timeoutOffer(prismaBase, { offerId: job.data.offerId });
+    await job.log(`offer ${job.data.offerId}: ${result.outcome} (${result.status})`);
   });
 }

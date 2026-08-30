@@ -3,6 +3,11 @@ import { defineConfig } from 'vitest/config';
 export default defineConfig({
   test: {
     include: ['tests/**/*.test.ts'],
+    // The concurrency suite starts a real Postgres container and takes tens of
+    // seconds. It is run on its own (`npm run test:concurrency`, and its own
+    // config) rather than on every save — excluded here so the default suite
+    // stays fast enough to actually run constantly.
+    exclude: ['**/node_modules/**', 'tests/concurrency/**'],
     environment: 'node',
     // Config validation reads process.env at import time and would exit the
     // process if a variable were missing. These localhost values let the suite

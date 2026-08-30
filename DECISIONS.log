@@ -408,3 +408,284 @@ AUTO relaxation that dispatches immediately and raises a RECOMMEND for the
 commercial follow-up, is a genuine design question. The measurement above says
 only that the current behaviour — silence, and permanent infeasibility — is
 the one option that is definitely wrong.
+
+## Phase 11 — Holds and real concurrency / 2026-08-31 / Commit: "phase 11: holds and concurrency"
+
+### Built
+
+`src/commit/holds.ts` — `createHold`, `releaseHold`, `consumeHold`,
+`DEFAULT_HOLD_TTL_MS` (2 min). Types `HoldOutcome`, `ReleaseOutcome`,
+`ConsumeOutcome`. Three hand-written conditional UPDATEs, values bound by
+Prisma's tagged template — no interpolation, no `$executeRawUnsafe` anywhere
+in the repo.
+
+`src/commit/offers.ts` — `proposeOffer`, `respondToOffer`, `timeoutOffer`,
+`DEFAULT_OFFER_TTL_MS` (45s). One private `transitionOffer` behind all three,
+because accept, decline and timeout differ only in the status they move to.
+
+`src/workers/offerExpiry.ts` — now real work: `processOfferExpiry` calls
+`timeoutOffer`. `proposeOffer` schedules its own expiry after the transaction
+commits, and takes an injectable `scheduleExpiry` so a Postgres-only test does
+not need a broker.
+
+Test infrastructure:
+- `tests/concurrency/harness.ts` — `startPostgres()` (testcontainers, real
+  `prisma migrate deploy`), `seedFixture()`.
+- `tests/concurrency/holds.test.ts` — the five named races plus the stale-read
+  test (7 tests).
+- `tests/concurrency/mutation.test.ts` — the version check deleted on purpose
+  (2 tests), skipped when `CI` is set.
+- `vitest.concurrency.config.ts` — its own config: long timeouts,
+  `fileParallelism: false`. `vitest.config.ts` now EXCLUDES
+  `tests/concurrency/**` so the default suite stays fast.
+- `test:concurrency` is now `vitest run --config vitest.concurrency.config.ts`.
+
+Suite totals: 251 across 18 files (default), 9 across 2 files (concurrency,
+17s wall clock with a warm image). `tsc --noEmit`, `eslint src evaluation`,
+`npm run build` all clean.
+
+### Decisions
+
+- **Decision:** the conditional UPDATE is hand-written SQL, not `updateMany`.
+  **Why:** the WHERE clause IS the concurrency argument. Someone asking "where
+  is the race handled?" should read one statement, not reconstruct it from an
+  ORM call and its generated SQL.
+  **Alternative:** `prisma.unit.updateMany({ where: { id, status, version } })`,
+  which compiles to the same thing and also reports a count.
+  **Why not:** it is equally correct and less legible at the one point in the
+  codebase where legibility is the whole product.
+  **Tradeoff:** raw SQL is not type-checked against the schema, so a renamed
+  column becomes a runtime error rather than a compile error. Accepted for
+  three statements; it would not be accepted for thirty.
+
+- **Decision:** `releaseHold` frees the unit only inside the branch that
+  actually moved the hold out of ACTIVE, and only `WHERE status = 'HELD'`.
+  **Why:** invariant 6 — every compensation is idempotent. Three different
+  things release a hold (dispatcher, cleanup sweep, Phase 12 compensation) and
+  they can overlap. A second release must not free a unit that has since been
+  legitimately dispatched to someone else.
+  **Alternative:** set the unit AVAILABLE unconditionally on every release
+  call.
+  **Why not:** that is a double-free. By the time the second call arrives the
+  unit may be ON_JOB, and a blind write would hand out a van that is already
+  driving somewhere.
+  **Tradeoff:** "released" and "the unit is free" are two facts that a caller
+  cannot infer from one another; the second release returns
+  `ALREADY_RESOLVED` and says nothing about the unit.
+
+- **Decision:** `consumeHold` folds the expiry check into the same WHERE
+  clause as the status check.
+  **Why:** checking `expiresAt > now` separately and then updating reopens
+  exactly the window the conditional update exists to close — the hold can
+  expire between the two statements.
+  **Alternative:** read the hold, check expiry in TypeScript, then update.
+  **Why not:** a check-then-act with a real gap in it.
+  **Tradeoff:** the failure reason has to be reconstructed on the losing path
+  (an ACTIVE row that failed the update failed on expiry), which is a small
+  amount of re-reading to produce a good error.
+
+- **Decision:** `proposeOffer` schedules the expiry job AFTER its transaction
+  commits, and the scheduler is an injectable parameter.
+  **Why:** scheduling inside the transaction would queue an expiry for an
+  offer a rollback then erased — the same publish-after-commit rule the
+  realtime outbox exists for, applied to a queue. Injectable because the
+  concurrency suite is proving a Postgres race and should not need a Redis to
+  do it.
+  **Alternative:** schedule inside the transaction; mock BullMQ in the test.
+  **Why not:** the first writes a phantom job; the second puts a mock in the
+  one suite whose entire premise is that nothing is mocked.
+  **Tradeoff:** a crash between commit and schedule leaves an offer with no
+  expiry — it would sit PROPOSED forever. Not handled this phase; the cleanup
+  sweep is the obvious home for it and does not do it yet. Recorded below.
+
+- **Decision:** the concurrency suite gets its own vitest config and is
+  excluded from `npm test`.
+  **Why:** it wants the opposite of what the default suite wants — a real
+  container, minutes of timeout, one file at a time. Two suites with genuinely
+  different needs get two configs rather than one config full of conditionals.
+  **Alternative:** one config, with the concurrency tests skipped unless an
+  env var is set.
+  **Why not:** a suite that is skipped by default is a suite nobody notices
+  has broken.
+  **Tradeoff:** `npm test` no longer runs everything, so "all tests pass" now
+  requires two commands. Stated in the scripts rather than assumed.
+
+### Concurrency
+
+This is the phase, so the section is the point rather than a footnote. All
+five proved against a real Postgres started by the test, with `Promise.all`,
+no mocks.
+
+- **Scenario:** two dispatchers hold the same unit.
+  **What races:** two `UPDATE units ... WHERE id AND status='AVAILABLE' AND
+  version=$2` against one row.
+  **Why dangerous:** both told "you got it" means two vans to one breakdown
+  and one breakdown with none.
+  **How handled:** the check and the claim are one statement. Postgres blocks
+  the second UPDATE on the first's row lock and re-evaluates its WHERE against
+  the committed row; it matches nothing and reports zero rows.
+  **Assumption relied on:** READ COMMITTED, which is Postgres's default and
+  what this project runs at. At that level a blocked UPDATE re-reads the row
+  rather than failing — the guarantee would be different (serialisation
+  failure, needing retry) under REPEATABLE READ.
+
+- **Scenario:** a technician accepts as the offer expires.
+  **What races:** `respondToOffer` and `timeoutOffer` on one
+  `technician_offers` row.
+  **Why dangerous:** the two outcomes are contradictory, not merely different
+  — a job both assigned and released for reassignment sends two vans.
+  **How handled:** both are the same conditional UPDATE guarded by
+  `status = 'PROPOSED'`. Whoever moves the row first wins; the loser is told
+  what actually happened instead of erroring.
+  **Assumption relied on:** nothing else writes that column. Tested 12 times
+  in a row, because a race that resolves correctly once may only have resolved
+  correctly because one side was slower.
+
+- **Scenario:** release called twice.
+  **What races:** two `releaseHold` calls on one hold.
+  **Why dangerous:** a double-free returns a unit that may already be on
+  another job.
+  **How handled:** conditional on `(id, status='ACTIVE', version)`; only the
+  winner frees the unit, and only `WHERE status='HELD'`.
+  **Assumption relied on:** none beyond the above. Asserted by the unit's
+  version moving exactly twice — a double-free is invisible in the status but
+  shows up as a third increment.
+
+- **Scenario:** the hold expires mid-commit.
+  **What races:** the cleanup sweep expiring a hold while the saga tries to
+  consume it.
+  **Why dangerous:** consuming an expired claim dispatches a unit the system
+  already gave up.
+  **How handled:** `consumeHold` requires `status='ACTIVE' AND expires_at >
+  now` in one statement, and the unit stays HELD rather than moving to
+  ON_JOB.
+  **Assumption relied on:** the sweep only ever moves ACTIVE → EXPIRED.
+
+- **Scenario:** 50 concurrent holds on 10 units.
+  **What races:** five contenders per unit, all reading the same version.
+  **Why dangerous:** the aggregate version of the first case.
+  **How handled:** as above. Exactly 10 succeed, 40 lose, one ACTIVE hold per
+  unit.
+  **Assumption relied on:** none.
+
+### Weaknesses introduced
+
+- **A crash between `proposeOffer`'s commit and its `scheduleOfferExpiry` call
+  leaves an offer that never expires.** It would sit PROPOSED forever, holding
+  a technician's attention and blocking the job. The cleanup sweep is the
+  natural place to catch it (`status='PROPOSED' AND expires_at < now`) and does
+  not do it yet.
+- **Nothing calls any of this.** `POST /solve` still returns plans and reserves
+  nothing; no route creates a hold or an offer. The whole module is exercised
+  only by its tests until Phase 12's saga wires it into a real dispatch.
+- **A hold is not linked to its offer.** `UnitHold.dispatchOfferId` and
+  `TechnicianOffer.dispatchOfferId` are both still null — `proposeOffer` takes
+  a `holdId` and ignores it. Declining an offer therefore does not release the
+  hold it belonged to; something has to, and today nothing does except the
+  expiry sweep.
+- **`consumeHold` throws a hand-constructed `PrismaClientKnownRequestError`**
+  when the hold is consumable but its unit is not HELD. That state should be
+  impossible, so the throw is a tripwire rather than a handled path, but
+  borrowing Prisma's error type for a condition Prisma did not raise is a
+  small lie to anything catching by type.
+- **Raw SQL is not checked against the schema.** A column rename in
+  `schema.prisma` compiles fine and fails at runtime in the three statements
+  that matter most.
+- **The offer TTL and hold TTL are unmeasured** — 45 seconds and 2 minutes,
+  named as guesses in their own comments. Nothing has observed a real
+  technician's response latency, though `response_latency_ms` is now recorded
+  on every answered offer so Phase 13 can.
+- **`npm test` no longer means "all tests".** Two commands are needed, and CI
+  has to be told about both.
+
+### Concepts now genuinely in use
+
+Optimistic concurrency as a conditional UPDATE rather than a lock, and the
+specific reason a row lock is wrong here (the transaction after a dispatch
+decision waits on a human); READ COMMITTED's re-evaluation of a blocked
+UPDATE's WHERE clause, which is the mechanism that makes a status guard
+sufficient for simultaneity and insufficient for staleness; the ABA problem,
+and the version column as the thing that distinguishes "the row I decided on"
+from "a row that has been round the block since"; idempotent compensation as
+a shape (conditional update, report what you found, never throw);
+testcontainers as the difference between a property that is checked and a
+property that is provable on a machine that has never seen the project;
+mutation testing applied to a concurrency guard, including the case where the
+mutation does NOT break the test and the finding is that the test was aimed at
+the wrong clause.
+
+### Interview angle
+
+- *Two dispatchers click the same van. What stops the double-booking, exactly?*
+  One statement: `UPDATE units SET status='HELD', version=version+1 WHERE
+  id=$1 AND status='AVAILABLE' AND version=$2`. There is no window between
+  checking and claiming because Postgres evaluates the WHERE and applies the
+  UPDATE atomically, and the second writer blocks on the first's row lock and
+  then re-reads. Zero rows affected is how the loser finds out. Proved with a
+  real `Promise.all` against a container the test started — and at 50-on-10,
+  exactly 10 succeed.
+- *You have a version column AND a status check. Isn't one of them redundant?*
+  No, and I only know that because I deleted one and measured. Removing
+  `AND version = $2` does NOT break the two-dispatchers test: the status check
+  alone handles simultaneity. What the version column catches is the stale
+  read — a dispatcher whose plan was computed before the unit was held and
+  released by someone else. It is AVAILABLE again, so a status check waves the
+  claim through; the version says the world moved. The test that pins that is
+  a different test from the one the build plan predicted would fail.
+
+### What broke
+
+- **A Phase 5 job-id bug that had never been executed.** `offerExpiryJobId`
+  returned `offer-expiry:${offerId}`, and BullMQ rejects a custom job id
+  containing `:` — it uses colons as separators in its own Redis key layout.
+  The function was written in Phase 5 as plumbing with no caller, so the
+  validation error sat undiscovered until this phase made real offers schedule
+  real expiries and the concurrency suite hit it on the first run. Fixed to a
+  hyphen. `deduplication.id` has no such restriction, which is why the
+  solver's `zone:...` key has been fine all along — worth knowing, because the
+  two look interchangeable and are not.
+- **THE MUTATION DID NOT BREAK WHAT THE BUILD PLAN SAID IT WOULD, and that is
+  the most useful thing in this phase.** The plan states: delete
+  `AND version = $2`, and the two-dispatchers test MUST fail. It does not.
+  Measured directly — two concurrent unsafe holds on one unit still come back
+  `HELD` / `LOST_RACE` with exactly one ACTIVE hold row.
+
+  The reason is that `AND status = 'AVAILABLE'` is itself a conditional guard.
+  At READ COMMITTED, two UPDATEs on one row do not both proceed: the second
+  blocks on the first's row lock, and when the first commits the second
+  RE-EVALUATES its WHERE clause against the newly committed row. It sees
+  `status = 'HELD'`, matches nothing, reports zero rows. Simultaneity is
+  handled by the status clause alone, and in that scenario the version clause
+  does no work whatsoever.
+
+  So the original test 1 was passing for a reason that had nothing to do with
+  the mechanism it was believed to be testing — the same failure recorded in
+  Phase 8's comparator and Phase 7's ordering, for the third time. What the
+  version column actually protects is the ABA case: read AVAILABLE at version
+  4, somebody else holds and releases it, it is AVAILABLE again at version 6,
+  and a status-only check cannot tell "still the unit I chose" from "a unit
+  that has been round the block since". Measured: with the version check the
+  stale claim is refused; without it, it succeeds.
+
+  Two things were added rather than one. `holds.test.ts` gained a direct
+  stale-version test so the main suite is load-bearing for the version column,
+  and `mutation.test.ts` asserts BOTH results — that deleting the clause does
+  not break simultaneity, and that it does break staleness — so the negative
+  result is pinned too. If a future Postgres or isolation-level change made
+  the unsafe version start double-booking, that test fails and the explanation
+  above needs rewriting, which is the right way to hold a claim about database
+  semantics.
+- **`npx` needed a shell on Windows, and passing arguments through a shell is
+  deprecated (DEP0190).** The migration step ran `execFileSync('npx', [...],
+  { shell: true })` and printed a deprecation warning on every run; switching
+  to `npx.cmd` without a shell simply failed to launch. Resolved by running
+  Prisma's own CLI entrypoint on `process.execPath` —
+  `createRequire(import.meta.url).resolve('prisma/build/index.js')` — which
+  needs no shell on any platform and fails loudly if a Prisma upgrade moves
+  the file.
+- **The first container wait strategy would have been flaky.** Postgres's
+  entrypoint starts the server, stops it to run init scripts, and starts it
+  again, so waiting for one "ready to accept connections" line returns a
+  server that is about to disappear. The wait is for the second occurrence.
+  Caught while writing it rather than by a flake, but it is the standard way
+  this goes wrong.
