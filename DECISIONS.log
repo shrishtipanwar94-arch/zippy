@@ -708,3 +708,58 @@ the wrong clause.
   server that is about to disappear. The wait is for the second occurrence.
   Caught while writing it rather than by a flake, but it is the standard way
   this goes wrong.
+
+## Carried forward — INTERVIEW.md claims that Phases 10 and 11 falsified
+
+NOT a phase entry. A checklist for the Phase 13 checkpoint, written now
+because these are CONTRADICTIONS rather than gaps: consolidation appends new
+material by default, and every line below has to be corrected in place
+instead. INTERVIEW.md is only edited at a checkpoint (CLAUDE.md), so it is
+knowingly stale until then — recorded here so that staleness is deliberate and
+bounded rather than forgotten.
+
+Verified against the current file, line numbers as of commit 026f0d3.
+
+1. **Line 8 — "State after Phase 9 (checkpoint)."** Now Phase 11. The
+   paragraph's claim that "what does not exist yet is any way to ACT on a
+   plan: no holds, no offers, no saga" is half wrong: holds and offers both
+   exist (`src/commit/holds.ts`, `src/commit/offers.ts`). The saga does not,
+   and neither does anything that CALLS holds or offers, so the sentence is
+   right in spirit and wrong in fact. Rewrite rather than delete.
+
+2. **Line 100, §3 Request Lifecycles — "Offer ... lifecycles: not
+   implemented."** Offers are implemented as a state machine with a real TTL.
+   What remains true is the sentence after it: there is still no path from a
+   plan to an assignment, because nothing calls either module.
+
+3. **Line 312, §9 Concurrency — "The testcontainers-backed suite is still
+   empty."** FALSE. Nine tests across two files, ~17s, a real Postgres 16
+   container per file. This is the single most wrong line in the document —
+   §9 is where an interviewer looks first for invariant 9.
+
+4. **Line 622, §15.2 — "Phase 10 is the whole point of the project and it does
+   not exist yet."** FALSE. The harness exists, and the weakness it describes
+   ("nothing has compared global against nearest") is now the opposite of the
+   problem: the comparison exists and global loses two scenarios of five.
+   That is a stronger §15 entry than the one it replaces, not a weaker one.
+
+5. **Line 638, §15.6 — "The concurrency suite is empty ... starts no
+   container and proves nothing."** FALSE, same as (3). The genuine residue
+   worth keeping: the non-concurrency suites still share one `zippy_test`
+   database and cannot tear down.
+
+6. **Line 732, §17 — "Not claimable: measured dispatch quality against a
+   baseline policy."** Now claimable, with the caveats EVALUATION.md carries
+   (haversine travel time, perfectly calibrated diagnosis, hand-set
+   durations). §17 gains a resume claim; it does not merely lose a disclaimer.
+
+7. **Line 781, §19 — "Phases 0–9 complete. 234 tests across 16 files."** Now
+   Phases 0–11, 251 fast + 9 concurrency across 20 files.
+
+8. **Line 817, §19 — "Not started: the evaluation harness (Phase 10), holds
+   and real concurrency (11)."** Both started and finished.
+
+Also worth folding in at the checkpoint, from the Phase 10 and 11 entries
+above rather than from this list: the `SLA_UNREACHABLE` invariant-8 concern,
+the measured cost of zone partitioning, and the finding that the unit hold's
+version check protects staleness rather than simultaneity.
