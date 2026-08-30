@@ -763,3 +763,230 @@ Also worth folding in at the checkpoint, from the Phase 10 and 11 entries
 above rather than from this list: the `SLA_UNREACHABLE` invariant-8 concern,
 the measured cost of zone partitioning, and the finding that the unit hold's
 version check protects staleness rather than simultaneity.
+
+## Phase 12 — The reservation saga / 2026-08-31 / Commit: "phase 12: reservation saga"
+
+### Built
+
+`src/commit/saga.ts` — `startSaga`, `advanceSaga`, `commitSaga`,
+`compensateSaga`, `recordTechnicianDecision`, `recordDestinationDecision`,
+`TERMINAL_STATES`, private `finishAsRequeued`. Three legs acquired in order
+(unit hold → technician offer → destination offer, tows only), compensated in
+reverse. State persisted on `dispatch_offers.state`.
+
+`src/commit/sagaRecovery.ts` — `recoverSagas(db, { staleAfterMs, now })`.
+ALL_ACCEPTED sagas are committed; every other non-terminal saga older than the
+staleness cutoff is compensated.
+
+`src/worker.ts` — recovery runs BEFORE `startWorkers()`, so a restarted
+process finishes or releases whatever the dead one left before new work starts
+competing for the same units.
+
+New JobEvent types: `DISPATCH_COMMITTED`, `DISPATCH_REQUEUED`,
+`TECHNICIAN_RELEASED_AFTER_ACCEPT`, `TECHNICIAN_OFFER_WITHDRAWN`.
+
+Tests: `tests/saga.test.ts` (9). Suite totals 260 fast across 19 files, 9
+concurrency across 2. `tsc --noEmit`, `eslint src evaluation`, `npm run build`
+clean.
+
+The build plan's own SQL checks, run against `zippy_test` after the suite:
+`SELECT id, state FROM dispatch_offers WHERE state NOT IN
+('COMMITTED','REQUEUED')` returns nothing, and `SELECT COUNT(*) FROM units
+WHERE status='HELD'` returns 0. Ten sagas, all terminal: 6 REQUEUED, 4
+COMMITTED.
+
+### Decisions
+
+- **Decision:** one `advanceSaga` evaluates "are all legs in?", and both
+  external-response functions call it rather than deciding for themselves.
+  **Why:** the partial-commit case (technician ACCEPTED, destination DECLINED)
+  is not a special case — it is the ordinary "any leg failed" branch seen from
+  a different angle. Putting the decision in one place is what makes that
+  true rather than a coincidence.
+  **Alternative:** each response handler decides what its own answer means.
+  **Why not:** two places would have to agree about what a declined
+  destination means for an accepted technician, and the moment they disagree
+  the failure is a technician driving to a job nobody assigned.
+  **Tradeoff:** `advanceSaga` re-reads every leg on every response, which is
+  three small queries where a smarter version would pass state along.
+
+- **Decision:** compensation releases the destination first and the unit last.
+  **Why:** reverse order of acquisition, and the reason is concrete rather
+  than ceremonial — a later leg can depend on an earlier one still being in
+  place. Releasing the unit first would leave a technician holding an offer
+  for a van somebody else has already taken.
+  **Alternative:** release everything concurrently.
+  **Why not:** it produces exactly that window, and it is invisible in testing
+  because both orders usually work.
+  **Tradeoff:** compensation is sequential, so it is as slow as the sum of its
+  legs. At three legs that is not a real cost.
+
+- **Decision:** a technician who ACCEPTED and is then released gets a
+  DIFFERENT event from one whose offer was withdrawn unanswered
+  (`TECHNICIAN_RELEASED_AFTER_ACCEPT` vs `TECHNICIAN_OFFER_WITHDRAWN`).
+  **Why:** they mean different things to the person holding the phone. One
+  never committed to anything; the other has already started driving. The
+  phase calls the partial commit the important case, and the thing that makes
+  it important is that a human is acting on an assignment that no longer
+  exists.
+  **Alternative:** one `OFFER_WITHDRAWN` event for both.
+  **Why not:** it erases the distinction exactly where it matters most.
+  **Tradeoff:** two event types where a payload field would do. Deliberate —
+  the event type is what a UI and a notification template switch on, and a
+  field is easier to forget to read.
+
+- **Decision:** recovery compensates everything non-terminal EXCEPT
+  ALL_ACCEPTED, which it commits.
+  **Why:** a saga interrupted mid-acquisition cannot be safely resumed — the
+  process that was going to send leg 3 is gone, and the technician's phone has
+  no idea it was ever part of anything. Letting the unit go and re-planning is
+  honest; guessing where it got to is not. ALL_ACCEPTED is different because
+  every party already said yes, so compensating it would undo a reservation
+  everyone agreed to.
+  **Alternative:** resume from wherever the state says it stopped.
+  **Why not:** "where it stopped" is knowable for the database legs and
+  unknowable for the external ones.
+  **Tradeoff:** a saga killed one instruction before its commit is thrown away
+  and re-planned, which costs a dispatch cycle.
+
+- **Decision:** recovery only touches sagas older than the hold TTL.
+  **Why:** in a two-process deployment, one process restarting must not
+  compensate the other's live reservations. A saga younger than the hold TTL
+  is plausibly in flight; one older has outlived the claim it rests on.
+  **Alternative:** recover everything non-terminal at startup.
+  **Why not:** it would make a rolling restart destroy live dispatches.
+  **Tradeoff:** THIS IS A HEURISTIC, NOT A LOCK, and it is the weakest thing
+  in the phase. A genuine owner column or a distributed lock would be correct;
+  neither exists. Stated at the top of sagaRecovery.ts rather than buried.
+
+- **Decision:** REQUEUED writes state and a JobEvent, and calls no re-solve
+  trigger.
+  **Why:** Phase 13 specifies the trigger list in ONE place
+  (`src/domain/replanTriggers.ts`). Calling `enqueueSolve` here would put the
+  second copy of that decision in the codebase before the first one exists.
+  **Alternative:** enqueue a solve on compensation.
+  **Why not:** above.
+  **Tradeoff:** nothing consumes REQUEUED yet, so a compensated job goes back
+  to PLANNED and waits for a dispatcher to press Solve. Recorded as a weakness.
+
+### Concurrency
+
+- **Scenario:** the process dies between leg 2 and leg 3.
+  **What races:** nothing, in the two-writers sense. This is partial state, not
+  contention — but it is the failure the phase exists for.
+  **Why dangerous:** leg 1 is committed on purpose (it has to be durable, or
+  leg 2 would be offering a unit nobody reserved), so a crash leaves a real
+  hold on a real unit with nobody left to release it. The unit is out of
+  service until a human notices.
+  **How handled:** `recoverSagas` at worker startup, before any worker starts.
+  **Assumption relied on:** the worker process actually restarts. If it does
+  not, nothing sweeps — the cleanup queue expires the HOLD after its TTL but
+  leaves the saga row non-terminal forever. Recorded as a weakness.
+
+- **Scenario:** a technician's accept arrives while recovery is compensating
+  the same saga.
+  **What races:** `respondToOffer` moving the offer to ACCEPTED against
+  `compensateSaga` moving it to WITHDRAWN.
+  **Why dangerous:** a technician told "you have the job" for a saga that has
+  just released its unit.
+  **How handled:** both are conditional updates. `respondToOffer` moves the
+  row only while it is PROPOSED; compensation moves it only from PROPOSED or
+  ACCEPTED. Whichever lands first wins, and `advanceSaga` refuses to act on a
+  terminal saga, so a late accept cannot resurrect one.
+  **Assumption relied on:** `TERMINAL_STATES` is checked at the top of every
+  entry point. It is, in `advanceSaga`, `commitSaga` and `compensateSaga`.
+
+- **Scenario:** two callers compensate the same saga.
+  **What races:** two passes through the same three releases.
+  **Why dangerous:** a double release would free a unit that a LATER saga has
+  since legitimately taken.
+  **How handled:** every step is a conditional update that finds nothing on a
+  second run — `releaseHold` from Phase 11, `updateMany` filtered on the status
+  being left. Proved directly: compensating twice produces one
+  `UNIT_HOLD_RELEASED` event.
+  **Assumption relied on:** none.
+
+### Weaknesses introduced
+
+- **Recovery's staleness window is a heuristic.** Two processes restarting
+  within the window can both try to recover the same saga; the operations are
+  idempotent so the outcome is correct, but the design rests on "probably
+  nobody else owns this" rather than on a lock or an owner column.
+- **Nothing calls `startSaga`.** `POST /solve` still returns plans and
+  reserves nothing. The whole saga is exercised only by its tests — the
+  dispatcher cannot yet turn a plan into a dispatch, which is Phase 13/14
+  work.
+- **REQUEUED is a dead end.** The job returns to PLANNED with an event saying
+  why, and nothing re-plans it. Deliberate (Phase 13 owns the trigger list),
+  but until then a compensated job waits for a human.
+- **If the worker never restarts, a stranded saga is never recovered.** The
+  cleanup sweep expires the underlying HOLD on its TTL, so the unit does come
+  back, but `dispatch_offers.state` stays non-terminal forever and the build
+  plan's first SQL check would start returning rows. Recovery belongs on the
+  cleanup schedule as well as at startup, and is not there yet.
+- **The destination leg is a stub on both sides.** The row is real and the
+  state machine treats it as a real leg, but nothing sends it to a workshop
+  and no workshop can answer it — only a test does. Phase 22 makes it real.
+- **`commitSaga` consumes the hold OUTSIDE the transaction that assigns the
+  job.** `consumeHold` opens its own transaction (it is also called directly),
+  so a crash between consuming the hold and updating the job leaves the unit
+  ON_JOB with the job still PLANNED — recoverable, because the saga row is
+  still ALL_ACCEPTED and recovery will re-commit, but the window exists.
+- **No dispatch is timed out as a whole.** Individual offers expire, but a
+  saga whose technician never answers relies on the offer-expiry queue firing;
+  if that job is lost, only recovery's staleness sweep catches it.
+
+### Concepts now genuinely in use
+
+The saga pattern as the answer to "you cannot enrol a phone in a transaction",
+and the specific reason 2PC is not available rather than merely unfashionable
+(a prepared transaction held open across a human's response time);
+compensation in reverse order of acquisition, and the concrete failure that
+motivates the ordering; partial commit as a first-class outcome rather than an
+error path — everyone said yes except one party, and the correct response is
+to undo the yeses; idempotent compensation as the thing that makes recovery
+and live responses safe to overlap; crash recovery as a startup routine over
+persisted state, with the honest admission that "resume" is only possible for
+the legs you own; a staleness heuristic standing in for a lock, named as such.
+
+### Interview angle
+
+- *Why not two-phase commit?* Because the participants are a technician's
+  phone and a workshop's dispatcher, and 2PC requires every participant to
+  hold a prepared transaction open until the coordinator decides. A phone
+  cannot: it is offline, or locked, or the answer takes ninety seconds, and a
+  Postgres transaction held across that is a connection-pool outage waiting to
+  happen. So the reservation is acquired leg by leg and undone backwards, and
+  the price is that there is a real window where some legs are committed and
+  others are not — which is exactly what `recoverSagas` exists to clean up.
+- *A technician accepted and then the workshop declined. What does the
+  technician see?* A distinct event —
+  `TECHNICIAN_RELEASED_AFTER_ACCEPT`, not the generic withdrawal — because
+  they have already started driving and being left holding an assignment that
+  silently evaporated is the worst outcome the system can produce. The unit is
+  released, the job goes back to PLANNED, and the release is a durable row
+  rather than a notification that may not have been delivered.
+- *Your process dies mid-saga. What happens to the van?* At startup the worker
+  runs `recoverSagas` before any worker starts. ALL_ACCEPTED sagas are
+  committed; everything else non-terminal and older than the hold TTL is
+  compensated, releasing the hold. Proved by a test that starts a saga, never
+  answers it, backdates it, and asserts what the build plan's SQL asserts: no
+  saga outside COMMITTED/REQUEUED, and zero units HELD.
+
+### What broke
+
+- **`Unit.currentTechnicianId` is UNIQUE, and the first fixture ignored it.**
+  Every test unit was crewed by one shared `saga-tech`, so the second
+  `freshUnit` call failed with P2002 on `current_technician_id` and eight of
+  nine tests fell over at setup. The constraint is correct and is the schema
+  saying "one technician crews one van" — Phase 1 wrote it and nothing had
+  needed more than one unit in a fast test before. Fixed by giving each unit
+  its own technician and user inside `freshUnit`.
+- **`Workshop.code` is required and was missing from the fixture**, which
+  `tsc` caught before the test ran — the tsconfig.check.json added in Phase 10
+  earning its place, since `tests/` was invisible to the compiler until then.
+- **Nothing else surprising.** The compensation ordering, the idempotency and
+  the recovery branches all behaved as written on the first run, which is less
+  interesting than it sounds: they are built almost entirely out of Phase 11's
+  conditional updates, and those had already been proved against a real
+  container.

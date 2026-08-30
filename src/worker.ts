@@ -1,8 +1,10 @@
 import { config } from './infra/config.js';
 import { logger } from './infra/logger.js';
 import { prisma } from './infra/db.js';
+import { prismaBase } from './infra/prismaBase.js';
 import { sharedQueueConnection } from './queues/connection.js';
 import { startWorkers, stopWorkers } from './workers/runWorkers.js';
+import { recoverSagas } from './commit/sagaRecovery.js';
 
 /**
  * The worker process. It exists from Phase 0 — as its own process, not a
@@ -13,8 +15,21 @@ import { startWorkers, stopWorkers } from './workers/runWorkers.js';
  * cleanup), each idempotent, each backed off with a cap, each dead-lettering
  * on exhaustion. `startWorkers()` in src/workers/runWorkers.ts owns their
  * construction; this file only owns the process lifecycle around them.
+ *
+ * From Phase 12: saga recovery runs BEFORE the workers start. A process that
+ * died mid-reservation left a unit held and a technician holding an offer for
+ * it, and neither resolves on its own — so the first thing a restarted worker
+ * does is finish or compensate whatever it finds, before any new work can
+ * start competing for the same units.
  */
 logger.info({ env: config.NODE_ENV }, 'worker process starting');
+
+// Unscoped on purpose: recovery is a fleet-wide sweep with no requesting
+// user, so there is no tenant to scope it to.
+const recovered = await recoverSagas(prismaBase);
+if (recovered.length > 0) {
+  logger.warn({ recovered }, 'recovered sagas stranded by a previous process');
+}
 
 await startWorkers();
 logger.info('worker process started');

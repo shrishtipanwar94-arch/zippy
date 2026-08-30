@@ -1,0 +1,346 @@
+// THIS IS A SAGA, NOT 2PC. External actors (a technician's phone, a workshop's
+// dispatcher) cannot be enrolled in a Postgres transaction, so failure
+// handling is compensation, not rollback.
+//
+// Two-phase commit needs every participant to hold a prepared transaction open
+// until the coordinator says commit. A technician's phone cannot do that: it
+// is offline, or the screen is locked, or the answer takes ninety seconds. So
+// the reservation is built the only way it can be — acquire each leg, and if a
+// later one fails, run the earlier ones BACKWARDS to undo them.
+//
+// THE THREE LEGS, in acquisition order:
+//   1. Unit hold        local, version-checked (holds.ts). Cheapest to undo.
+//   2. Technician offer external actor: accept / decline / timeout.
+//   3. Destination offer external actor, tow jobs only. Workshop side stubbed
+//                       until Phase 22.
+//
+// Compensations run in REVERSE order — destination, then technician, then hold
+// — because a later leg may depend on an earlier one still being in place.
+// Releasing the unit first would leave a technician holding an offer for a van
+// somebody else already took.
+//
+// THE CASE THAT MATTERS IS PARTIAL COMMIT: the technician ACCEPTED and the
+// destination then DECLINED. Nothing failed, nothing crashed, and the
+// reservation is still dead. Both legs release, the job requeues, and the
+// technician is told explicitly — being left holding an assignment that
+// silently evaporated is the worst outcome available, because they will drive
+// to it.
+//
+// STATE IS PERSISTED, on dispatch_offers.state, because a process that dies
+// mid-saga must not leave a unit held forever. `recoverSagas` is the startup
+// routine that finishes or compensates whatever it finds.
+
+import type { Prisma, PrismaClient, SagaState } from '@prisma/client';
+import { appendJobEvent } from '../intake/events.js';
+import { createHold, releaseHold, consumeHold } from './holds.js';
+import { proposeOffer, respondToOffer } from './offers.js';
+
+export const TERMINAL_STATES: SagaState[] = ['COMMITTED', 'REQUEUED'];
+
+export type StartSagaInput = {
+  jobId: string;
+  unitId: string;
+  technicianId: string;
+  // The unit version the plan was computed against. Passed straight through to
+  // the hold, where a stale value loses the race rather than taking a unit the
+  // plan no longer describes.
+  expectedUnitVersion: number;
+  // Tow jobs acquire a third leg. Everything else is two.
+  workshopId?: string | null;
+  offerTtlMs?: number;
+  holdTtlMs?: number;
+  // Injected so a database-only test needs no broker; see offers.ts.
+  scheduleExpiry?: (offerId: string, expiresAt: Date) => Promise<void>;
+};
+
+export type StartSagaResult =
+  | { outcome: 'AWAITING_LEGS'; sagaId: string }
+  // Leg 1 lost its race. Nothing was acquired, so there is nothing to
+  // compensate — the saga is born terminal.
+  | { outcome: 'REQUEUED'; sagaId: string; reason: string };
+
+export async function startSaga(
+  db: PrismaClient,
+  input: StartSagaInput,
+): Promise<StartSagaResult> {
+  const saga = await db.dispatchOffer.create({
+    data: {
+      jobId: input.jobId,
+      unitId: input.unitId,
+      technicianId: input.technicianId,
+      state: 'PROPOSED',
+    },
+    select: { id: true },
+  });
+
+  // LEG 1.
+  const hold = await createHold(db, {
+    unitId: input.unitId,
+    jobId: input.jobId,
+    expectedVersion: input.expectedUnitVersion,
+    ttlMs: input.holdTtlMs,
+  });
+
+  if (hold.outcome === 'LOST_RACE') {
+    await finishAsRequeued(db, saga.id, input.jobId, `unit unavailable: ${hold.detail}`);
+    return { outcome: 'REQUEUED', sagaId: saga.id, reason: hold.detail };
+  }
+
+  await db.unitHold.update({
+    where: { id: hold.holdId },
+    data: { dispatchOfferId: saga.id },
+  });
+
+  // LEG 2.
+  const offer = await proposeOffer(db, {
+    jobId: input.jobId,
+    technicianId: input.technicianId,
+    ttlMs: input.offerTtlMs,
+    scheduleExpiry: input.scheduleExpiry,
+  });
+  await db.technicianOffer.update({
+    where: { id: offer.offerId },
+    data: { dispatchOfferId: saga.id },
+  });
+
+  // LEG 3, tows only. The workshop side is a stub until Phase 22: the row is
+  // real and the state machine treats it as a real leg, but nothing sends it
+  // anywhere, so only a test or a future workshop adapter answers it.
+  if (input.workshopId) {
+    await db.destinationOffer.create({
+      data: {
+        jobId: input.jobId,
+        workshopId: input.workshopId,
+        dispatchOfferId: saga.id,
+        status: 'PROPOSED',
+        expiresAt: offer.expiresAt,
+      },
+    });
+  }
+
+  await db.dispatchOffer.update({
+    where: { id: saga.id },
+    data: { state: 'AWAITING_LEGS' },
+  });
+
+  return { outcome: 'AWAITING_LEGS', sagaId: saga.id };
+}
+
+// ---------------------------------------------------------------------------
+// External actors answering. Each records its own leg and then asks the state
+// machine what that means, rather than deciding for itself — so "all legs in"
+// is evaluated in exactly one place.
+
+export async function recordTechnicianDecision(
+  db: PrismaClient,
+  input: { sagaId: string; decision: 'ACCEPTED' | 'DECLINED' },
+): Promise<SagaState> {
+  const offer = await db.technicianOffer.findFirst({
+    where: { dispatchOfferId: input.sagaId },
+    select: { id: true },
+  });
+  if (offer) await respondToOffer(db, { offerId: offer.id, status: input.decision });
+  return advanceSaga(db, input.sagaId);
+}
+
+export async function recordDestinationDecision(
+  db: PrismaClient,
+  input: { sagaId: string; decision: 'ACCEPTED' | 'DECLINED' },
+): Promise<SagaState> {
+  await db.destinationOffer.updateMany({
+    where: { dispatchOfferId: input.sagaId, status: 'PROPOSED' },
+    data: { status: input.decision, respondedAt: new Date() },
+  });
+  return advanceSaga(db, input.sagaId);
+}
+
+// ---------------------------------------------------------------------------
+// THE STATE MACHINE. Reads every leg, decides, and is safe to call again —
+// re-running it on a terminal saga returns the state and changes nothing.
+
+export async function advanceSaga(db: PrismaClient, sagaId: string): Promise<SagaState> {
+  const saga = await db.dispatchOffer.findUnique({
+    where: { id: sagaId },
+    select: {
+      id: true,
+      jobId: true,
+      state: true,
+      technicianOffers: { select: { status: true } },
+      destinationOffers: { select: { status: true } },
+    },
+  });
+  if (!saga) return 'REQUEUED';
+  if (TERMINAL_STATES.includes(saga.state)) return saga.state;
+
+  const technician = saga.technicianOffers[0]?.status ?? 'PROPOSED';
+  const destination = saga.destinationOffers[0]?.status ?? null;
+
+  // ANY leg failing kills the whole reservation. A declined destination with
+  // an accepted technician is the partial-commit case, and it is handled by
+  // exactly the same branch as every other failure — which is the point of
+  // having one.
+  const technicianFailed = technician === 'DECLINED' || technician === 'TIMEOUT';
+  const destinationFailed = destination === 'DECLINED' || destination === 'TIMEOUT';
+  if (technicianFailed || destinationFailed) {
+    const reason = technicianFailed ? `technician ${technician}` : `destination ${destination}`;
+    await compensateSaga(db, { sagaId, reason });
+    return 'REQUEUED';
+  }
+
+  const technicianAccepted = technician === 'ACCEPTED';
+  const destinationAccepted = destination === null || destination === 'ACCEPTED';
+  if (!technicianAccepted || !destinationAccepted) return saga.state; // still waiting
+
+  await db.dispatchOffer.update({ where: { id: sagaId }, data: { state: 'ALL_ACCEPTED' } });
+  return commitSaga(db, sagaId);
+}
+
+// ---------------------------------------------------------------------------
+// COMMIT. The hold becomes the assignment, in one transaction.
+
+export async function commitSaga(db: PrismaClient, sagaId: string): Promise<SagaState> {
+  const saga = await db.dispatchOffer.findUniqueOrThrow({
+    where: { id: sagaId },
+    select: {
+      id: true,
+      jobId: true,
+      unitId: true,
+      technicianId: true,
+      state: true,
+      unitHolds: { where: { status: 'ACTIVE' }, select: { id: true } },
+    },
+  });
+  if (TERMINAL_STATES.includes(saga.state)) return saga.state;
+
+  const hold = saga.unitHolds[0];
+  if (!hold) {
+    // The hold expired or was released underneath us — the reservation cannot
+    // be honoured, so compensate rather than assign a unit we no longer own.
+    await compensateSaga(db, { sagaId, reason: 'hold no longer active at commit' });
+    return 'REQUEUED';
+  }
+
+  const consumed = await consumeHold(db, { holdId: hold.id });
+  if (consumed.outcome !== 'CONSUMED') {
+    await compensateSaga(db, { sagaId, reason: `hold ${consumed.status} at commit` });
+    return 'REQUEUED';
+  }
+
+  await db.$transaction(async (tx) => {
+    await tx.job.update({
+      where: { id: saga.jobId },
+      data: {
+        status: 'COMMITTED',
+        assignedUnitId: saga.unitId,
+        assignedTechnicianId: saga.technicianId,
+        version: { increment: 1 },
+      },
+    });
+    await tx.dispatchOffer.update({
+      where: { id: sagaId },
+      data: { state: 'COMMITTED', decidedAt: new Date() },
+    });
+    await appendJobEvent(tx, {
+      jobId: saga.jobId,
+      eventType: 'DISPATCH_COMMITTED',
+      payload: { sagaId, unitId: saga.unitId, technicianId: saga.technicianId },
+    });
+  });
+
+  return 'COMMITTED';
+}
+
+// ---------------------------------------------------------------------------
+// COMPENSATION, IN REVERSE ORDER OF ACQUISITION.
+//
+// Idempotent throughout (invariant 6): every step is a conditional update that
+// finds nothing to do on a second run. Compensating twice is a no-op, not a
+// double release — which matters because recovery and a live response can both
+// arrive at this function for the same saga.
+
+export async function compensateSaga(
+  db: PrismaClient,
+  input: { sagaId: string; reason: string },
+): Promise<SagaState> {
+  const saga = await db.dispatchOffer.findUnique({
+    where: { id: input.sagaId },
+    select: {
+      id: true,
+      jobId: true,
+      state: true,
+      unitHolds: { select: { id: true, status: true } },
+      technicianOffers: { select: { id: true, technicianId: true, status: true } },
+      destinationOffers: { select: { id: true, status: true } },
+    },
+  });
+  if (!saga) return 'REQUEUED';
+  if (TERMINAL_STATES.includes(saga.state)) return saga.state;
+
+  await db.dispatchOffer.update({
+    where: { id: input.sagaId },
+    data: { state: 'RELEASED_ALL' },
+  });
+
+  // LEG 3 first.
+  await db.destinationOffer.updateMany({
+    where: { dispatchOfferId: input.sagaId, status: 'PROPOSED' },
+    data: { status: 'WITHDRAWN', respondedAt: new Date() },
+  });
+
+  // LEG 2. A technician who ACCEPTED is the partial-commit case and is told
+  // explicitly; one who never answered is simply withdrawn. Both are recorded
+  // as events, because a notification that was never delivered is not a
+  // record of anything.
+  for (const offer of saga.technicianOffers) {
+    const wasAccepted = offer.status === 'ACCEPTED';
+    await db.technicianOffer.updateMany({
+      where: { id: offer.id, status: { in: ['PROPOSED', 'ACCEPTED'] } },
+      data: { status: 'WITHDRAWN', respondedAt: new Date() },
+    });
+    await db.$transaction(async (tx) => {
+      await appendJobEvent(tx, {
+        jobId: saga.jobId,
+        eventType: wasAccepted ? 'TECHNICIAN_RELEASED_AFTER_ACCEPT' : 'TECHNICIAN_OFFER_WITHDRAWN',
+        payload: { sagaId: input.sagaId, technicianId: offer.technicianId, reason: input.reason },
+      });
+    });
+  }
+
+  // LEG 1 last: the unit is the thing everyone else was waiting on.
+  for (const hold of saga.unitHolds) {
+    if (hold.status !== 'ACTIVE') continue;
+    await releaseHold(db, { holdId: hold.id, reason: `SAGA_COMPENSATED: ${input.reason}` });
+  }
+
+  await finishAsRequeued(db, input.sagaId, saga.jobId, input.reason);
+  return 'REQUEUED';
+}
+
+// The job goes back on the board. Nothing CONSUMES this yet — the re-solve
+// trigger list is Phase 13's, and defining one here would put the second copy
+// of it in the codebase. What exists now is the durable fact: state REQUEUED
+// and an event saying why.
+async function finishAsRequeued(
+  db: PrismaClient,
+  sagaId: string,
+  jobId: string,
+  reason: string,
+): Promise<void> {
+  await db.$transaction(async (tx) => {
+    await tx.dispatchOffer.update({
+      where: { id: sagaId },
+      data: { state: 'REQUEUED', decidedAt: new Date() },
+    });
+    await tx.job.updateMany({
+      // Only if it never got committed — a job assigned by a LATER saga must
+      // not be dragged back to PLANNED by an earlier one compensating.
+      where: { id: jobId, status: { in: ['INTAKE', 'PLANNED', 'OFFERED'] } },
+      data: { status: 'PLANNED' },
+    });
+    await appendJobEvent(tx, {
+      jobId,
+      eventType: 'DISPATCH_REQUEUED',
+      payload: { sagaId, reason } satisfies Prisma.InputJsonValue,
+    });
+  });
+}
