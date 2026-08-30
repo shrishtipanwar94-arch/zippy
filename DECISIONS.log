@@ -20,3 +20,343 @@ Entry template:
 *Cleared at the Phase 4 checkpoint (2026-08-29). Phases 0-4 are consolidated
 into INTERVIEW.md; `git log` and the entries' own commits remain the record of
 what was decided when. Phase 5 appends below.*
+
+## Phase 5 — Redis and BullMQ / 2026-08-30 / Commit: (uncommitted)
+
+### Built
+
+Schema — `prisma/schema.prisma` + migration
+`20260829185601_phase5_job_processing_log`:
+- `JobProcessingLog` — `@@unique([queue, idempotencyKey])`. The database
+  constraint every processor's idempotency actually rests on.
+
+Queue infrastructure — `src/queues/`:
+- `connection.ts` — `sharedQueueConnection` (one, shared by every `Queue`),
+  `createWorkerConnection(name)` (one per `Worker`, never shared). Both tuned
+  with `maxRetriesPerRequest: null`, which BullMQ requires and
+  `src/infra/redis.ts`'s fail-fast health-check connection cannot offer.
+- `names.ts` — `QUEUE_NAMES` (`solver`, `offer-expiry`, `notification`,
+  `cleanup`), `DEAD_LETTER_QUEUE_NAME`.
+- `backoff.ts` — `cappedExponentialBackoff` (base 1s, cap 5min),
+  `RETRY_JOB_OPTIONS` (`attempts: 5`).
+- `idempotent.ts` — `runIdempotently(queue, key, effect, db?)`. Inserts the
+  `job_processing_log` row and runs `effect` in the SAME Postgres transaction;
+  a `P2002` on the insert means the key was already processed and `effect`
+  never ran.
+- `debounce.ts` — `enqueueDebounced(queue, name, dedupeKey, data, windowMs)`,
+  built on BullMQ's `deduplication` + `delay`.
+- `queues.ts` — `queues: Record<QueueName, Queue>`, `deadLetterQueue`, both
+  constructed once with `defaultJobOptions: RETRY_JOB_OPTIONS`.
+- `deadLetter.ts` — `moveToDeadLetterIfTerminal(queueName, job, error)`,
+  wired to every Worker's `failed` event; only acts when
+  `attemptsMade >= attempts`.
+- `board.ts` — `createQueueAdminRouter()`, `BULL_BOARD_PATH` (`/admin/queues`).
+
+Processors — `src/workers/`:
+- `cleanup.ts` — REAL work: `sweepExpiredIdempotencyKeys`,
+  `releaseExpiredHolds` (conditional `updateMany` on
+  `status='ACTIVE' AND expiresAt < now()`, same shape as `assignUnit.ts`'s
+  claim). `scheduleCleanup` registers a 5-minute repeatable job via
+  `Queue.upsertJobScheduler`.
+- `solver.ts`, `notification.ts`, `offerExpiry.ts` — plumbing only.
+  `enqueueSolve`, `enqueueNotification`, `scheduleOfferExpiry` exported for
+  Phases 6-9/15b/12 to call; nothing calls them yet.
+- `runWorkers.ts` — `startWorkers()`/`stopWorkers()`, one `Worker` per queue
+  name, `settings.backoffStrategy: cappedExponentialBackoff`, dead-letter
+  wired on `failed`.
+
+Realtime cross-process delivery:
+- `src/realtime/redisConnection.ts` — `createRealtimeRedisConnection`, a
+  third connection family (pub/sub only, never shared with BullMQ or health).
+- `src/realtime/server.ts` — `io.adapter(createAdapter(pubClient, subClient))`
+  from `@socket.io/redis-adapter`; `closeRealtimeAdapter()` for shutdown.
+- `src/realtime/publish.ts` — `Emittable` interface unifies a real `Server`
+  and a `@socket.io/redis-emitter` `Emitter`; `setRealtimeServer` widened to
+  accept either; a lazily-built fallback `Emitter` is used whenever `server`
+  is null (the worker process, the simulator CLI). Publish failures are now
+  caught and logged rather than thrown.
+
+Process wiring:
+- `src/worker.ts` — rewritten: `startWorkers()` at boot, `stopWorkers()`
+  (graceful — `Worker.close()` waits for the in-flight job) on
+  SIGINT/SIGTERM, 10s force-exit backstop matching `src/index.ts`.
+- `src/index.ts` — shutdown also calls `closeRealtimeAdapter()`.
+- `src/auth/permissions.ts` — `queueAdmin` resource, `DISPATCHER`-only.
+- `src/api/app.ts` — mounts Bull Board at `BULL_BOARD_PATH` behind
+  `authenticate` + `requirePermission('read', 'queueAdmin')`, per-route (not
+  `.use(authenticate)` with no path — the exact Phase 4c mistake, not
+  repeated).
+
+Check tooling: `scripts/enqueue-100.js` (plain JS, own throwaway `Queue`, no
+build step needed to run it).
+
+Tests: `tests/queues.test.ts` (14), `tests/realtimeAdapter.test.ts` (1).
+Suite total 146 across 11 files. `tsc --noEmit`, `eslint src`, and
+`npm run build` all clean; compiled `dist/index.js` and `dist/worker.js` both
+start and shut down cleanly.
+
+Dependencies added: `bullmq`, `@socket.io/redis-adapter`,
+`@socket.io/redis-emitter`, `@bull-board/express`, `@bull-board/api`.
+
+### Decisions
+
+- **Decision:** Exactly-once effect enforced by a real Postgres unique
+  constraint, with the effect run inside the SAME transaction as the
+  `job_processing_log` insert.
+  **Why:** BullMQ only promises at-least-once delivery — a crash between
+  finishing an effect and acknowledging the job redelivers it. An in-memory
+  "have I seen this key" set is erased by exactly the crash that would need it.
+  **Alternative:** check-then-act in application code (read the log table,
+  then decide whether to run the effect).
+  **Why not:** two concurrent deliveries of the same key could both pass the
+  read before either writes — a TOCTOU race the constraint closes and a
+  read-then-write cannot.
+  **Tradeoff:** only correct for an effect that IS a Postgres write (or
+  nothing). A processor whose real effect is external — an HTTP call, an SMS
+  — cannot be made atomic with a Postgres transaction this way; documented in
+  `idempotent.ts` as a case this function does not solve. None of today's
+  processors do that yet, but Phase 15b's will.
+
+- **Decision:** Debounce/coalesce built on BullMQ's `deduplication` + `delay`
+  rather than the classic "add with a fixed jobId, duplicates silently
+  no-op" trick.
+  **Why:** it is BullMQ's own first-class, documented mechanism for exactly
+  this, not an implicit side effect of a feature meant for something else.
+  **Alternative:** the jobId-collision trick.
+  **Why not:** it works, but "duplicates are silently not added" is a
+  side-effect of `jobId` uniqueness, not a feature designed to be relied on
+  for debouncing — deduplication is.
+  **Tradeoff:** BullMQ ships several dedup modes (`extend`, `replace`,
+  `keepLastIfActive`); this uses none of them (the "plain" mode). Its exact
+  behaviour — the FIRST call in a window wins, the job runs `delay` ms after
+  the first trigger, not the last — was verified empirically in
+  `tests/queues.test.ts` rather than assumed from reading the Lua source,
+  because getting that comment wrong would have been worse than not writing
+  one.
+
+- **Decision:** Three separate Redis connection configurations
+  (`infra/redis.ts`, `queues/connection.ts`, `realtime/redisConnection.ts`)
+  rather than one shared connection.
+  **Why:** each has an incompatible requirement. Health checks need to fail
+  fast (`maxRetriesPerRequest: 1`); BullMQ's blocking job-fetch REQUIRES
+  `maxRetriesPerRequest: null`; a pub/sub connection is locked into
+  subscriber mode the moment it subscribes and can run nothing else on it.
+  **Alternative:** one shared `ioredis` instance.
+  **Why not:** any one setting is wrong for at least two of the three uses.
+  **Tradeoff:** more connections to explain and more to close on shutdown —
+  `closeRealtimeAdapter()` exists purely because of this.
+
+- **Decision:** A real `dead-letter` `Queue`, populated by a `failed` handler
+  that checks `attemptsMade >= attempts`, rather than pointing an operator at
+  each queue's own BullMQ-provided failed set.
+  **Why:** the brief asks for a dead-letter queue, and BullMQ has no
+  cross-queue concept of one — an operator wants ONE place to see every
+  terminal failure, not four failed sets to check separately.
+  **Alternative:** Bull Board already shows each queue's Failed tab; do
+  nothing extra.
+  **Why not:** mixes "will retry" with "will never retry" in the same view.
+  **Tradeoff:** the failure is now visible in two places (the original
+  queue's failed job, and the dead-letter copy) — deliberate; the original
+  stays as the detailed record, dead-letter is the triage list.
+
+- **Decision:** `publishJobEvents` catches and logs its own failures instead
+  of letting them propagate.
+  **Why:** Postgres is the source of truth (invariant 1); by the time this
+  runs, the transaction that produced the events already committed. A Redis
+  hiccup must not turn "the job was created" into a 500.
+  **Alternative:** let it throw, as before.
+  **Why not:** before this phase, `publishJobEvents` was a guaranteed no-op
+  when no `Server` was set — it could not fail because it did nothing. The
+  emitter fallback means it now does real I/O in every process, including
+  ones (the worker, the simulator) that never had a failure mode here before.
+  Not catching it would be a reliability regression introduced by this
+  phase's own change.
+  **Tradeoff:** a client can get a 201 for a job no browser has heard about
+  yet — already the accepted shape of best-effort delivery (reconnect replay
+  catches it up), just now handled explicitly rather than accidentally safe.
+
+- **Decision:** The heterogeneous processor table in `runWorkers.ts` is typed
+  as BullMQ's own `Processor` (loose, `any`-based) rather than a narrower
+  type of my own.
+  **Why:** four processors each have a genuinely different `Job<X>` shape;
+  BullMQ's own public boundary type already exists for exactly this kind of
+  table.
+  **Alternative (tried first, reverted):** `Record<QueueName, (job: never) =>
+  Promise<void>>`.
+  **Why not:** `never` works when BUILDING the table (each specific processor
+  is assignable into a `never`-parameter slot) but fails the moment that
+  value is PASSED to `new Worker()` — contravariance runs the opposite
+  direction for consumption than it does for construction, and `tsc` caught
+  this immediately rather than it being predicted.
+  **Tradeoff:** from that table downward, BullMQ's own default typing (loose)
+  governs, not mine — acceptable because each processor keeps its real,
+  specific `Job<X>` type where it is actually defined and called.
+
+### Concurrency
+
+- **Scenario:** two deliveries of the same idempotency key overlap — a
+  genuine concurrent enqueue, a retry racing a redelivery.
+  **What races:** both transactions attempt to INSERT the same
+  `(queue, idempotency_key)` row.
+  **Why dangerous:** without a real constraint, an app-level check could let
+  both past before either commits, running the effect twice.
+  **How handled:** the unique constraint rejects the loser's INSERT; its
+  whole transaction — effect included — rolls back; `runIdempotently` reports
+  `alreadyProcessed: true`.
+  **Assumption relied on:** the effect is itself a Postgres write (or
+  nothing), so it can share a transaction with the log insert.
+  Proved with a genuine `Promise.all` of two concurrent calls sharing one key
+  in `tests/queues.test.ts`, not a mock.
+
+- **Scenario:** a worker process is killed while holding an active job's
+  lock.
+  **What races:** the lock stops renewing; BullMQ's stalled-job checker
+  (any live worker, on its own interval) eventually reclaims and redelivers
+  the job to a different worker.
+  **Why dangerous:** naive processing would run the effect twice.
+  **How handled:** identical to the case above — redelivery is
+  indistinguishable from a retry to `runIdempotently`.
+  **Assumption relied on:** BullMQ's default `lockDuration`/`stalledInterval`
+  (30s) — not independently tuned or tested this phase.
+
+- **Scenario:** the cleanup sweep releases an expired `UnitHold` at the same
+  moment something else (an operator, or, from Phase 11, a saga leg)
+  resolves the same hold for a different reason.
+  **What races:** two writers changing one hold's status.
+  **Why dangerous:** an unconditional write could silently overwrite a
+  resolution that already happened, with the wrong release reason.
+  **How handled:** `releaseExpiredHolds` uses a conditional `updateMany`
+  (`WHERE status = 'ACTIVE' AND expiresAt < now()`) — the same shape as
+  `assignUnit.ts`'s unit claim. A hold no longer `ACTIVE` no longer matches
+  and is silently skipped.
+  **Assumption relied on:** nothing WRITES a hold yet (Phase 11) — this race
+  is real in shape but has never actually been exercised. Recorded as a
+  weakness, not hidden.
+
+### Weaknesses introduced
+
+- **The exactly-once pattern does not reach an external effect.** Fine while
+  every processor's real work is a Postgres write or nothing; Phase 15b's
+  real notification delivery (an HTTP/SMS call) needs a genuinely different,
+  two-phase version (reserve the key, make the call, then mark delivered)
+  that this function does not provide.
+- **Solver's debounce does not absorb a trigger that arrives while the
+  debounced job is already ACTIVE** (only while it is still delayed/waiting)
+  — a slow solve run could get a second run queued behind it. Not exercised
+  today; nothing calls `enqueueSolve` yet.
+- **`moveToDeadLetterIfTerminal` is not itself transactional with the job's
+  terminal failure.** If the process dies between BullMQ's last-attempt
+  `failed` event and this async call completing, the dead-letter entry is
+  simply never written. Blast radius is zero today (every queue that could
+  hit this is either unused or, for cleanup, naturally idempotent on retry)
+  but is a real gap once real work runs through these queues.
+- **`queueAdmin: ['read']` in the permission table undersells what Bull
+  Board's UI actually allows** — it can retry, discard, and promote jobs
+  through its own interface, none of which is separately RBAC-checked or
+  written to `AuditLog` the way a cross-tenant dispatcher read is. Anyone
+  granted the dashboard today can act through it with no audit trail.
+- **Cleanup's hold-release path is written and tested against a table no
+  writer populates yet** — correct by construction, unverified against real
+  hold churn until Phase 11.
+- **The realtime fallback `Emitter`'s Redis connection is opened lazily and
+  never explicitly closed** outside of tests. Fine for a long-lived worker
+  process; worth remembering if a short-lived script ever starts publishing
+  job events and expects to exit promptly.
+
+### Concepts now genuinely in use
+
+At-least-once delivery vs. exactly-once effects, and the standard fix (an
+idempotency key backed by a real database constraint, not an in-memory set);
+optimistic/conditional update as a recurring concurrency primitive, now used
+a second time independently of `assignUnit.ts`; job deduplication as a
+debounce/coalesce mechanism; capped exponential backoff and why an operator
+needs the cap (an uncapped retry and a hung job are indistinguishable from
+outside); a dead-letter queue as a pattern distinct from "the queue's own
+failed set"; pub/sub fan-out across OS processes (Redis adapter/emitter)
+as the same "one process's memory is not the whole system" idea invariant 1
+already established for holds, now showing up in the realtime layer;
+graceful shutdown extended from "stop accepting connections" (Phase 0) to
+"let the in-flight job finish or requeue" (`Worker.close()`).
+
+### Interview angle
+
+- *"Every processor is idempotent" — what does that actually rest on?* Not a
+  check the app remembers to run — a real unique constraint on
+  `(queue, idempotency_key)`, with the effect executed inside the SAME
+  Postgres transaction as the log insert, so a failed effect and a logged
+  "done" can never disagree. Two concurrent deliveries of the same key are
+  made to race for real in `tests/queues.test.ts`; exactly one wins the
+  INSERT, and the loser's entire transaction — effect included — rolls back.
+- *Why does an event published from the worker process reach a browser
+  connected to the completely separate web process?* Socket.IO's default
+  adapter keeps room membership in one process's memory. `@socket.io/redis-
+  adapter` subscribes the web process's `Server` to a shared Redis channel;
+  a process with no `Server` at all publishes onto that same channel with
+  `@socket.io/redis-emitter` instead. Verified by literally commenting out
+  the one line that installs the adapter and watching the delivery test go
+  from passing to a timeout, then restoring it.
+
+### What broke
+
+- **The manual "kill the worker at ~50, restart it" check was replaced with
+  an automated concurrent-race test, and it is worth being explicit about
+  why rather than just quietly doing the stronger thing.** Attempted it as
+  written first. The `notification` queue's stub processor — the only one
+  with no real Phase-6+/12/15b dependency, so the only sane target for a
+  synthetic 100-job run — finishes in a fraction of a millisecond;
+  `job_processing_log` had all 100 rows before a kill signal could plausibly
+  be sent. Producing a genuine mid-batch kill would have meant either
+  hand-adding an artificial delay to the processor purely to make the demo
+  timeable (misrepresenting what it actually does) or hoping to get lucky
+  hitting a narrow window between two Redis round-trips. And even a
+  perfectly-timed kill would not prove much by itself: BullMQ recovers a
+  truly crashed job through its stalled-job checker, which by default waits
+  up to `lockDuration` (30s) before redelivering — so a faithful manual
+  demonstration means killing the process, then doing nothing for up to 30
+  real seconds, to observe a property that is actually about two things
+  racing at the database layer, not about wall-clock timing at all.
+  Replaced with `tests/queues.test.ts`'s "lets only one of two concurrent
+  deliveries of the same key run the effect": `Promise.all` of two
+  `runIdempotently` calls sharing one key, against the real
+  `job_processing_log` table, with a real counter proving the effect ran
+  exactly once. This exercises the actual mechanism — the unique constraint,
+  not the accident of a kill's timing — deterministically, on every run,
+  rather than once, by hand, only if the timing happens to cooperate.
+  The manual artifacts from the brief were still built and still run for
+  real, not skipped: `scripts/enqueue-100.js` enqueued 100 jobs against a
+  live `npm run dev:worker`, and `job_processing_log` showed exactly
+  100 rows, 100 distinct keys, for the `notification` queue — only the
+  kill/restart step itself was dropped, in favour of a test that proves the
+  same guarantee more directly.
+- **An edit to `realtime/publish.ts` deleted four imports along with the
+  comment block they sat under.** Replacing the leading comment in one
+  edit accidentally took `prismaBase`, `logger`, `roomsForJobEvent` and
+  `PublishableJobEvent` with it. `tsc --noEmit` caught it immediately
+  (`Cannot find name 'logger'`, etc.) before it reached a test or a commit.
+- **The capped-backoff test's own arithmetic was wrong, not the function
+  under test.** The first version asserted that attempts 9 and 10 both sat
+  at the cap; attempt 9 (256,000ms) is still below the 300,000ms ceiling —
+  only attempt 10 (uncapped: 512,000ms) actually gets clamped. Rewritten to
+  compare two attempts clearly on either side of where uncapped growth would
+  have diverged (11 and 20) instead of two adjacent ones that happened not
+  to prove what the assertion claimed.
+- **A test fixture collided on the constraint it was supposed to be testing
+  around.** `tests/queues.test.ts`'s cleanup fixture first created two
+  `IdempotencyKey` rows with distinct `id`s but the identical
+  `(userId, scope, key)` triple — the model's actual unique constraint,
+  which has nothing to do with `id`. Postgres rejected the second insert
+  immediately. Fixed by generating a distinct `key` per row.
+- **`runWorkers.ts`'s first processor-table type was rejected by the
+  compiler, not by a test.** See the `Processor` decision above — a
+  `(job: never) => Promise<void>` table is fine to BUILD but cannot be
+  PASSED to `new Worker()`, since consuming and constructing a heterogeneous
+  function table need contravariance in opposite directions. `tsc` caught it
+  before it ran once.
+- **Backgrounding `npm run dev` / `npm run dev:worker` for a smoke test left
+  `node.exe` processes running after `kill $(cat pid)` reported success** —
+  the same class of leak as an earlier session. On this platform, the PID
+  bash's `$!` captures for a backgrounded `npm run ...` is npm's own wrapper
+  process, not the child `tsx`/`node` process it spawns, so killing it does
+  not cascade. Confirmed via PowerShell's `Get-Process node` and cleared
+  with `Stop-Process -Force`; re-checked after every subsequent background
+  run this phase, and zero were left at the end.

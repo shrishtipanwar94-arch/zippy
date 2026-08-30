@@ -30,7 +30,8 @@ export type Resource =
   | 'driver'
   | 'user'
   | 'auditLog'
-  | 'jobAssignment';
+  | 'jobAssignment'
+  | 'queueAdmin';
 
 type PermissionTable = Record<Role, Partial<Record<Resource, Action[]>>>;
 
@@ -49,6 +50,9 @@ const PERMISSIONS: PermissionTable = {
     // Manual assignment, Phase 4 only. Phase 9 replaces it with the solver and
     // this entry goes with it.
     jobAssignment: ['update'],
+    // Bull Board at /admin/queues — reads queue state, can retry or discard a
+    // job. An operator surface, so it gets the operator role.
+    queueAdmin: ['read'],
     unit: ['read', 'update'],
     technician: ['read'],
     driver: ['read'],

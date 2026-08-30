@@ -3,7 +3,7 @@ import { config } from './infra/config.js';
 import { logger } from './infra/logger.js';
 import { prisma } from './infra/db.js';
 import { redis } from './infra/redis.js';
-import { createRealtimeServer } from './realtime/server.js';
+import { createRealtimeServer, closeRealtimeAdapter } from './realtime/server.js';
 
 /**
  * The web process. Serves the HTTP API and Socket.IO (and, from later in
@@ -29,6 +29,7 @@ async function shutdown(signal: string): Promise<void> {
   // Close sockets first: an open WebSocket keeps the HTTP server alive and
   // `server.close()` would wait for it until the deploy timeout below fired.
   await io.close().catch(() => undefined);
+  await closeRealtimeAdapter().catch(() => undefined);
   server.close(async () => {
     await prisma.$disconnect().catch(() => undefined);
     redis.disconnect();

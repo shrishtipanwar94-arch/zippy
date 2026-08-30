@@ -1728,6 +1728,25 @@ model IdempotencyKey {
   @@map("idempotency_keys")
 }
 
+// EXACTLY-ONCE EFFECTS FOR A QUEUE PROCESSOR.
+// BullMQ guarantees a job is delivered AT LEAST once — a worker can crash after
+// finishing the work but before acknowledging it, and the job is redelivered.
+// A retry, a duplicate enqueue, and a redelivery after a crash all look
+// identical to a processor: the same idempotency key arriving twice. This
+// table is the arbiter. `runIdempotently` (src/queues/idempotent.ts) inserts a
+// row for (queue, idempotency_key) in the SAME transaction as the effect
+// itself; the unique constraint is what makes "already done" a fact the
+// database enforces, not a convention a processor might forget.
+model JobProcessingLog {
+  id             String   @id @default(cuid())
+  queue          String
+  idempotencyKey String   @map("idempotency_key")
+  processedAt    DateTime @default(now()) @map("processed_at")
+
+  @@unique([queue, idempotencyKey])
+  @@map("job_processing_log")
+}
+
 // One LLM call: what went in, what came back, what was extracted. External
 // origin (the model provider), so event_time / received_at both. The LLM
 // classifies and extracts; it never decides (invariant 5).

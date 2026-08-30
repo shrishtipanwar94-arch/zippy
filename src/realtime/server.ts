@@ -15,6 +15,7 @@
 // logs and browser history.
 
 import { Server } from 'socket.io';
+import { createAdapter } from '@socket.io/redis-adapter';
 import type { Server as HttpServer } from 'node:http';
 import type { Socket } from 'socket.io';
 import { config } from '../infra/config.js';
@@ -27,6 +28,7 @@ import { TokenError, verifyAccessToken } from '../auth/tokens.js';
 import { jobRoom, mayRequestJobRoom, standingRoomsFor } from './rooms.js';
 import { setRealtimeServer } from './publish.js';
 import { replayJobEvents } from './replay.js';
+import { createRealtimeRedisConnection } from './redisConnection.js';
 
 // Socket.IO's own type for per-socket state. One field: who this connection is.
 type SocketData = { auth: AuthContext };
@@ -57,10 +59,40 @@ function tokenFrom(socket: Socket): string | null {
   return typeof raw === 'string' && raw.length > 0 ? raw : null;
 }
 
+// Held so `closeRealtimeAdapter()` can disconnect them on shutdown. The
+// adapter stops USING these connections when the Server closes, but does not
+// disconnect them itself — left alone, they would be two open TCP sockets
+// outliving the process they belonged to.
+let adapterConnections: { pubClient: ReturnType<typeof createRealtimeRedisConnection>; subClient: ReturnType<typeof createRealtimeRedisConnection> } | null = null;
+
+export async function closeRealtimeAdapter(): Promise<void> {
+  if (!adapterConnections) return;
+  adapterConnections.pubClient.disconnect();
+  adapterConnections.subClient.disconnect();
+  adapterConnections = null;
+}
+
 export function createRealtimeServer(httpServer: HttpServer): Server {
   const io = new Server(httpServer, {
     cors: { origin: config.corsOrigins, credentials: true },
   });
+
+  // THE REDIS ADAPTER — what makes a room span more than one process.
+  // Socket.IO's default adapter keeps room membership in the memory of the
+  // ONE process running it: `io.to(room).emit()` can only reach a socket this
+  // same `Server` accepted. That is fine with one web process and nothing
+  // else ever publishing. It stops being fine the moment `publish.ts`'s
+  // fallback Emitter (used by the worker process and the simulator CLI) needs
+  // to reach a socket connected HERE — without this adapter that publish
+  // would go out over Redis and nothing would be subscribed to hear it. The
+  // adapter subscribes this process to the same channel the Emitter publishes
+  // on and re-delivers into this `Server`'s own rooms; two ioredis
+  // connections because a subscribing connection can do nothing else once it
+  // subscribes (see redisConnection.ts).
+  const pubClient = createRealtimeRedisConnection('adapter-pub');
+  const subClient = createRealtimeRedisConnection('adapter-sub');
+  adapterConnections = { pubClient, subClient };
+  io.adapter(createAdapter(pubClient, subClient));
 
   io.use((socket, next) => {
     const token = tokenFrom(socket);

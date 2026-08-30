@@ -696,6 +696,10 @@ cleanup (expired holds, stale idempotency keys)
 - A debounce helper for the solver queue — many triggers in a window collapse
   into one run. A re-plan storm is a real failure mode.
 - Bull Board at /admin/queues, dispatcher-only.
+- Add the @socket.io/redis-adapter so events published from the worker
+  process (including simulator-generated ones) reach sockets connected
+  to the web process. Without it, cross-process broadcasts silently drop
+  and only web-process-originated events reach the browser.
 
 INVARIANT 1: Redis holds queues and cache. It NEVER holds a reservation.
 Unit holds live in Postgres.

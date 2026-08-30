@@ -10,6 +10,8 @@ import { healthRouter } from './health.js';
 import { authRouter } from './auth.js';
 import { jobsRouter } from './jobs.js';
 import { intakeRouter } from './intake.js';
+import { authenticate, requirePermission } from './middleware/authenticate.js';
+import { createQueueAdminRouter, BULL_BOARD_PATH } from '../queues/board.js';
 import { errorHandler } from './middleware/errors.js';
 
 /**
@@ -65,6 +67,13 @@ export function createApp(): Express {
   app.use(authRouter);
   app.use(jobsRouter);
   app.use(intakeRouter);
+
+  // Bull Board — dispatcher-only. Mounted with explicit `authenticate` +
+  // `requirePermission`, the same pattern jobs.ts and intake.ts use, and for
+  // the same reason: a router-level `use(authenticate)` with no path would
+  // guard every request that reaches it, including the static files and pages
+  // mounted after this one (see the Phase 4 bug this exact mistake caused).
+  app.use(BULL_BOARD_PATH, authenticate, requirePermission('read', 'queueAdmin'), createQueueAdminRouter());
 
   // THE FRONTEND, served as plain files. No bundler, no build step: the browser
   // loads the ES modules in /public/js directly, and Bootstrap and morphdom

@@ -10,19 +10,46 @@
 //
 // Called only AFTER a transaction commits — see outbox.ts for why.
 
-import type { Server } from 'socket.io';
 import { prismaBase } from '../infra/prismaBase.js';
 import { logger } from '../infra/logger.js';
 import { roomsForJobEvent } from './rooms.js';
 import type { PublishableJobEvent } from './outbox.js';
 
-// The realtime server is optional. The simulator, the seed and the test suite
-// all write job events in processes with no Socket.IO attached, and they must
-// not crash for want of a listener.
-let server: Server | null = null;
+// TWO WAYS TO REACH A BROWSER, ONE INTERFACE. The web process holds the real
+// Socket.IO `Server` that browsers actually connect to, and `setRealtimeServer`
+// installs it. Every OTHER process that writes a job event — the worker, the
+// simulator CLI — has no browser connected to it at all, so `.to(rooms).emit()`
+// on a real `Server` there would have nothing to deliver to. Those processes
+// fall back to a lightweight `Emitter` (`@socket.io/redis-emitter`) that
+// PUBLISHES the same message over Redis instead of delivering it directly; the
+// web process's `Server`, wired to `@socket.io/redis-adapter` in
+// realtime/server.ts, subscribes to that channel and delivers it to whichever
+// of ITS sockets are in the room. `Server.to().emit()` and `Emitter.to().emit()`
+// share the same shape, so `publishJobEvents` below does not need to know or
+// care which one it is holding — that is what `Emittable` captures.
+type Emittable = { to(rooms: string[]): { emit(event: string, payload: unknown): void } };
 
-export function setRealtimeServer(io: Server | null): void {
+let server: Emittable | null = null;
+
+export function setRealtimeServer(io: Emittable | null): void {
   server = io;
+}
+
+// Built once, lazily, the first time a non-web process needs to publish. Not
+// built eagerly at import time: the seed and most tests never publish
+// anything, and eagerly opening a Redis connection for them would be a
+// connection they never needed.
+let fallbackEmitter: Emittable | null = null;
+
+async function emitterFallback(): Promise<Emittable> {
+  if (!fallbackEmitter) {
+    const [{ Emitter }, { createRealtimeRedisConnection }] = await Promise.all([
+      import('@socket.io/redis-emitter'),
+      import('./redisConnection.js'),
+    ]);
+    fallbackEmitter = new Emitter(createRealtimeRedisConnection('emitter')) as unknown as Emittable;
+  }
+  return fallbackEmitter;
 }
 
 // What a client receives. Deliberately flat and small: the sequence is what a
@@ -37,8 +64,26 @@ export type JobEventMessage = {
 };
 
 export async function publishJobEvents(events: PublishableJobEvent[]): Promise<void> {
-  if (!server || events.length === 0) return;
+  if (events.length === 0) return;
 
+  // BEST-EFFORT, DELIBERATELY. Postgres is the source of truth (invariant 1);
+  // by the time this runs, the transaction that produced these events has
+  // already committed. A browser not finding out about it is a worse UX, not
+  // a data-loss bug — the client's reconnect replay (replay.ts) catches it up
+  // from `job_events` regardless. So a failure here — Redis unreachable, the
+  // emitter's connection not yet ready — is logged and swallowed, never
+  // thrown back at the caller. Throwing would turn "the job was created but a
+  // browser has not heard about it yet" into "creating the job failed",
+  // which is not true and must never be reported to a client as 500.
+  try {
+    const target = server ?? (await emitterFallback());
+    await routeAndEmit(target, events);
+  } catch (error) {
+    logger.error({ err: error, count: events.length }, 'failed to publish job events');
+  }
+}
+
+async function routeAndEmit(target: Emittable, events: PublishableJobEvent[]): Promise<void> {
   // Routing needs the job's zone and tenant, which the event itself does not
   // carry. One read per job, after commit and outside the transaction, so a
   // slow read cannot hold a write lock open.
@@ -69,6 +114,6 @@ export async function publishJobEvents(events: PublishableJobEvent[]): Promise<v
     // `to()` takes the whole list and unions it, and Socket.IO delivers once
     // per socket — a dispatcher in both the job room and the zone room gets
     // one copy, not two.
-    server.to(roomsForJobEvent(job)).emit('job:event', message);
+    target.to(roomsForJobEvent(job)).emit('job:event', message);
   }
 }
