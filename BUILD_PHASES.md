@@ -66,8 +66,8 @@ There is no separate testing document. Every phase has a **Check** block, and th
 
 | Kind | Runs | Command |
 |---|---|---|
-| **Unit** — engine logic | pure functions, no DB | `npm run test` |
-| **Integration** — routes, auth | Supertest against the app | `npm run test` |
+| **Unit** — engine logic | pure functions, no DB | `npm run test:fast` |
+| **Integration** — routes, auth | Supertest against the app | `npm run test:fast` |
 | **Concurrency** — invariants | **real Postgres via testcontainers** | `npm run test:concurrency` |
 | **Evaluation** — policy comparison | seeded replay, imports production engine | `npm run eval` |
 | **AI eval** — extraction quality | labelled set, offline | `npm run eval:ai` |
@@ -118,8 +118,9 @@ its own process now.
   dev / dev:worker      tsx watch src/index.ts | src/worker.ts
   start / start:worker  node dist/index.js | dist/worker.js
   build / typecheck     tsc | tsc --noEmit
-  test / test:watch     vitest run | vitest
-  test:concurrency      vitest run tests/concurrency
+  test                  test:fast && test:concurrency  (everything)
+  test:fast / test:watch  vitest run | vitest   (no container)
+  test:concurrency      vitest run --config vitest.concurrency.config.ts
   lint                  eslint src
   db:migrate/db:deploy  prisma migrate dev | deploy
   db:seed               tsx prisma/seed.ts
@@ -539,7 +540,7 @@ DO NOT
 
 **Check:**
 ```powershell
-npm run test -- rbac tenancy
+npm run test:fast -- rbac tenancy
 ```
 Then break it: strip the tenant filter from one query and re-run. The Prisma extension must still return nothing. If another tenant's rows come back, you have a leak.
 
@@ -788,7 +789,7 @@ DO NOT
 
 **Check:**
 ```powershell
-npm run test -- candidates
+npm run test:fast -- candidates
 Select-String -Path src/engine/*.ts -Pattern "@prisma|ioredis"   # MUST be empty
 ```
 ✅ Option count equals the number of (unit, technician) pairs. ✅ Broad-capability technician shows higher covered probability than the nearest. ✅ Two points either side of a divider produce a road time far larger than the straight-line time. ✅ Stop the OSRM container → travel times fall back to haversine and are flagged DEGRADED, not silently wrong.
@@ -833,7 +834,7 @@ DO NOT
 - do not touch the database from this module
 ````
 
-**Check:** `npm run test -- feasibility` — one passing test per code, ten total. An EV job with no certified technician produces `CAPABILITY_MISSING` in **rejected**, not a high-cost feasible option.
+**Check:** `npm run test:fast -- feasibility` — one passing test per code, ten total. An EV job with no certified technician produces `CAPABILITY_MISSING` in **rejected**, not a high-cost feasible option.
 
 **Close:** `log this phase in DECISIONS.log` → `git commit -m "phase 7: feasibility"`
 
@@ -880,7 +881,7 @@ DO NOT
 
 **Check:**
 ```powershell
-npm run test -- cost
+npm run test:fast -- cost
 Select-String -Path src/engine/cost.ts -Pattern "fairness|gini|earnings|safety"
 # must be empty
 ```
@@ -930,7 +931,7 @@ DO NOT
 
 **Check:**
 ```powershell
-npm run test -- allocation
+npm run test:fast -- allocation
 npm run eval -- --scenario capability-scarcity --policies nearest,global
 Select-String -Path package.json -Pattern "or-tools|munkres|scipy"  # empty
 ```
@@ -1095,7 +1096,7 @@ DO NOT
 
 **Check:**
 ```powershell
-npm run test -- saga
+npm run test:fast -- saga
 # then manually: start a dispatch, kill the process between leg 2 and leg 3,
 # restart
 ```
@@ -1456,7 +1457,7 @@ DO NOT
 
 **Check:**
 ```powershell
-npm run test -- money ledger cancellation
+npm run test:fast -- money ledger cancellation
 ```
 ✅ The balance assertion runs after every money test and never fails.
 ✅ Cash collection drives a technician balance negative; the payout nets it rather than sending a negative amount.
@@ -1667,7 +1668,7 @@ DO NOT
 **Check:**
 ```powershell
 npm run eval -- --policies nearest,skill-aware,global
-npm run test -- candidates -t "option count"
+npm run test:fast -- candidates -t "option count"
 ```
 ✅ `stockoutInducedFailures`: nearest > skill-aware > global. ✅ Option count still equals pair count.
 

@@ -15,9 +15,10 @@
 // so a mock would be testing the mock's own idea of what an UPDATE does.
 //
 // COST, STATED HONESTLY: starting a container and running migrations takes
-// seconds, which is why this suite is `npm run test:concurrency` and not part
-// of the default `npm test`. The build plan's own check is that it takes more
-// than a second; a fast run here would mean no container started.
+// seconds. `npm test` runs this suite — the default is the safe one — and
+// `npm run test:fast` is the inner-loop command that skips it. The build
+// plan's own check is that this takes more than a second; a fast run here
+// would mean no container started.
 
 import { execFileSync } from 'node:child_process';
 import { createRequire } from 'node:module';

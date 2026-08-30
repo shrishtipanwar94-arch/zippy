@@ -438,8 +438,10 @@ Test infrastructure:
 - `vitest.concurrency.config.ts` — its own config: long timeouts,
   `fileParallelism: false`. `vitest.config.ts` now EXCLUDES
   `tests/concurrency/**` so the default suite stays fast.
-- `test:concurrency` is now `vitest run --config vitest.concurrency.config.ts`,
-  and `test:all` chains it after `test` so "all tests pass" is one command.
+- `test:concurrency` is now `vitest run --config vitest.concurrency.config.ts`.
+  `test` runs `test:fast && test:concurrency` — the default command is the
+  complete one — and `test:fast` is the inner-loop suite that skips the
+  container.
 
 Suite totals: 251 across 18 files (default), 9 across 2 files (concurrency,
 17s wall clock with a warm image). `tsc --noEmit`, `eslint src evaluation`,
@@ -508,8 +510,10 @@ Suite totals: 251 across 18 files (default), 9 across 2 files (concurrency,
   env var is set.
   **Why not:** a suite that is skipped by default is a suite nobody notices
   has broken.
-  **Tradeoff:** `npm test` no longer runs everything, so "all tests pass" now
-  requires two commands. Stated in the scripts rather than assumed.
+  **Tradeoff:** none that survived. The first version of this left `npm test`
+  as the fast-only suite, which made the obvious command the incomplete one;
+  the scripts were renamed so `test` runs both and `test:fast` is the opt-out.
+  See the weakness entry below, which this closes.
 
 ### Concurrency
 
@@ -596,13 +600,22 @@ no mocks.
   named as guesses in their own comments. Nothing has observed a real
   technician's response latency, though `response_latency_ms` is now recorded
   on every answered offer so Phase 13 can.
-- **`npm test` no longer means "all tests"** — it excludes the concurrency
-  suite so it can stay fast. `test:all` (`npm run test && npm run
-  test:concurrency`) exists so the full run is still one command, but the
-  weakness is not fully closed: the short name is still the partial one, so a
-  contributor who types the obvious thing gets the partial answer, and CI has
-  to be pointed at `test:all` deliberately. Renaming the scripts so the safe
-  option is the default would close it properly and is not done.
+- ~~**`npm test` no longer means "all tests".**~~ **CLOSED.** Recorded first
+  as a real weakness — the concurrency suite was excluded from `npm test` so
+  the inner loop stayed fast, which left the command everyone types by reflex
+  as the one that skips the proofs. A `test:all` alias narrowed it without
+  closing it, because the short name was still the partial one. The scripts
+  are now named the other way round: `test` = `test:fast && test:concurrency`,
+  and `test:fast` is the explicit opt-out. The default is the safe option, so
+  there is nothing left to remember.
+
+  ONE CONSEQUENCE, worth knowing before it bites: `npm run test -- <filter>`
+  no longer works, because npm appends arguments to the END of a chained
+  script, so the filter lands on `test:concurrency` alone — which then matches
+  no files and exits 1. Every filtered invocation has to name the fast suite:
+  `npm run test:fast -- allocation`. The eight such commands in
+  BUILD_PHASES.md were updated when the rename was made; anything typed from
+  memory will not have been.
 
 ### Concepts now genuinely in use
 
