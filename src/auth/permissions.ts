@@ -18,11 +18,11 @@ import type { Role } from '@prisma/client';
 import type { AuthContext } from './context.js';
 
 export type Action = 'read' | 'create' | 'update' | 'delete';
-// `jobAssignment` is its own resource rather than a role check in the route.
-// A TECHNICIAN legitimately has `update` on `job` (they progress their own
-// work), so "may update a job" is not the same question as "may decide which
-// unit goes to it" — and the answer to both has to stay readable in one table
-// instead of an if-statement in a handler.
+// `queueAdmin` and `solverRun` are their own resources rather than role
+// checks in a route. A TECHNICIAN legitimately has `update` on `job` (they
+// progress their own work), so "may update a job" is not the same question as
+// "may run the solver" — and the answer to both has to stay readable in one
+// table instead of an if-statement in a handler.
 export type Resource =
   | 'job'
   | 'unit'
@@ -30,8 +30,8 @@ export type Resource =
   | 'driver'
   | 'user'
   | 'auditLog'
-  | 'jobAssignment'
-  | 'queueAdmin';
+  | 'queueAdmin'
+  | 'solverRun';
 
 type PermissionTable = Record<Role, Partial<Record<Resource, Action[]>>>;
 
@@ -47,9 +47,10 @@ const PERMISSIONS: PermissionTable = {
   },
   DISPATCHER: {
     job: ['read', 'create', 'update', 'delete'],
-    // Manual assignment, Phase 4 only. Phase 9 replaces it with the solver and
-    // this entry goes with it.
-    jobAssignment: ['update'],
+    // Running the solver and reading its plans. DISPATCHER-only: a plan is a
+    // recommendation about the whole fleet, not something one driver or
+    // technician has any business triggering.
+    solverRun: ['read'],
     // Bull Board at /admin/queues — reads queue state, can retry or discard a
     // job. An operator surface, so it gets the operator role.
     queueAdmin: ['read'],

@@ -1,17 +1,20 @@
-// THE SOLVER QUEUE — PLUMBING ONLY. "Background work exists before anything
-// depends on it."
+// THE SOLVER QUEUE — PLUMBING, STILL WITHOUT A TRIGGER.
 //
-// The solver itself (candidate generation, feasibility, the cost function,
-// allocation) is Phases 6-9. Nothing in this codebase calls `enqueueSolve` yet
-// — there is no zone-level trigger to call it from — and that is deliberately
-// correct for this phase, not an oversight. What has to exist NOW, so those
-// phases inherit it instead of inventing it under deadline, is: a queue that
-// exists, a processor that is idempotent and dead-letters on exhaustion, and
-// the debounce that keeps a burst of triggers from becoming a burst of runs.
+// The solver itself now exists: src/engine/solve.ts, reached synchronously by
+// POST /solve when a dispatcher presses Solve. What does NOT exist yet is
+// anything that decides on its own that a zone needs re-planning — a new job
+// arriving, a diagnosis changing, a technician declining an offer. Those
+// triggers are Phase 13 (re-dispatch), so nothing in this codebase calls
+// `enqueueSolve`, and this processor has no real work to do until it does.
 //
-// `enqueueSolve` is exported so Phase 6+ has a stable name to call — a re-plan
-// trigger (a new job, a diagnosis change, a technician decline) becomes one
-// call to this, not a new queue.add() scattered at each call site.
+// That is deliberate rather than an oversight, and the ordering is the point:
+// the queue, an idempotent processor, dead-lettering on exhaustion, and the
+// debounce that keeps a burst of triggers from becoming a burst of runs all
+// existed before there was a solver to run — so Phase 13 inherits them
+// instead of inventing them under deadline.
+//
+// `enqueueSolve` is the stable name a trigger will call, so a re-plan becomes
+// one call to this rather than a new queue.add() scattered at each call site.
 
 import type { Job } from 'bullmq';
 import { queues } from '../queues/queues.js';
@@ -21,7 +24,9 @@ import { runIdempotently } from '../queues/idempotent.js';
 // How long a burst of triggers for the same zone is allowed to collapse into
 // one run. Chosen to comfortably outlast the handful of job events one
 // breakdown's intake produces in a row, without making a genuinely urgent
-// re-plan wait long. Revisit once Phase 9 has a real run to time.
+// re-plan wait long. Still an unmeasured guess: Phase 9's solve reports its
+// own `wallClockMs`, but with no trigger firing there is nothing yet to
+// measure a burst against.
 const SOLVE_DEBOUNCE_MS = 2_000;
 
 export async function enqueueSolve(zoneId: string): Promise<void> {
@@ -30,9 +35,11 @@ export async function enqueueSolve(zoneId: string): Promise<void> {
 
 export async function processSolver(job: Job<{ zoneId: string }>): Promise<void> {
   await runIdempotently('solver', job.id!, async () => {
-    // No allocation logic here — that is exactly what Phase 6-9 add. This
-    // proves the queue is reachable, idempotent, and dead-letters correctly
-    // before anything real depends on any of those properties.
-    await job.log(`would solve zone ${job.data.zoneId} — no solver exists yet (Phase 6-9)`);
+    // Deliberately does not call solve(). A background re-plan is only
+    // useful if it can act on what it finds, and acting means holding a unit
+    // and offering the job — Phases 11 and 12. Running the solver here today
+    // would write a SolverRun nobody reads and change nothing, so this stays
+    // a no-op until Phase 13 gives it a reason to exist.
+    await job.log(`would re-plan zone ${job.data.zoneId} — no re-dispatch trigger yet (Phase 13)`);
   });
 }

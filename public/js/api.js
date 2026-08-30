@@ -35,12 +35,8 @@ export function listJobs() {
   return request('GET', '/jobs');
 }
 
-export function listUnits() {
-  return request('GET', '/units');
-}
-
-export function assignUnit(jobId, unitId) {
-  return request('PATCH', `/jobs/${jobId}/assign`, { unitId });
+export function solveJobs() {
+  return request('POST', '/solve');
 }
 
 export function createIntake(payload) {

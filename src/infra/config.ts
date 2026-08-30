@@ -71,6 +71,15 @@ const envSchema = z.object({
   // Assumed average speed once the road-factor distance is known. 30 km/h is
   // a conservative mixed city-traffic figure, not a measured one.
   ROUTING_FALLBACK_SPEED_KMH: z.coerce.number().positive().default(30),
+
+  // ZONE PARTITIONING (Phase 9). Above this many candidate options in one
+  // solve, the solver splits the jobs by zone and solves each zone
+  // separately rather than as one matrix. The Hungarian algorithm is O(n^3),
+  // so a single citywide matrix grows faster than the arrival rate does.
+  // Deliberately configurable rather than hardcoded: Phase 10's harness
+  // measures what the partitioning costs in decision quality, and that
+  // measurement is only meaningful if the threshold can be moved.
+  SOLVER_ZONE_PARTITION_THRESHOLD: z.coerce.number().int().positive().default(400),
 });
 
 function loadConfig() {

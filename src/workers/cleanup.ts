@@ -12,8 +12,11 @@
 // written now, against the real schema, so Phase 11 does not have to
 // remember cleanup owes it something; it just starts finding real rows.
 //
-// THE RELEASE IS CONDITIONAL, the same shape as assignUnit.ts's claim: an
-// UPDATE on (id, version, status), not a blind write. A hold can be released
+// THE RELEASE IS CONDITIONAL — an UPDATE matching on (id, version, status)
+// rather than a blind write. (This used to point at Phase 4's manual
+// assignUnit.ts as the other example of the pattern; Phase 9 deleted that
+// file along with the dropdown it served, and Phase 11's holds will be the
+// next real user of the same shape.) A hold can be released
 // by an operator or consumed by a saga leg at the exact moment this sweep
 // decides it looks expired; the version check is what stops the sweep from
 // overwriting a release that already happened for a different reason.

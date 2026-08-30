@@ -24,8 +24,9 @@ const state = {
   jobs: {},
   jobOrder: [],
 
-  // The assignment dropdown's options. Loaded once over HTTP.
-  units: [],
+  // The most recent solver result: three plans, plus the counts behind them.
+  // Null until a dispatcher presses Solve.
+  solve: null,
 
   // jobId -> events, in sequence order
   events: {},
@@ -93,8 +94,8 @@ export function setJobs(jobs) {
   }
 }
 
-export function setUnits(units) {
-  state.units = units;
+export function setSolve(result) {
+  state.solve = result;
 }
 
 export function setActiveJob(jobId) {

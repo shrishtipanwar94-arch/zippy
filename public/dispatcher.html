@@ -36,7 +36,16 @@
         Jobs on the board: <span data-field="job-count">0</span>. Rows are patched by
         <code>data-job-id</code>; the table is never rebuilt.
       </p>
-      <table class="table table-sm" data-panel="jobs-table" data-assign="true">
+      <button data-action="solve" class="btn btn-primary mb-2">Solve — plan every pending job</button>
+      <span data-field="solve-summary" class="ms-2 small text-muted"></span>
+
+      <!-- THE THREE PLANS. Phase 4's per-row unit dropdown lived in this page
+           and is gone: a dispatcher chooses between whole plans now, not
+           between units one job at a time. Nothing here reserves anything —
+           holds are Phase 11. -->
+      <div class="row g-2 mb-3" data-panel="plans"></div>
+
+      <table class="table table-sm" data-panel="jobs-table">
         <thead>
           <tr>
             <th>job</th>
@@ -45,9 +54,6 @@
             <th>events</th>
             <th>latest</th>
             <th>unit</th>
-            <!-- Manual pick, Phase 4 only. Phase 9 replaces this column with
-                 the solver's decision and this control is deleted. -->
-            <th>assign</th>
           </tr>
         </thead>
         <tbody></tbody>

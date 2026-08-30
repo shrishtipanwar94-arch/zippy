@@ -10,6 +10,7 @@ import { healthRouter } from './health.js';
 import { authRouter } from './auth.js';
 import { jobsRouter } from './jobs.js';
 import { intakeRouter } from './intake.js';
+import { solveRouter } from './solve.js';
 import { authenticate, requirePermission } from './middleware/authenticate.js';
 import { createQueueAdminRouter, BULL_BOARD_PATH } from '../queues/board.js';
 import { errorHandler } from './middleware/errors.js';
@@ -67,6 +68,7 @@ export function createApp(): Express {
   app.use(authRouter);
   app.use(jobsRouter);
   app.use(intakeRouter);
+  app.use(solveRouter);
 
   // Bull Board — dispatcher-only. Mounted with explicit `authenticate` +
   // `requirePermission`, the same pattern jobs.ts and intake.ts use, and for
