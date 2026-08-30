@@ -47,6 +47,12 @@ export type LatLng = { lat: number; lng: number };
 
 export type TravelTimeEstimate = {
   minutes: number;
+  // Road distance, not straight-line — the number a fuel or wear-and-tear
+  // cost is actually proportional to. OSRM returns it alongside duration in
+  // the same response, so this costs no extra round trip; the haversine
+  // fallback fills it with the same road-factor estimate it derives minutes
+  // from, and flags itself degraded exactly as before.
+  kilometres: number;
   method: 'OSRM' | 'HAVERSINE_FALLBACK';
   // Mirrors `method === 'HAVERSINE_FALLBACK'`, kept as its own boolean rather
   // than making every caller compare strings — this is the field invariant 8
@@ -61,7 +67,7 @@ function osrmCoordinate(point: LatLng): string {
 function haversineFallback(from: LatLng, to: LatLng): TravelTimeEstimate {
   const roadKm = distanceKm(from.lat, from.lng, to.lat, to.lng) * config.ROUTING_FALLBACK_ROAD_FACTOR;
   const minutes = (roadKm / config.ROUTING_FALLBACK_SPEED_KMH) * 60;
-  return { minutes, method: 'HAVERSINE_FALLBACK', degraded: true };
+  return { minutes, kilometres: roadKm, method: 'HAVERSINE_FALLBACK', degraded: true };
 }
 
 // Both public functions take the OSRM base URL as their last argument,
@@ -83,7 +89,7 @@ async function fetchOsrm(url: string): Promise<Response> {
   }
 }
 
-type OsrmRouteResponse = { code: string; routes?: { duration: number }[] };
+type OsrmRouteResponse = { code: string; routes?: { duration: number; distance: number }[] };
 
 // ONE-TO-ONE, via OSRM's /route endpoint. `overview=false` — no route
 // geometry is requested, because nothing here draws a map; asking for it
@@ -103,14 +109,18 @@ export async function travelTime(
     const route = body.routes?.[0];
     if (body.code !== 'Ok' || !route) throw new Error(`OSRM could not find a route: ${body.code}`);
 
-    return { minutes: route.duration / 60, method: 'OSRM', degraded: false };
+    return { minutes: route.duration / 60, kilometres: route.distance / 1000, method: 'OSRM', degraded: false };
   } catch (error) {
     logger.warn({ err: error }, 'OSRM /route unreachable or failed — falling back to haversine');
     return haversineFallback(from, to);
   }
 }
 
-type OsrmTableResponse = { code: string; durations?: (number | null)[][] };
+type OsrmTableResponse = {
+  code: string;
+  durations?: (number | null)[][];
+  distances?: (number | null)[][];
+};
 
 // MANY-TO-ONE, via OSRM's /table endpoint — one HTTP round trip for every
 // candidate unit's time to the job, instead of N separate /route calls.
@@ -133,27 +143,29 @@ export async function travelTimeMatrix(
     const destinationIndex = origins.length;
     const url =
       `${baseUrl}/table/v1/driving/${coordinates}` +
-      `?sources=${sources}&destinations=${destinationIndex}&annotations=duration`;
+      `?sources=${sources}&destinations=${destinationIndex}&annotations=duration,distance`;
 
     const response = await fetchOsrm(url);
     if (!response.ok) throw new Error(`OSRM /table responded ${response.status}`);
 
     const body = (await response.json()) as OsrmTableResponse;
-    if (body.code !== 'Ok' || !body.durations) {
+    if (body.code !== 'Ok' || !body.durations || !body.distances) {
       throw new Error(`OSRM could not build a table: ${body.code}`);
     }
+    const distances = body.distances;
 
     return body.durations.map((row, index) => {
       const seconds = row[0];
+      const metres = distances[index]?.[0];
       // OSRM returns null for one pair it could not connect through the road
       // graph (an origin on an unconnected fragment of the map) even when the
       // rest of the table succeeded. That failure belongs to THAT ONE origin,
       // not the whole batch — only it falls back, not every unit in the fleet.
-      if (seconds === null || seconds === undefined) {
+      if (seconds === null || seconds === undefined || metres === null || metres === undefined) {
         logger.warn({ origin: origins[index] }, 'OSRM found no route for this origin — falling back to haversine');
         return haversineFallback(origins[index]!, destination);
       }
-      return { minutes: seconds / 60, method: 'OSRM', degraded: false };
+      return { minutes: seconds / 60, kilometres: metres / 1000, method: 'OSRM', degraded: false };
     });
   } catch (error) {
     logger.warn(

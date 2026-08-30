@@ -21,7 +21,7 @@ Entry template:
 into INTERVIEW.md; `git log` and the entries' own commits remain the record of
 what was decided when. Phase 5 appends below.*
 
-## Phase 5 — Redis and BullMQ / 2026-08-30 / Commit: (uncommitted)
+## Phase 5 — Redis and BullMQ / 2026-08-30 / Commit: c1596f4 ("phase 5: queues")
 
 ### Built
 
@@ -361,7 +361,7 @@ graceful shutdown extended from "stop accepting connections" (Phase 0) to
   with `Stop-Process -Force`; re-checked after every subsequent background
   run this phase, and zero were left at the end.
 
-## Phase 6 — Candidate generation / 2026-08-30 / Commit: (uncommitted)
+## Phase 6 — Candidate generation / 2026-08-30 / Commit: 9a1fb5b ("phase 6: candidate generation")
 
 ### Built
 
@@ -649,7 +649,7 @@ highway") rather than asserting it from what OSRM's documentation promises.
   with a genuine change (falling back to an arbitrary technician for an
   uncrewed unit), which did turn the intended test red.
 
-## Phase 7 — Feasibility / 2026-08-30 / Commit: (uncommitted)
+## Phase 7 — Feasibility / 2026-08-30 / Commit: 3c4f89b ("phase 7: feasibility")
 
 ### Built
 
@@ -855,3 +855,270 @@ data a UI renders, not a side channel a log line would bury.
   ratio, shift, SLA, a stub firing, swallowing the snapshot-integrity error)
   caught its corresponding test on the first attempt — no further surprises
   there.
+
+## Phase 8 — Cost function / 2026-08-30 / Commit: (uncommitted)
+
+### Built
+
+`src/engine/cost.ts` — the five-term weighted sum, and the terms as
+individually exported functions so each is testable on its own:
+`expectedTimeToResolutionMinutes`, `capabilityShortfallRisk`, `slaRisk`,
+`operationalCostPaise`, and `scoreOption` composing them into a
+`CostBreakdown`. Three named weight vectors in `WEIGHT_VECTORS`:
+`FASTEST_RESOLUTION`, `LOWEST_COST`, `BALANCED`. Zero imports from prisma or
+redis, and — per this phase's own check — the file contains none of
+`fairness|gini|earnings|safety`.
+
+`src/engine/durations.ts` — the per-fault duration model the expected-time
+term is computed from. `diagnoseMinutes(fault)` and `resolveMinutes(fault)`
+for all twelve fault codes, plus `escalationMinutes(fault)` composed from
+`REDISPATCH_COORDINATION_MINUTES` (12) + `SECOND_DISPATCH_TRAVEL_MINUTES`
+(25) + `resolveMinutes(fault)`.
+
+`src/engine/ranking.ts` — `rankOptions`, `comparatorFor`, and the two
+comparators `byCostThenArrival` / `byArrivalThenCost`. This is where
+invariant 4's lexicographic ordering lives; see Decisions for why it is not
+in cost.ts.
+
+Extended from earlier phases rather than duplicated:
+- `src/infra/routing.ts` — `TravelTimeEstimate` gains `kilometres`. OSRM
+  returns distance in the same `/route` response and via
+  `annotations=duration,distance` on `/table`, so this costs no extra round
+  trip; the haversine fallback fills it from the same road-factor figure it
+  already derives minutes from.
+- `src/engine/candidates.ts` — `DispatchOption` gains `estimatedTravelKm`
+  (so `travelDistance` is a measured road distance, not a mislabelled
+  duration) and `resolvableFaults` (so the duration model can ask WHICH
+  faults, not just how much probability mass). `JobForDispatch` gains
+  `safetyLevel`, read only by ranking.ts.
+
+Tests: `tests/cost.test.ts` (24). Suite total 214 across 15 files.
+`tsc --noEmit`, `eslint src`, `npm run build` all clean.
+
+Measured on the build plan's own three named checks, printed rather than only
+asserted:
+- 2km jump-start-only unit: 48.50 min expected resolution. 7km
+  broad-capability unit: 44.00 min. Further away, fixed sooner.
+- NORMAL orders `far-broad` (44.2) then `near-narrow` (53.9); HIGH_RISK
+  reverses it on identical cost totals.
+- FASTEST_RESOLUTION and BALANCED pick `far-broad`; LOWEST_COST picks
+  `near-narrow`.
+
+### Decisions
+
+- **Decision:** the invariant-4 lexicographic comparator lives in
+  `src/engine/ranking.ts`, not in `cost.ts`.
+  **Why:** the build plan's own check greps cost.ts for the string `safety`
+  and requires no match. That check cannot be satisfied by a file that reads
+  `job.safetyLevel`. Rather than working around the grep, the grep is
+  correctly detecting a design fact: a comparator that WRAPS a ranking is not
+  part of the thing being wrapped, and putting it in the cost file would put
+  it exactly where it must never be — inside the weighted sum's own module,
+  one refactor away from becoming a term.
+  **Alternative:** keep everything in cost.ts and reach `safetyLevel`
+  indirectly (a boolean parameter, a differently-named field) to dodge the
+  grep.
+  **Why not:** that is defeating the check rather than passing it, and it
+  would leave the comparator sitting next to five weighted terms with nothing
+  structural stopping a future edit from making it a sixth.
+  **Tradeoff:** two files instead of one, and a caller must remember that
+  `scoreOption` alone does not order anything — `rankOptions` is the entry
+  point that produces a decision.
+
+- **Decision:** `escalationMinutes` is composed from three named parts, and
+  varies per fault through the third of them.
+  **Why:** the build plan is explicit that escalation must model a real
+  second dispatch — wait for a new unit, its travel, its resolve time — and
+  not be a flat penalty. The variation is what makes the term mean anything:
+  a mis-dispatch to a tyre change and a mis-dispatch to a high-voltage fault
+  are not the same mistake, and a single constant says they are.
+  **Alternative:** one `MIS_DISPATCH_PENALTY_MINUTES` constant.
+  **Why not:** it would make `expectedTimeToResolution` insensitive to which
+  fault was mis-diagnosed, which is most of what the term exists to express.
+  **Tradeoff:** `SECOND_DISPATCH_TRAVEL_MINUTES` (25) is a single modelled
+  figure, because the second unit is by definition not chosen yet — there is
+  no origin to route from. So escalation is per-fault in its repair time but
+  not in its travel time. A scarcity-aware version (a rarer capability means
+  a further replacement) is computable from the snapshot and is not done.
+
+- **Decision:** every term keeps its own natural unit — minutes, kilometres,
+  two bare probabilities, paise — and the weights carry the unit conversion
+  as well as the preference.
+  **Why:** normalising every term to [0,1] first would need a scale for each
+  (what is the maximum plausible resolution time?), and every one of those
+  scales would be another invented constant with no measurement behind it.
+  Keeping raw units means `CostBreakdown` can show a dispatcher "44 minutes"
+  and "7 km", not "0.62" and "0.35".
+  **Alternative:** normalise each term to a 0-1 range before weighting.
+  **Why not:** more unmeasured constants, and a less explainable breakdown.
+  **Tradeoff:** the weight numbers look wildly inconsistent at a glance —
+  1.0 next to 0.0004 — and are only comparable once you know the term's
+  magnitude. Documented at the weights themselves, but it is a real
+  readability cost.
+
+- **Decision:** `capabilityShortfallRisk` recomputes the shortfall by summing
+  over the fault codes rather than returning `1 - coveredFaultProbability`.
+  **Why:** the identity holds only while the distribution sums to exactly 1.
+  A distribution that has drifted — a bug upstream, a hand-built test fixture
+  — should produce a visibly odd risk number rather than a silently plausible
+  one derived from an assumption that no longer holds.
+  **Alternative:** the one-line subtraction.
+  **Why not:** it hides the drift instead of exposing it.
+  **Tradeoff:** a second loop over twelve faults per option, and two places
+  that could disagree if one is edited without the other.
+
+- **Decision:** `slaRisk` measures how much of the REMAINING window an
+  arrival consumes, not whether it breaches.
+  **Why:** feasibility (Phase 7) already rejects the options that would
+  breach, with `SLA_UNREACHABLE`. Everything reaching the cost function fits
+  the window, so "would it breach" is a constant `false` and carries no
+  information. What is left to express is that fitting with thirty seconds to
+  spare is worse than fitting with twenty minutes to spare.
+  **Alternative:** a breach probability, or expected minutes of overrun.
+  **Why not:** both are zero for every option the cost function ever sees.
+  **Tradeoff:** the term is a proxy for schedule pressure rather than a
+  probability of anything, despite being typed `'probability'` as a unit
+  label. The label is about its 0-1 range, not about it being a real
+  likelihood.
+
+### Concurrency
+
+None. `scoreOption` and `rankOptions` are pure functions over an already
+frozen snapshot and an explicitly passed `now`, with no shared mutable state
+and no I/O — the same shape as candidates.ts and feasibility.ts, for the same
+reason: a seeded replay must produce identical rankings, and anything reading
+a clock or a database from inside the ranking would break that. `rankOptions`
+does not mutate the array it is given (asserted in a test), so a caller
+holding the feasible list from Phase 7 still has it in its original order
+afterwards.
+
+### Weaknesses introduced
+
+- **Every duration in `durations.ts` is a plausible figure, not a measured
+  one.** Twenty-four numbers (diagnose and resolve for twelve faults) plus
+  the two escalation constants, all hand-set. They are internally consistent
+  and ordered sensibly, but no historical job data exists to fit them
+  against, and the expected-time term is only as good as they are.
+- **`SECOND_DISPATCH_TRAVEL_MINUTES` is one flat number** even though the
+  whole point of the escalation model is that a flat number is inadequate.
+  The travel component of a re-dispatch does not vary by fault or by how
+  scarce the needed capability is, though both should affect it — a rarer
+  capability genuinely means a further replacement unit.
+- **The weight vectors are unvalidated.** They produce the three orderings
+  the build plan's checks describe, which is evidence they are not
+  nonsensical, but not evidence they are good. Nothing has compared them
+  against each other on a realistic run — that is Phase 10's job, and until
+  then "BALANCED" is a name, not a measured balance point.
+- **`FUEL_AND_WEAR_PAISE_PER_KM` and `LABOUR_PAISE_PER_MINUTE` are invented.**
+  Rs 12/km and Rs 300/hour are plausible Indian service-fleet figures with no
+  source behind them; `operationalCost` is therefore directionally right and
+  numerically arbitrary.
+- **Nothing calls `rankOptions` in production.** The whole pipeline —
+  candidates, feasibility, cost, ranking — is still only assembled inside
+  tests. Phase 9 wires it into a real solver run, and only then does any of
+  this touch a real job.
+- **`slaRisk`'s `'probability'` unit label is a range description, not a
+  claim about likelihood** (see Decisions). A UI rendering it as "23% chance
+  of breach" would be wrong.
+
+### Concepts now genuinely in use
+
+Expected value over a probability distribution as a decision input rather
+than a summary statistic — the fault distribution intake produced is
+consumed here as a weighting over outcomes, not collapsed to its mode;
+lexicographic ordering as a strictly stronger guarantee than a large weighted
+penalty, and the specific reason the two are not interchangeable no matter
+how large the weight; a structured, unit-carrying result object as an
+explainability requirement rather than a convenience; the distinction between
+a hard filter (Phase 7, removes an option) and a soft cost (this phase,
+orders what survives) as two different mechanisms for two different kinds of
+"worse".
+
+### Interview angle
+
+- *Why does a 7km unit beat a 2km one?* Because "nearest" answers the wrong
+  question. With a genuinely uncertain diagnosis — half flat battery, half
+  failed battery — the 2km unit can only jump-start, so half the probability
+  mass ends in a second dispatch: coordination wait, a replacement unit's
+  travel, and only then the repair. Expected time to resolution is 48.5
+  minutes for the near unit against 44.0 for the 7km one that can handle
+  both. The far unit arrives later and finishes sooner, and the cost function
+  is built to see that because it sums over the whole distribution rather
+  than optimising arrival.
+- *Why is safety not just a very large weight?* Because a weight can always
+  be outvoted — that is what a weighted sum means. The comparator was
+  deliberately mutated into exactly that (a large arrival penalty added to
+  cost) to find out whether the tests could tell the difference, and every
+  one of them passed. See What broke: the failure mode is not theoretical,
+  and it is invisible until a scenario exists where cost and arrival
+  genuinely disagree by more than the weight.
+
+### What broke
+
+- **THE MUTATION THAT EXPOSED A WEAK INVARIANT-4 TEST.** This is the most
+  useful thing found in the phase and is worth the detail.
+
+  **The mutation.** `byArrivalThenCost` in ranking.ts — the comparator a
+  HIGH_RISK job uses — was replaced with a weighted sum that adds a large
+  arrival penalty to the cost total instead of comparing lexicographically:
+
+      const scoreA = a.cost.total + a.option.estimatedTravelMinutes * 50;
+      const scoreB = b.cost.total + b.option.estimatedTravelMinutes * 50;
+      return scoreA - scoreB;
+
+  This is precisely the shortcut invariant 4 exists to forbid, one level up
+  from invariant 3's version of the same argument: a penalty large enough to
+  behave like a constraint is a constraint with a latent bug.
+
+  **All 23 tests still passed.** Including the two written specifically for
+  invariant 4 — "flipping the job to HIGH_RISK reverses the ranking" and "a
+  HIGH_RISK job orders by arrival even when cost strongly disagrees".
+
+  **Why they could not catch it.** Every HIGH_RISK scenario in the file used
+  the same two options: a unit 6 minutes away and one 20 minutes away. A
+  14-minute arrival gap multiplied by a weight of 50 is a 700-point swing,
+  and the cost totals in that scenario differ by about 10. The penalty
+  therefore agreed with the lexicographic answer in every case tested — not
+  because the two mechanisms are equivalent, but because the arrival gap was
+  wide enough that no realistic cost difference could overcome it. The tests
+  were asserting the right OUTCOME while being blind to the MECHANISM
+  producing it. The second test's own name — "even when cost strongly
+  disagrees" — was measuring a disagreement of 10 points against a swing of
+  700, which is not strong disagreement at all.
+
+  **What the new test does differently.** It inverts both magnitudes. The
+  arrival gap is made deliberately tiny — 10 minutes versus 10.5, thirty
+  seconds — while the cost gap is made enormous: the faster unit cannot
+  resolve the job's EV fault at all (so it carries a full escalation and a
+  capability shortfall of 1.0), and the slower one resolves it outright.
+  Under FASTEST_RESOLUTION weights the cost difference is many times any
+  plausible arrival weight. A lexicographic comparator picks the unit that
+  arrives thirty seconds sooner regardless; any weighted arrival term small
+  enough to still be a "term" picks the cheaper one. The test also asserts
+  the two gaps have OPPOSITE signs — the winner is worse on cost and better
+  on arrival — which is what proves the comparison happened on arrival alone
+  rather than on a blend that happened to land the same way.
+
+  Re-running the same mutation against the new test fails it. The general
+  lesson, and the reason this is recorded at length: a test that asserts the
+  right answer is not the same as a test that pins the mechanism, and the
+  gap between them is invisible until something deliberately breaks the
+  mechanism while preserving the answer.
+
+- **A comment nearly failed this phase's own grep, for the second phase
+  running.** cost.ts must not contain `fairness|gini|earnings|safety`, and
+  the natural way to write the "what is deliberately not in this file"
+  header comment uses at least two of those words. Phase 7 hit the identical
+  trap with `@prisma` appearing in a comment explaining why Prisma was not
+  imported. Avoided this time by checking earlier rather than later — the
+  grep was run immediately after writing the file rather than at the end of
+  the phase — and by phrasing the exclusions around the words: "the
+  lexicographic ordering invariant 4 requires" and "even distribution of work
+  across technicians".
+
+- Every other mutation caught its test on the first attempt: escalation
+  flattened to a constant (2 failures), the comparator ignoring the job's
+  risk level entirely (3), expected-time ignoring capability (8),
+  shortfall risk forced to zero (5), slaRisk ignoring elapsed time (2), the
+  total silently dropping a term (5), and the ranking's deterministic
+  tie-break removed (1).

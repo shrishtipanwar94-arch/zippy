@@ -52,7 +52,16 @@ export type JobForDispatch = {
   slaResponseMinutes: number | null;
   parkingLevel: string | null;
   onHighway: boolean;
+  // Read by ranking.ts, not by this file and not by the cost function —
+  // invariant 4 puts it ABOVE cost in a lexicographic ordering rather than
+  // inside it as a weighted term.
+  safetyLevel: SafetyLevelSnapshot;
 };
+
+// Mirrors Prisma's SafetyLevel enum as a plain union, for the same reason
+// UnitKindSnapshot below does.
+export const SAFETY_LEVELS = ['NORMAL', 'ELEVATED', 'HIGH_RISK'] as const;
+export type SafetyLevelSnapshot = (typeof SAFETY_LEVELS)[number];
 
 // Plain string unions mirroring Prisma's UnitKind/UnitStatus enums, not
 // imported from the generated Prisma client — this file's zero-imports rule
@@ -126,6 +135,18 @@ export type DispatchOption = {
   // live — Phase 9 gives dispatch options a database row, and this field is
   // what will land in it.
   travelEstimateDegraded: boolean;
+  // Road distance for the same trip. Carried alongside the minutes because
+  // they are not interchangeable inputs: a cost function's time term wants
+  // minutes, and its fuel/wear term wants kilometres. Deriving one from the
+  // other would mean assuming an average speed the road graph already knows
+  // better than we do.
+  estimatedTravelKm: number;
+  // Exactly which faults this pair could resolve outright. The scalar below
+  // is this list weighted by probability — but a duration model needs to know
+  // WHICH faults, not just how much probability mass, because diagnose and
+  // resolve times differ per fault. Kept as a list rather than recomputed
+  // downstream so the capability intersection is applied in exactly one place.
+  resolvableFaults: FaultCode[];
   // What fraction of the job's ENTIRE fault-probability mass this pair could
   // resolve outright, across all twelve fault codes — not just the ones
   // intake narrowed the diagnosis to. A generalist technician who can fix
@@ -175,11 +196,13 @@ function intersectedCapabilities(pair: CrewedPair): Set<string> {
   return new Set(pair.technician.capabilityCodes.filter((code) => unitCodes.has(code)));
 }
 
-function coveredFaultProbability(distribution: FaultDistribution, capabilities: Set<string>): number {
+function resolvableFaults(capabilities: Set<string>): FaultCode[] {
+  return FAULT_CODES.filter((fault) => canResolve(fault, capabilities));
+}
+
+function coveredFaultProbability(distribution: FaultDistribution, resolvable: FaultCode[]): number {
   let covered = 0;
-  for (const fault of FAULT_CODES) {
-    if (canResolve(fault, capabilities)) covered += distribution[fault];
-  }
+  for (const fault of resolvable) covered += distribution[fault];
   return covered;
 }
 
@@ -235,13 +258,16 @@ export async function generateCandidates(
   return pairs.map((pair, index) => {
     const capabilities = intersectedCapabilities(pair);
     const travel = travelTimes[index]!;
+    const resolvable = resolvableFaults(capabilities);
 
     return {
       unitId: pair.unit.id,
       technicianId: pair.technician.id,
       estimatedTravelMinutes: travel.minutes,
       travelEstimateDegraded: travel.degraded,
-      coveredFaultProbability: coveredFaultProbability(job.faultDistribution, capabilities),
+      estimatedTravelKm: travel.kilometres,
+      resolvableFaults: resolvable,
+      coveredFaultProbability: coveredFaultProbability(job.faultDistribution, resolvable),
       missingCapabilities: required.filter((code) => !capabilities.has(code)),
     };
   });

@@ -29,6 +29,7 @@ function job(overrides: Partial<JobForDispatch> = {}): JobForDispatch {
     slaResponseMinutes: null,
     parkingLevel: null,
     onHighway: false,
+    safetyLevel: 'NORMAL',
     ...overrides,
   };
 }

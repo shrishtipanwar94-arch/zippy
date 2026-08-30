@@ -36,6 +36,7 @@ function job(overrides: Partial<JobForDispatch> = {}): JobForDispatch {
     slaResponseMinutes: null,
     parkingLevel: null,
     onHighway: false,
+    safetyLevel: 'NORMAL',
     ...overrides,
   };
 }
@@ -88,6 +89,8 @@ function option(overrides: Partial<DispatchOption> = {}): DispatchOption {
     technicianId: 'tech-1',
     estimatedTravelMinutes: 10,
     travelEstimateDegraded: false,
+    estimatedTravelKm: 5,
+    resolvableFaults: ['FLAT_BATTERY'],
     coveredFaultProbability: 1,
     missingCapabilities: [],
     ...overrides,
