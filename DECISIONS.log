@@ -326,3 +326,85 @@ single knob changed — as the way to price an approximation.
   risk the objective prices is largely a risk the filter upstream has already
   removed — an overlap between Phase 7 and Phase 8 that neither phase could
   see on its own.
+
+### Open invariant concern — a job whose SLA window closes while queued
+
+NOT FIXED IN THIS PHASE, deliberately. Phase 10's job is to measure, and
+changing a hard filter is a Phase 7 design change. Recorded here in full so
+Phase 13 inherits it as a decision to make rather than a bug to rediscover.
+
+**What is correct.** `SLA_UNREACHABLE` is a hard filter returning a reason
+code, not a numeric penalty. That is exactly what invariant 3 requires, and
+the reasoning behind it holds: an option that cannot meet the contracted
+response window is not a worse option, it is one that breaks a promise, and a
+promise is not something a cost term should be able to outvote. Nothing about
+the filter's SHAPE is wrong.
+
+**What is wrong.** The filter is evaluated against `now`, and `now` moves. A
+job that is still unassigned when its window closes does not merely lose the
+options it had — it loses ALL options, permanently, because every future
+evaluation compares an arrival time against a deadline that is already in the
+past. The job stops appearing in any plan, for any unit, forever.
+
+Measured (`evaluation/`, ambiguous-diagnosis, seed 20260901): one queued job
+has 2 feasible options at +0 min and 0 at +30 min, with `SLA_UNREACHABLE` the
+only newly-appearing rejection code. Across monsoon-surge that mechanism
+accounts for most of the 105-118 stranded jobs per policy.
+
+**Why that is an invariant 8 violation, not just an unlucky outcome.**
+Invariant 8: every degraded state is visible to an operator. A job dropping
+out of candidate generation is about as degraded as a dispatch system gets —
+a stranded motorist nobody is coming for — and it currently surfaces NOWHERE.
+It is not a `JobEvent`, not an alert, not a row on any dispatcher surface. It
+is visible only as an absence: the job stops being mentioned in solver output.
+The one place it is recorded at all is a `dispatch_options` row with
+`rejection_code = 'SLA_UNREACHABLE'`, which reads identically to the ordinary
+and entirely healthy case of one unit being too far away. Nothing
+distinguishes "this unit cannot make it" from "no unit can ever make it
+again".
+
+The operational consequence is the wrong one in every direction: the system
+abandons the customer it has already failed, and it does so quietly, which is
+precisely the failure mode the invariant exists to forbid. Missing a
+45-minute promise is a billing and escalation problem; never arriving is a
+different kind of problem, and the code currently converts the first into the
+second without telling anyone.
+
+**Phase 13 does not currently catch this.** The re-solve trigger list
+specified for `src/domain/replanTriggers.ts` is:
+
+    diagnosis changed · technician declined · technician offline ·
+    unit breakdown · destination declined · driver moved materially ·
+    safety level changed · job cancelled
+
+All eight are events where something about the WORLD changed. The SLA case is
+not in the list and would not be caught by anything in it, because nothing
+about the world changed — only the clock advanced. It is the one trigger whose
+cause is the passage of time rather than an event, which is likely why it was
+missed.
+
+**Proposed for Phase 13 — an explicit ninth trigger.** Add
+`SLA_WINDOW_CLOSED_WHILE_QUEUED` to `replanTriggers.ts`, fired when a job that
+is still unassigned crosses its `slaPolicy.responseMinutes` deadline. The
+trigger must NOT quietly re-solve and hope, because a re-solve at that moment
+returns exactly what it returned a minute earlier: nothing. Instead it should
+raise an **APPROVE-tier `ActionRequest`** — the tier that blocks pending
+sign-off, with an approver recorded — carrying the reason, the elapsed
+overrun, and the fact that every option is now filtered by a deadline rather
+than by capacity. The dispatcher then makes the call the system cannot: serve
+it late, re-contract the SLA, escalate to a partner, or cancel with the
+customer told.
+
+APPROVE rather than RECOMMEND because the decision is a commercial one about
+a promise that has already been broken, and nothing in the engine has the
+standing to make it. AUTO would be plainly wrong: silently relaxing a
+contracted deadline is the single clearest example of "an AUTO action doing
+something a human would want to review".
+
+**One tension to resolve when it is built, not now.** APPROVE blocks until a
+human signs off, so a job that is already late then waits longer while it sits
+in an approval queue. Whether the right shape is a blocking APPROVE, or an
+AUTO relaxation that dispatches immediately and raises a RECOMMEND for the
+commercial follow-up, is a genuine design question. The measurement above says
+only that the current behaviour — silence, and permanent infeasibility — is
+the one option that is definitely wrong.
