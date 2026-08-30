@@ -360,3 +360,291 @@ graceful shutdown extended from "stop accepting connections" (Phase 0) to
   not cascade. Confirmed via PowerShell's `Get-Process node` and cleared
   with `Stop-Process -Force`; re-checked after every subsequent background
   run this phase, and zero were left at the end.
+
+## Phase 6 — Candidate generation / 2026-08-30 / Commit: (uncommitted)
+
+### Built
+
+`src/engine/candidates.ts` — `generateCandidates(job, snapshot)`, the pure
+core: `crewedPairs`, `intersectedCapabilities`, `coveredFaultProbability`,
+`canResolve`, `unitLocation`. Types `JobForDispatch`, `UnitSnapshot`,
+`TechnicianSnapshot`, `ShiftSnapshot`, `ZoneSnapshot`, `DispatchSnapshot`,
+`DispatchOption`. Zero imports from prisma or redis — confirmed by
+`Select-String -Path src/engine/*.ts -Pattern "@prisma|ioredis"` returning
+nothing, the phase's own check.
+
+`src/infra/routing.ts` — `travelTime(from, to, baseUrl?)`,
+`travelTimeMatrix(origins, destination, baseUrl?)`, `TravelTimeEstimate`,
+`LatLng`. Wraps OSRM's `/route` (one-to-one) and `/table` (many-to-one)
+endpoints; haversine-based fallback reuses `distanceKm` from
+`src/domain/geo.ts` rather than reimplementing it.
+
+`src/infra/config.ts` — `OSRM_URL` (default `http://localhost:5001`),
+`OSRM_TIMEOUT_MS` (2000), `ROUTING_FALLBACK_ROAD_FACTOR` (1.4),
+`ROUTING_FALLBACK_SPEED_KMH` (30).
+
+`docker-compose.yml` — `osrm` service: `osrm/osrm-backend`, `osrm-routed
+--algorithm mld /data/bengaluru.osrm`, host port 5001, `./osrm/data` volume.
+No healthcheck, no restart policy — see Decisions.
+
+`scripts/setup-osrm.sh` — the one-time pipeline: download a Bengaluru bbox
+extract from Overpass, verify it is not truncated, `osrm-extract` (car
+profile) → `osrm-partition` → `osrm-customize`. `.gitignore` excludes
+`osrm/data/`.
+
+Tests: `tests/candidates.test.ts` (11), `tests/routing.test.ts` (8, three
+`skipIf` real-OSRM-only). Suite total 165 across 13 files. `tsc --noEmit`,
+`eslint src`, `npm run build`, `docker compose config` all clean.
+
+REAL INFRASTRUCTURE ACTUALLY BUILT, NOT ONLY DOCUMENTED. Pulled
+`osrm/osrm-backend`, downloaded a genuine ~700MB Overpass export covering
+Bengaluru, ran the full extract/partition/customize pipeline, and had
+`osrm-routed` serving real queries on `localhost:5001` for the whole session.
+Every check-block assertion was run against this, not asserted from
+documentation:
+- Option count equalled pair count; a broad-capability technician
+  outscored a nearby narrow one on `coveredFaultProbability` specifically
+  (not on distance).
+- A real divided-highway pair — two points on Bengaluru's Outer Ring Road
+  near Hebbal, on opposing one-way carriageways, found by querying Overpass
+  for the actual OSM ways — measured 19m apart in a straight line and
+  4.54km apart by road (243x).
+- Stopping the container live and calling `travelTime()` against the real
+  configured URL produced a logged connection-refused warning and a
+  `{ degraded: true, method: 'HAVERSINE_FALLBACK' }` result, then real
+  routing resumed after restarting it.
+
+### Decisions
+
+- **Decision:** an Overpass `/api/map` bounding-box export instead of a
+  Geofabrik country or state extract.
+  **Why:** Geofabrik does not offer a Karnataka-level cut for India, only the
+  whole country (several hundred MB, a much longer preprocessing run) — a
+  poor match for a project that dispatches inside one city. Overpass exports
+  exactly the box asked for.
+  **Alternative:** download all of India once and accept the size.
+  **Why not:** far larger and slower for no benefit — every seeded zone is
+  Bengaluru, and nothing outside the box is ever routed through.
+  **Tradeoff:** dependent on a shared public Overpass instance's rate limits
+  and query timeout rather than a stable, versioned file download — see What
+  broke. `OSRM_OVERPASS_URL` is a script env override for exactly this
+  reason.
+
+- **Decision:** `DispatchOption` carries a `travelEstimateDegraded` field
+  beyond the four the phase brief lists literally.
+  **Why:** the same brief's routing section requires a degraded estimate to
+  be "visible to the operator" (invariant 8), and there is nowhere else in
+  this phase's actual output for that fact to live — Phase 9 gives dispatch
+  options a database row, and this is what will land in it.
+  **Alternative:** keep the type to exactly the four named fields and log the
+  degraded state some other way (a side channel, a log line only).
+  **Why not:** a log line is not "visible to the operator" in the sense the
+  brief means it — it has to travel WITH the option a dispatcher or a later
+  phase looks at, not live in a place only an engineer tailing logs would see.
+  **Tradeoff:** a literal reading of the brief's type definition is no longer
+  exact; documented at the field itself so nobody mistakes it for scope creep
+  later.
+
+- **Decision:** `travelTime`/`travelTimeMatrix` take the OSRM base URL as an
+  explicit trailing parameter defaulting to `config.OSRM_URL`, rather than
+  always reading the shared config directly.
+  **Why:** lets a test point one call at an address nothing listens on
+  without mutating global config state (fragile under parallel test files)
+  or adding a mocking layer.
+  **Alternative:** read `config.OSRM_URL` unconditionally inside the
+  function; tests temporarily reassign the config object's property.
+  **Why not:** global mutation in a test, even wrapped in try/finally, is the
+  kind of thing that is safe only by accident of vitest's per-file isolation
+  — correct today, fragile to depend on.
+  **Tradeoff:** one more parameter on two public functions, always given a
+  sensible default so no other call site needed to change.
+
+- **Decision:** `coveredFaultProbability` sums over ALL twelve fault codes;
+  `missingCapabilities` reuses the EXISTING coverage-mass "contending faults"
+  calculation from `src/domain/capabilitySet.ts`. Two different questions,
+  answered by two different scans of the same distribution.
+  **Why:** "what fraction of the probability mass can this pair resolve" is
+  a question about the WHOLE belief, deliberately not narrowed to the faults
+  intake already stopped asking about — a generalist should score near 1.0
+  even against real uncertainty. "What is this pair missing" is instead
+  anchored to the requirement intake ALREADY settled on, reusing the one
+  function that decision lives in rather than inventing a second threshold.
+  **Alternative:** compute both from the same "contending faults" subset.
+  **Why not:** would make `coveredFaultProbability` blind to a pair's ability
+  to handle the LONG TAIL of the distribution, understating exactly the
+  generalist-technician advantage the Check block asks to observe.
+  **Tradeoff:** two capability-facing numbers on one option, each answering a
+  narrower question than "is this a good pick" — genuinely two facts, not a
+  precomputed verdict; Phase 7/8 read both for different reasons.
+
+- **Decision:** an uncrewed unit produces no option at all, not a rejected
+  one.
+  **Why:** `DispatchOption.technicianId` is not nullable — a "pair" needs
+  both halves, and a unit with no crew has no technician half to pair with.
+  Rejection (Phase 7) is for candidates that exist but should not be sent;
+  this one never existed as a candidate in the first place.
+  **Alternative:** emit an option with `technicianId: null` or a sentinel,
+  let Phase 7 reject it.
+  **Why not:** manufactures a candidate for a pairing that cannot physically
+  happen — nobody can crew a van with no driver — which is a different kind
+  of "no" than "this driver is off shift."
+  **Tradeoff:** a caller cannot distinguish "no options because nothing is
+  crewed" from "no options because nothing exists" from the option list
+  alone — both are simply zero. Acceptable since the snapshot itself already
+  answers that question directly.
+
+- **Decision:** `unitLocation` throws when a unit has neither a GPS position
+  nor a resolvable zone, rather than defaulting to `0,0` or silently
+  excluding it.
+  **Why:** every unit's `zoneId` is a real foreign key and every zone a fleet
+  actually uses should be in its own snapshot — reaching this branch means
+  the snapshot was assembled wrong, not that the fleet has a genuinely
+  unlocatable unit. `0,0` would silently claim the unit is off the coast of
+  Africa and produce a wrong-looking-but-plausible travel time instead of a
+  loud failure.
+  **Alternative:** skip the unit silently, the same as the "crew id not in
+  snapshot" integrity case.
+  **Why not:** a missing crew reference is a plausible race (crewing changed
+  between snapshot assembly and use); a fleet-wide zone list missing a zone
+  the fleet's own units reference is a different class of bug, upstream in
+  whatever assembled the snapshot, and deserves to be loud.
+  **Tradeoff:** the function is not TOTAL over its input type — a
+  malformed-enough snapshot can throw. Acceptable for a phase with no caller
+  yet; worth revisiting once Phase 9's orchestrator is the one building
+  snapshots for real and can decide how to handle it upstream.
+
+### Concurrency
+
+Candidate generation itself has none — a pure computation over an
+already-frozen snapshot, no shared mutable state, nothing to race.
+
+- **Scenario:** OSRM's `/table` batch answers most origins but returns `null`
+  for one (a unit on a road-network fragment the extract's bbox cut off from
+  the rest).
+  **What races:** nothing races; this is a partial-failure shape, not a
+  concurrency one — recorded here because it is the closest thing this phase
+  has to "what happens when the world does not cooperate."
+  **Why dangerous:** treating a `null` duration as `0` or throwing would
+  either produce a wrong-looking instant travel time or fail an entire
+  batch over one unroutable origin.
+  **How handled:** only that one origin falls back to haversine; the rest of
+  the batch keeps its real OSRM answer.
+  **Assumption relied on:** the bbox extract genuinely covers everywhere a
+  real unit or job in this fleet would be — true today because the seed only
+  places things inside it; not re-verified against every possible future
+  coordinate.
+
+### Weaknesses introduced
+
+- **Road-factor and speed constants are unmeasured against Bengaluru
+  specifically** — 1.4x and 30km/h are common rule-of-thumb figures, stated
+  as such in `config.ts`'s own comment, not calibrated against real OSRM
+  output. Now that real OSRM data exists, checking the fallback against it
+  is possible and has not been done.
+- **No caching of travel-time queries.** Every `generateCandidates` call
+  re-queries OSRM for the whole fleet even if the same job's location was
+  used moments before. Fine at today's scale (nothing calls this in
+  production yet); worth revisiting once Phase 9 calls it per re-plan.
+- **A location outside the extract's bounding box and a temporarily
+  unroutable location inside it look identical** — both come back as a
+  per-origin haversine fallback with `degraded: true`, with no way to tell
+  "this coordinate is nonsense" from "this coordinate is fine but OSRM
+  briefly could not connect it." Acceptable because both cases get the same
+  correct treatment (fail soft, flag it), but a genuinely bad coordinate
+  would not currently surface as a louder signal than a transient one.
+- **`unitLocation`'s throw path is untested end-to-end** — no phase yet
+  builds a real snapshot from Prisma rows, so this is only exercised with
+  hand-built test snapshots. The real integrity properties it assumes
+  (`zoneId` is always a real FK, every zone a fleet uses is in its own
+  snapshot) are schema-level guarantees, not independently verified here.
+- **The `osrm` compose service has no healthcheck and no restart policy** —
+  a deliberate choice (the app already tolerates its absence, and a
+  healthcheck would only ever be read by a human), but it does mean a
+  crashed container gives no docker-level signal beyond `docker compose ps`
+  showing it stopped.
+- **Real-OSRM tests skip themselves silently** if nobody has run
+  `scripts/setup-osrm.sh`. A contributor who never runs it sees 8 tests
+  instead of 8, minus the fact that 3 of them never actually ran — visible
+  only via a `console.warn`, easy to miss in a large test run.
+
+### Concepts now genuinely in use
+
+Snapshot-based pure computation over externally-changing state (a frozen
+picture in, a plain array out, with "purity" meaning deterministic given a
+fixed snapshot and a reachable OSRM, not literally zero IO); real
+road-network routing as a reproducibility technique — determinism as a
+property of infrastructure choice (a local, versioned map extract) rather
+than only of algorithm; OSRM's two mutually-exclusive preprocessing
+pipelines (contraction hierarchies vs. multi-level Dijkstra) and why
+`osrm-routed --algorithm mld` requires the partition+customize pipeline
+specifically, not contract; many-to-one distance-matrix batching versus N
+one-to-one calls; dependency injection of an external service's address as
+the seam for testing a fallback path without touching global state;
+empirical verification of a domain claim against real map data (querying
+Overpass for the actual OSM ways behind "opposite carriageway of a divided
+highway") rather than asserting it from what OSRM's documentation promises.
+
+### Interview angle
+
+- *The brief says compute travel time "respecting carriageway direction" —
+  where is that logic?* There isn't any, on purpose. OSRM's routing graph is
+  built directly from OpenStreetMap's real, directional road segments —
+  divided highways are already two separate one-way ways in the data. Asking
+  OSRM for a route from A to B is automatically direction-aware; the
+  carriageway-awareness lives entirely in the DECISION to use real road
+  routing instead of straight-line distance, not in any code this phase
+  wrote. Verified on real data: two points 19 metres apart on opposite
+  carriageways of Bengaluru's Outer Ring Road come back 4.54km apart by road.
+- *How is this "pure function, zero imports from prisma or redis" honest
+  about calling out to a network service?* Two things enforce it rather than
+  just describing it. First, the OSRM address is an explicit parameter with
+  a config default, never a hidden global reached into silently — a test can
+  redirect it without touching shared state. Second, every travel-time result
+  carries a `degraded` boolean that is `false` only when OSRM genuinely
+  answered, so "pure" here means "a deterministic outcome for a given
+  snapshot and a given reachable-or-not state of the world," and the actual
+  boundary the phase cares about — no database, no queue — is enforced by a
+  literal grep for `@prisma`/`ioredis`, not by banning `fetch`.
+
+### What broke
+
+- **Two Overpass downloads that looked complete were not, and for two
+  different reasons.** The first attempt used `curl --max-time 60`, which
+  silently killed a still-downloading file with exit code 0 partway through
+  — `osrm-extract` did not fail until 2.7 million lines in, with "XML
+  parsing error... unclosed token." The second, longer attempt downloaded a
+  file that DID end with a well-formed `</osm>` closing tag — Overpass
+  closes the document even after writing an in-band error — but contained a
+  `<remark>runtime error: Query timed out...</remark>` instead of the actual
+  requested data. Both are now understood as genuinely different failure
+  modes: a truncated transfer versus a complete-but-empty response.
+  `scripts/setup-osrm.sh` checks for the closing tag, which catches the
+  first kind for certain and is honest that it cannot, by itself, catch the
+  second — a truly complete download from a server that simply gave up
+  gracefully is not something a client-side check can detect. Recorded as a
+  known limitation rather than papered over.
+- **The public Overpass instance rate-limited or 502'd after those two heavy
+  attempts**, including on a second mirror tried as a fallback. Resolved by
+  retrying the original endpoint with a longer timeout once the load had
+  presumably passed — not a code fix, just patience, and it is why the
+  script takes `OSRM_OVERPASS_URL` as an override rather than hard-coding
+  one instance.
+- **`it.skipIf()` reads its condition during vitest's synchronous
+  test-collection phase, before any `beforeAll` hook has run.** The first
+  version of `tests/routing.test.ts` set `osrmAvailable` inside `beforeAll`;
+  every real-OSRM test skipped on every run regardless of whether OSRM was
+  actually reachable, because `.skipIf(!osrmAvailable)` read the variable's
+  unset default (`false`) at collection time, long before the hook that
+  would have corrected it ran. Fixed by moving the reachability probe to a
+  top-level `await` at module scope, which resolves before `describe` runs.
+  Caught by noticing all three OSRM tests reported as skipped even with the
+  container confirmed running by hand moments earlier.
+- **A mutation that mutated nothing.** The first attempt at breaking
+  "uncrewed units get no option" replaced `unit.currentTechnicianId` with
+  `unit.currentTechnicianId ?? ''` in the map lookup — but `Map.get('')`
+  still returns `undefined` when no technician has that id, so the existing
+  `if (!technician) continue` guard kept working exactly as before and every
+  test still passed. A mutation that changes nothing is not evidence the
+  code is correct; it is evidence the mutation was not a real one. Replaced
+  with a genuine change (falling back to an arbitrary technician for an
+  uncrewed unit), which did turn the intended test red.

@@ -30,6 +30,33 @@ services:
       timeout: 5s
       retries: 10
 
+  # SELF-HOSTED ROUTING (Phase 6) — never a hosted maps API. See
+  # src/infra/routing.ts for why calling out to Google Maps or Mapbox would
+  # break reproducible evaluation runs.
+  #
+  # This service only SERVES a map that has already been preprocessed — it
+  # does not download or build anything itself. Run scripts/setup-osrm.sh
+  # once first; that script downloads the OpenStreetMap extract for Bengaluru
+  # (the city every seeded zone is in) and runs OSRM's extract/partition/
+  # customise pipeline into ./osrm/data, which this container then serves.
+  # `--algorithm mld` matches the partition+customise steps that pipeline
+  # runs — OSRM's other algorithm (contraction hierarchies) needs a different
+  # preprocessing step and the two are not interchangeable.
+  #
+  # No healthcheck: unlike Postgres and Redis, which the app treats as hard
+  # dependencies it cannot run without, a missing or not-yet-built OSRM is an
+  # EXPECTED, handled state — src/infra/routing.ts falls back to a haversine
+  # estimate and marks it degraded rather than failing. A healthcheck here
+  # would only be read by a human, and `docker compose ps` already shows
+  # whether the container is running.
+  osrm:
+    image: osrm/osrm-backend
+    command: ["osrm-routed", "--algorithm", "mld", "/data/bengaluru.osrm"]
+    ports:
+      - "5001:5000"
+    volumes:
+      - ./osrm/data:/data
+
 volumes:
   zippy_postgres_data:
   zippy_redis_data:

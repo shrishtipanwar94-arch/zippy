@@ -52,6 +52,25 @@ const envSchema = z.object({
   LOG_LEVEL: z
     .enum(['fatal', 'error', 'warn', 'info', 'debug', 'trace', 'silent'])
     .default('info'),
+
+  // Self-hosted routing (Phase 6) — never a hosted maps API; see
+  // src/infra/routing.ts for why. Defaults to the docker-compose service so
+  // local dev needs no .env change. A dispatch decision must still work when
+  // OSRM is unreachable, so every value below has a safe default and nothing
+  // here is required.
+  OSRM_URL: urlString('OSRM_URL').default('http://localhost:5001'),
+  OSRM_TIMEOUT_MS: z.coerce.number().int().positive().default(2_000),
+  // Straight-line distance is always shorter than the road distance; this
+  // multiplier is the fallback's stand-in for "roads are not straight lines."
+  // 1.4 is a common rule-of-thumb detour factor for a mixed urban/highway
+  // network — not measured against Bengaluru specifically, and it is exactly
+  // the kind of number that should move once real OSRM data is available to
+  // check it against, which is the whole reason the fallback is marked
+  // DEGRADED rather than trusted quietly.
+  ROUTING_FALLBACK_ROAD_FACTOR: z.coerce.number().positive().default(1.4),
+  // Assumed average speed once the road-factor distance is known. 30 km/h is
+  // a conservative mixed city-traffic figure, not a measured one.
+  ROUTING_FALLBACK_SPEED_KMH: z.coerce.number().positive().default(30),
 });
 
 function loadConfig() {

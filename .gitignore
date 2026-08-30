@@ -16,3 +16,8 @@ coverage/
 .DS_Store
 .idea/
 *.tsbuildinfo
+
+# OSRM map data (Phase 6) — several hundred MB of downloaded OSM extract plus
+# preprocessed routing graph. Produced by scripts/setup-osrm.sh, never
+# committed; the script is what a fresh clone re-runs to get it back.
+osrm/data/
