@@ -25,6 +25,10 @@ function job(overrides: Partial<JobForDispatch> = {}): JobForDispatch {
     lat: 12.9352,
     lng: 77.6245,
     faultDistribution: distribution({ FLAT_BATTERY: 1 }),
+    createdAt: new Date('2026-06-01T09:00:00Z'),
+    slaResponseMinutes: null,
+    parkingLevel: null,
+    onHighway: false,
     ...overrides,
   };
 }
@@ -37,6 +41,8 @@ function unit(overrides: Partial<UnitSnapshot> = {}): UnitSnapshot {
     capabilityCodes: [],
     lat: 12.94,
     lng: 77.63,
+    kind: 'VAN',
+    status: 'AVAILABLE',
     ...overrides,
   };
 }

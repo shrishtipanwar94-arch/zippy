@@ -648,3 +648,210 @@ highway") rather than asserting it from what OSRM's documentation promises.
   code is correct; it is evidence the mutation was not a real one. Replaced
   with a genuine change (falling back to an arbitrary technician for an
   uncrewed unit), which did turn the intended test red.
+
+## Phase 7 — Feasibility / 2026-08-30 / Commit: (uncommitted)
+
+### Built
+
+`src/engine/feasibility.ts` — `checkFeasibility(options, job, snapshot, now)`
+returns `{ feasible, rejected }`. All ten codes from the build plan:
+`UNIT_UNAVAILABLE`, `VEHICLE_TYPE_INCOMPATIBLE`, `CAPABILITY_MISSING`,
+`ACCESS_RESTRICTION` (two distinct triggers: basement level, likely-wrong
+carriageway), `NO_TECHNICIAN_ON_SHIFT`, `SLA_UNREACHABLE` do real work;
+`PART_UNAVAILABLE` (Phase 19), `NO_DESTINATION_AVAILABLE` /
+`DESTINATION_NOT_AUTHORISED` (Phase 22), `TENANT_CONTRACT_EXCLUDES`
+(Phase 20) are wired stub functions that never reject. `classify()` runs all
+ten in a fixed order per option, returning the first — and only — reason it
+fails. Zero imports from prisma or redis, confirmed by the phase's own grep.
+
+`src/engine/candidates.ts` extended, not redesigned — Phase 6's own
+`UnitSnapshot`/`JobForDispatch` gained the fields Phase 7 needs on the exact
+same objects: `kind` and `status` on `UnitSnapshot` (plain string unions
+`UnitKindSnapshot`/`UnitStatusSnapshot` mirroring Prisma's enums, not
+imported from the generated client); `createdAt`, `slaResponseMinutes`,
+`parkingLevel`, `onHighway` on `JobForDispatch`. `generateCandidates`'s own
+logic is unchanged — it reads none of the new fields. `unitLocation` is now
+exported so feasibility's carriageway check reuses the same zone-centroid
+fallback rather than a second copy of it.
+
+Tests: `tests/feasibility.test.ts` (25). Suite total 190 across 14 files.
+`tsc --noEmit`, `eslint src`, `npm run build` all clean.
+
+### Decisions
+
+- **Decision:** each rejected option carries exactly ONE code — the first,
+  most fundamental reason it fails — checked in a fixed order (unit status,
+  then vehicle kind, then capability, then access, then shift, then SLA,
+  then the four stubs), rather than listing every code an option happens to
+  violate.
+  **Why:** `{ option, code, detail }` is what the "Why this technician?"
+  panel (Phase 14) shows an operator — one clear sentence, not a list of
+  everything wrong with a candidate that was never going to be sent anyway.
+  **Alternative:** collect every violated code per option into an array.
+  **Why not:** more information that answers a question nobody asks — "list
+  every reason" is a debugging view, "the reason" is an explanation.
+  **Tradeoff:** the ORDER is now a real design decision with real
+  consequences, not an implementation detail — see the ordering test below,
+  added specifically because the first version of this decision was
+  documented but not actually verified.
+
+- **Decision:** `VEHICLE_TYPE_INCOMPATIBLE` is checked independently of
+  `CAPABILITY_MISSING`, against the unit's KIND directly, rather than relying
+  on the capability-code table to make a bike ineligible.
+  **Why:** capability codes are per-row data (`prisma/seed/fleet.ts`
+  currently keeps them consistent with kind, but nothing enforces that at the
+  database level) — a bike that somehow had `FLATBED_LOADING` attached by a
+  data error would still, physically, be unable to carry a car. This check
+  is a fact about the vehicle CLASS, true for every unit of that kind
+  regardless of what its capability row says.
+  **Alternative:** trust `missingCapabilities` alone; a bike missing
+  `FLATBED_LOADING` already produces `CAPABILITY_MISSING`.
+  **Why not:** correct today, but silently stops being a real constraint the
+  moment the capability table disagrees with the vehicle kind — a second,
+  independent check is exactly the "defense in depth" the ordering choice
+  above exists to prefer.
+  **Tradeoff:** for a well-formed fleet the two checks overlap completely —
+  `VEHICLE_TYPE_INCOMPATIBLE` never fires on data `CAPABILITY_MISSING`
+  would not also have caught. The overlap is the point, not a bug.
+
+- **Decision:** the "opposite carriageway" trigger for `ACCESS_RESTRICTION`
+  is a travel-time-vs-straight-line RATIO (4x, at an assumed 40km/h direct
+  baseline), not a true per-unit carriageway comparison.
+  **Why:** the schema has no field recording which side of a divided highway
+  a UNIT is currently on — only the JOB's `carriagewayDirection` exists
+  (Phase 3). A ratio built from data that genuinely exists (the option's own
+  OSRM-measured travel time, the straight-line distance) is honest about what
+  can actually be known; inventing a per-unit heading field to make the check
+  "precise" would be inventing data, not modelling it.
+  **Alternative:** wait for real per-unit carriageway data before
+  implementing this code at all — leave it a stub, like the four Phase
+  19/20/22 codes.
+  **Why not:** the build plan lists `ACCESS_RESTRICTION` as a code to
+  implement now, not a future one, and Phase 6 already measured the exact
+  empirical signature (a 243x ratio on a real divided-highway pair) this
+  check is built to catch.
+  **Tradeoff:** 4x is a threshold chosen to sit comfortably between normal
+  urban detour ratios (under 2x, per Phase 6's own measurements) and a
+  genuine carriageway crossing (24x-243x) — untested against the full range
+  of real Bengaluru roads beyond the one pair Phase 6 found. A road with a
+  legitimately convoluted but NOT divided-highway route could false-positive;
+  none has been found doing so.
+
+- **Decision:** `NO_TECHNICIAN_ON_SHIFT` uses a fixed
+  `ASSUMED_SERVICE_DURATION_MINUTES` (45) added to travel time, rather than
+  waiting for a real fault-specific duration model.
+  **Why:** the shift check is meaningless without SOME estimate of how long
+  the job takes beyond arriving — "on shift long enough to travel there" is
+  not the same claim as "on shift long enough to finish the job," and only
+  the second is what the code name promises.
+  **Alternative:** check only that the technician is on shift AT ALL right
+  now, ignoring whether their shift has time left to finish.
+  **Why not:** weaker than the code's own name — "shift ends before the job
+  could complete" is the brief's literal wording, not "shift has not ended
+  yet."
+  **Tradeoff:** 45 minutes is a placeholder, named and commented as one, not
+  a measured figure — a future duration model (keyed on fault type, at
+  minimum) replaces it without changing the shape of this check at all.
+
+### Concurrency
+
+None of its own — `checkFeasibility` is a pure computation over an
+already-frozen snapshot and a `now` passed in explicitly, not read from the
+system clock, so a seeded replay of the same snapshot and instant always
+produces the same rejections. The same "state can change under you" caveat
+from Phase 6 applies unchanged: the snapshot is a picture at one moment, and
+nothing here re-checks the world after it was taken.
+
+### Weaknesses introduced
+
+- **The carriageway-detour ratio is a heuristic, not a fact.** 4x is
+  reasoned from exactly one measured real-world pair (Phase 6's Outer Ring
+  Road crossing) and Phase 6's general observation about ordinary urban
+  detour ratios — not from a survey of Bengaluru's road network. A
+  legitimately slow but non-divided route could in principle cross the
+  threshold; none has been observed to.
+- **`ASSUMED_SERVICE_DURATION_MINUTES` is one flat number for every fault.**
+  A tyre change and an EV high-voltage fault do not take the same time on
+  site, and treating them as if they did makes the shift check equally wrong
+  in both directions — too permissive for a long job, too strict for a
+  quick one. Named as a placeholder; no fault-specific model exists to
+  replace it with yet.
+- **The four stub checks share one weakness with the whole file: nothing
+  calls `checkFeasibility` in production.** Every property here is proved
+  against hand-built snapshots in tests, not against a real Phase 9
+  orchestrator wiring a live database snapshot through it. The snapshot
+  integrity assumption (`classify` throws if an option's pair is not in the
+  snapshot) is untested against a genuine race between assembling a snapshot
+  and using it.
+- **`isBasementLevel` matches on a single regular expression** (`/^b/i`)
+  tied to the simulator's own `B1`/`B2`/`B3` format
+  (`src/sim/scenarios.ts`) — a real intake payload with a differently
+  formatted parking level (`"Basement 2"`, `"-2"`) would not be recognised as
+  a basement at all, silently passing a flatbed through instead of rejecting
+  it. Nothing currently enforces the simulator's format as the only one
+  intake can produce.
+
+### Concepts now genuinely in use
+
+Hard constraints as filters versus penalties, and the specific failure mode a
+penalty-shaped constraint has that a real filter does not (outvoted by
+enough other terms, eventually) — the concrete version of invariant 3 rather
+than the abstract statement of it; defense in depth via two independent
+checks that overlap on well-formed data but diverge on malformed data
+(vehicle kind versus capability code); a heuristic threshold reasoned from a
+single measured empirical data point rather than either a guess or a full
+survey, and documented as exactly that; rejection-as-a-first-class-output —
+data a UI renders, not a side channel a log line would bury.
+
+### Interview angle
+
+- *Why does an EV job with no certified technician not just get a very high
+  cost instead of being removed?* Because a cost is a number other numbers
+  can outweigh — invariant 3's whole argument. Give safety-relevant
+  constraints enough SLA pressure, enough zone scarcity, enough of a bad day,
+  and some combination of the OTHER cost terms eventually beats even a very
+  large penalty, and the system dispatches an uncertified technician to a
+  live high-voltage fault. `checkFeasibility` instead REMOVES the option —
+  `feasible` never contains it, so there is nothing left for a cost function
+  to accidentally out-argue. Directly tested: an EV fault with a missing
+  `EV_HV_CERTIFICATION` produces `CAPABILITY_MISSING` in `rejected`, an empty
+  `feasible`, and the exact same option object back, unmodified — not a
+  surviving option with a number attached to it.
+- *How do you decide which single code a candidate that fails several checks
+  gets?* A fixed order, checked once per option, first match wins — physical
+  facts about the vehicle before capability gaps before access before
+  timing. This is a real design decision with a real failure mode if
+  swallowed by refactoring: the first version of this file documented the
+  ordering but had no test that could tell the difference between the
+  current order and a shuffled one, because the only test for
+  `VEHICLE_TYPE_INCOMPATIBLE` used a pair that could not also fail
+  `CAPABILITY_MISSING`. Caught by hand — see What broke — and fixed with a
+  test built specifically to fail both at once.
+
+### What broke
+
+- **A comment explaining why Prisma is not imported here failed the phase's
+  own check for exactly that.** `Select-String -Path src/engine/*.ts
+  -Pattern "@prisma|ioredis"` is a literal text search over the whole file,
+  not a check on import statements — a WHY-comment describing "not imported
+  from `'@prisma/client'`" contains the substring being searched for and
+  matched it, even though nothing was actually imported. Reworded to
+  describe the same fact ("the generated Prisma client") without the literal
+  string. Worth remembering for every future file this check applies to:
+  the grep does not know the difference between code and prose.
+- **An ordering decision was documented but not actually tested, and a
+  mutation proved it.** The first `VEHICLE_TYPE_INCOMPATIBLE` test used
+  `missingCapabilities: []` to isolate the check from `CAPABILITY_MISSING` —
+  correct for proving the vehicle-kind check works on its own, but it meant
+  no test could tell "vehicle-kind checked first" apart from "capability
+  checked first," because only one of the two checks could ever fire on that
+  fixture. Reordering the two checks in the source changed nothing in the
+  test run — 24/24 still passed. Caught only by deliberately asking "does
+  this specific mutation break anything," not by the mutation itself looking
+  suspicious. Fixed by adding a pair that fails both checks simultaneously
+  and asserting which code wins; re-running the same reordering mutation
+  against the new test now fails it correctly.
+- Every other planned mutation (unit-availability, basement, carriageway
+  ratio, shift, SLA, a stub firing, swallowing the snapshot-integrity error)
+  caught its corresponding test on the first attempt — no further surprises
+  there.

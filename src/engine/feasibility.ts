@@ -1,0 +1,292 @@
+// FEASIBILITY — hard filters with reason codes.
+//
+// THE CODES ARE WORTH MORE THAN THE FILTER. `rejected` is not debug logging;
+// it is a first-class output. It renders in the "Why this technician?" panel
+// at Phase 14 — an operator (or a driver, wondering why the closest van did
+// not come) has to be able to see, in plain language, that the nearest unit
+// was skipped because it is an unequipped bike, not because the algorithm is
+// a black box. It is persisted on the SolverRun from Phase 9 onward.
+//
+// INVARIANT 3 — THESE ARE FILTERS, NEVER PENALTIES. It would be shorter to
+// fold "no EV certification" into the cost function as a very large number
+// and let the ranking sort it to the bottom. Do not do this. A penalty big
+// enough to act as a constraint is a constraint wearing a disguise, and the
+// disguise is exactly where the bug hides: given enough other terms — a
+// desperate SLA, an empty zone, a bad enough day — some combination of costs
+// eventually outweighs even a large penalty, and the system dispatches an
+// uncertified technician to a live high-voltage fault. A filter cannot be
+// outvoted by anything. It removes the option before the cost function ever
+// sees it.
+//
+// Runs after src/engine/candidates.ts and before src/engine/cost.ts
+// (Phase 8) — feasibility narrows what the cost function is even allowed to
+// rank. Zero imports from prisma or redis, the same rule and the same reason
+// as candidates.ts: this is a pure decision over a snapshot, not a database
+// query with opinions.
+
+import { distanceKm } from '../domain/geo.js';
+import { requiredCapabilities } from '../domain/capabilitySet.js';
+import { unitLocation } from './candidates.js';
+import type {
+  DispatchOption,
+  DispatchSnapshot,
+  JobForDispatch,
+  TechnicianSnapshot,
+  UnitKindSnapshot,
+  UnitSnapshot,
+  ZoneSnapshot,
+} from './candidates.js';
+
+// ---------------------------------------------------------------------------
+// The ten codes the build plan names, in the order this file checks them.
+// Order matters: an option can fail more than one, and each option carries
+// exactly one code — the first, most fundamental reason it cannot be sent.
+// A unit that is offline AND lacks a capability is rejected for being
+// offline; whether it also lacks the capability is moot until it exists.
+
+export type RejectionCode =
+  | 'UNIT_UNAVAILABLE'
+  | 'VEHICLE_TYPE_INCOMPATIBLE'
+  | 'CAPABILITY_MISSING'
+  | 'ACCESS_RESTRICTION'
+  | 'NO_TECHNICIAN_ON_SHIFT'
+  | 'SLA_UNREACHABLE'
+  | 'PART_UNAVAILABLE'
+  | 'NO_DESTINATION_AVAILABLE'
+  | 'DESTINATION_NOT_AUTHORISED'
+  | 'TENANT_CONTRACT_EXCLUDES';
+
+export type Rejection = {
+  option: DispatchOption;
+  code: RejectionCode;
+  detail: string;
+};
+
+export type FeasibilityResult = {
+  feasible: DispatchOption[];
+  rejected: Rejection[];
+};
+
+// ---------------------------------------------------------------------------
+// Constants a real duration model or contract lookup will eventually replace.
+// Named and commented so nobody mistakes them for measured values.
+
+// No fault-specific repair-time model exists yet (a future phase's job).
+// Used only to ask "could this technician plausibly finish before their
+// shift ends" — a rough, deliberately conservative placeholder, not an ETA
+// promised to a driver.
+const ASSUMED_SERVICE_DURATION_MINUTES = 45;
+
+// Real OSRM detours in ordinary traffic run well under 2x the straight-line
+// distance's travel time; Phase 6 measured a genuine divided-highway crossing
+// at roughly 24x-243x. 4x sits comfortably between "normal road inefficiency"
+// and "the unit is on the wrong carriageway," with no per-unit heading data
+// required to draw that line.
+const HIGHWAY_DETOUR_RATIO_THRESHOLD = 4;
+const DIRECT_SPEED_KMH_FOR_DETOUR_CHECK = 40;
+
+// Only these two unit kinds are ever equipped to load or winch a vehicle
+// (prisma/seed/fleet.ts) — a fact about the physical vehicle class, checked
+// here independently of whatever capability codes happen to be attached to a
+// specific unit row, so a data-entry mistake in the capability table cannot
+// accidentally clear a bike to tow.
+const TOW_CAPABLE_KINDS: ReadonlySet<UnitKindSnapshot> = new Set(['FLATBED_TOW', 'WHEEL_LIFT_TOW']);
+const TOW_CAPABILITY_CODES: ReadonlySet<string> = new Set(['FLATBED_LOADING', 'WINCH_RECOVERY']);
+
+// The same two kinds a basement ramp cannot clear — a flatbed or a wheel-lift
+// truck's length and ground clearance, not a capability a technician can
+// train their way around.
+const BASEMENT_INACCESSIBLE_KINDS: ReadonlySet<UnitKindSnapshot> = new Set(['FLATBED_TOW', 'WHEEL_LIFT_TOW']);
+
+// ---------------------------------------------------------------------------
+
+function jobNeedsTow(job: JobForDispatch): boolean {
+  return requiredCapabilities(job.faultDistribution).some((code) => TOW_CAPABILITY_CODES.has(code));
+}
+
+function isBasementLevel(parkingLevel: string | null): boolean {
+  // The simulator's own format (src/sim/scenarios.ts): "B1", "B2", "B3".
+  return parkingLevel !== null && /^b/i.test(parkingLevel);
+}
+
+// A fixed-speed "what would a direct trip of this straight-line distance
+// normally take" baseline — not a claim about the real road, only a ruler to
+// measure the REAL travel time against. See HIGHWAY_DETOUR_RATIO_THRESHOLD.
+function likelyOnWrongCarriageway(
+  option: DispatchOption,
+  unit: UnitSnapshot,
+  job: JobForDispatch,
+  zonesById: Map<string, ZoneSnapshot>,
+): boolean {
+  if (!job.onHighway) return false;
+
+  const from = unitLocation(unit, zonesById);
+  const straightKm = distanceKm(from.lat, from.lng, job.lat, job.lng);
+  if (straightKm < 0.01) return false; // already essentially at the job; no detour to detect
+
+  const directMinutes = (straightKm / DIRECT_SPEED_KMH_FOR_DETOUR_CHECK) * 60;
+  return option.estimatedTravelMinutes > directMinutes * HIGHWAY_DETOUR_RATIO_THRESHOLD;
+}
+
+function hasShiftTimeToComplete(
+  technicianId: string,
+  option: DispatchOption,
+  shifts: DispatchSnapshot['shifts'],
+  now: Date,
+): boolean {
+  const requiredMinutes = option.estimatedTravelMinutes + ASSUMED_SERVICE_DURATION_MINUTES;
+  const completesAt = new Date(now.getTime() + requiredMinutes * 60_000);
+
+  return shifts.some(
+    (shift) => shift.technicianId === technicianId && shift.startsAt <= now && completesAt <= shift.endsAt,
+  );
+}
+
+function slaDeadline(job: JobForDispatch): Date | null {
+  if (job.slaResponseMinutes === null) return null;
+  return new Date(job.createdAt.getTime() + job.slaResponseMinutes * 60_000);
+}
+
+// ---------------------------------------------------------------------------
+// STUBS. Each of these is a real function with real wiring — called in the
+// fixed order above, returning a rejection or null — so the phase that gives
+// it teeth (named in its own comment) only has to fill in the condition, not
+// invent the plumbing, the code, or the place its test belongs.
+
+// STUB until Phase 19. Parts sourcing does not exist yet: no UnitStock check,
+// no restock lead time. Never rejects.
+function checkPartAvailability(_option: DispatchOption, _job: JobForDispatch): Rejection['detail'] | null {
+  return null;
+}
+
+// STUB until Phase 22. Destination selection (a workshop to tow to) does not
+// exist yet. Never rejects.
+function checkDestinationAvailable(_option: DispatchOption, _job: JobForDispatch): Rejection['detail'] | null {
+  return null;
+}
+
+// STUB until Phase 22. Whether a chosen destination is one this job's tenant
+// or contract may use does not apply until destinations exist. Never rejects.
+function checkDestinationAuthorised(_option: DispatchOption, _job: JobForDispatch): Rejection['detail'] | null {
+  return null;
+}
+
+// STUB until Phase 20. Tenancy and contract coverage exclusions are not
+// modelled yet. Never rejects.
+function checkTenantContract(_option: DispatchOption, _job: JobForDispatch): Rejection['detail'] | null {
+  return null;
+}
+
+// ---------------------------------------------------------------------------
+// One option, classified. Returns the single reason it cannot be sent, or
+// null when it survives every check.
+function classify(
+  option: DispatchOption,
+  unit: UnitSnapshot,
+  technician: TechnicianSnapshot,
+  job: JobForDispatch,
+  snapshot: DispatchSnapshot,
+  now: Date,
+  zonesById: Map<string, ZoneSnapshot>,
+): Omit<Rejection, 'option'> | null {
+  if (unit.status !== 'AVAILABLE') {
+    return { code: 'UNIT_UNAVAILABLE', detail: `unit is ${unit.status.toLowerCase()}` };
+  }
+
+  if (jobNeedsTow(job) && !TOW_CAPABLE_KINDS.has(unit.kind)) {
+    return {
+      code: 'VEHICLE_TYPE_INCOMPATIBLE',
+      detail: `${unit.kind} cannot tow or winch a vehicle`,
+    };
+  }
+
+  if (option.missingCapabilities.length > 0) {
+    return {
+      code: 'CAPABILITY_MISSING',
+      detail: `missing: ${option.missingCapabilities.join(', ')}`,
+    };
+  }
+
+  if (isBasementLevel(job.parkingLevel) && BASEMENT_INACCESSIBLE_KINDS.has(unit.kind)) {
+    return {
+      code: 'ACCESS_RESTRICTION',
+      detail: `${unit.kind} cannot access parking level ${job.parkingLevel}`,
+    };
+  }
+  if (likelyOnWrongCarriageway(option, unit, job, zonesById)) {
+    return {
+      code: 'ACCESS_RESTRICTION',
+      detail: `road time (${option.estimatedTravelMinutes.toFixed(1)}min) implies the far side of a divider`,
+    };
+  }
+
+  if (!hasShiftTimeToComplete(technician.id, option, snapshot.shifts, now)) {
+    return {
+      code: 'NO_TECHNICIAN_ON_SHIFT',
+      detail: 'technician is off shift, or their shift ends before the job could complete',
+    };
+  }
+
+  const deadline = slaDeadline(job);
+  if (deadline) {
+    const arrivesAt = new Date(now.getTime() + option.estimatedTravelMinutes * 60_000);
+    if (arrivesAt > deadline) {
+      return {
+        code: 'SLA_UNREACHABLE',
+        detail: `arrival ${arrivesAt.toISOString()} is after the ${job.slaResponseMinutes}min SLA deadline ${deadline.toISOString()}`,
+      };
+    }
+  }
+
+  const partDetail = checkPartAvailability(option, job);
+  if (partDetail) return { code: 'PART_UNAVAILABLE', detail: partDetail };
+
+  const destinationDetail = checkDestinationAvailable(option, job);
+  if (destinationDetail) return { code: 'NO_DESTINATION_AVAILABLE', detail: destinationDetail };
+
+  const authDetail = checkDestinationAuthorised(option, job);
+  if (authDetail) return { code: 'DESTINATION_NOT_AUTHORISED', detail: authDetail };
+
+  const contractDetail = checkTenantContract(option, job);
+  if (contractDetail) return { code: 'TENANT_CONTRACT_EXCLUDES', detail: contractDetail };
+
+  return null;
+}
+
+// ---------------------------------------------------------------------------
+export function checkFeasibility(
+  options: DispatchOption[],
+  job: JobForDispatch,
+  snapshot: DispatchSnapshot,
+  now: Date,
+): FeasibilityResult {
+  const unitsById = new Map(snapshot.units.map((unit) => [unit.id, unit]));
+  const techniciansById = new Map(snapshot.technicians.map((technician) => [technician.id, technician]));
+  const zonesById = new Map(snapshot.zones.map((zone) => [zone.id, zone]));
+
+  const feasible: DispatchOption[] = [];
+  const rejected: Rejection[] = [];
+
+  for (const option of options) {
+    const unit = unitsById.get(option.unitId);
+    const technician = techniciansById.get(option.technicianId);
+    // candidates.ts only ever emits an option for a pair drawn from the same
+    // snapshot passed here — a caller handing feasibility a DIFFERENT
+    // snapshot than the one that generated these options is a wiring bug,
+    // not a business condition this function has an opinion about.
+    if (!unit || !technician) {
+      throw new Error(
+        `option (${option.unitId}, ${option.technicianId}) not found in the snapshot passed to checkFeasibility`,
+      );
+    }
+
+    const rejection = classify(option, unit, technician, job, snapshot, now, zonesById);
+    if (rejection) {
+      rejected.push({ option, ...rejection });
+    } else {
+      feasible.push(option);
+    }
+  }
+
+  return { feasible, rejected };
+}

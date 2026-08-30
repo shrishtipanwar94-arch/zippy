@@ -40,7 +40,31 @@ export type JobForDispatch = {
   // stored on the job. Candidate generation does not diagnose anything — it
   // reads the belief intake already settled on.
   faultDistribution: FaultDistribution;
+  // The four fields below are unused in this file — nothing in
+  // generateCandidates reads them. They ride along on the same job object
+  // because Phase 7's feasibility filter needs them and takes the exact same
+  // JobForDispatch, and a job splitting into two overlapping "job for X" types
+  // one field apart would be the onHighway mistake again: one fact, one home,
+  // even when only one of the two readers needs it today.
+  createdAt: Date;
+  // null when the job has no SLA contract behind it (a walk-in customer) —
+  // there is then no window to be unreachable within.
+  slaResponseMinutes: number | null;
+  parkingLevel: string | null;
+  onHighway: boolean;
 };
+
+// Plain string unions mirroring Prisma's UnitKind/UnitStatus enums, not
+// imported from the generated Prisma client — this file's zero-imports rule
+// is checked by a literal grep for the client package's name, and even a
+// type-only import would still match it. Domain files (src/domain/location.ts)
+// can import the real enum; engine files define their own copy of the
+// vocabulary they need instead.
+export const UNIT_KINDS = ['VAN', 'BIKE', 'FLATBED_TOW', 'WHEEL_LIFT_TOW'] as const;
+export type UnitKindSnapshot = (typeof UNIT_KINDS)[number];
+
+export const UNIT_STATUSES = ['AVAILABLE', 'HELD', 'ON_JOB', 'MAINTENANCE', 'OFFLINE'] as const;
+export type UnitStatusSnapshot = (typeof UNIT_STATUSES)[number];
 
 export type UnitSnapshot = {
   id: string;
@@ -53,6 +77,10 @@ export type UnitSnapshot = {
   // unitLocation()'s zone-centroid fallback.
   lat: number | null;
   lng: number | null;
+  // kind and status are unused in this file, same reason as JobForDispatch's
+  // trailing four fields — Phase 7 reads them, this file does not.
+  kind: UnitKindSnapshot;
+  status: UnitStatusSnapshot;
 };
 
 export type TechnicianSnapshot = {
@@ -164,7 +192,10 @@ function canResolve(fault: FaultCode, capabilities: Set<string>): boolean {
 // centroid when it has never reported a GPS position — an administrative
 // approximation, the same spirit as intake using a zone centroid before a
 // precise location exists (src/domain/geo.ts).
-function unitLocation(unit: UnitSnapshot, zonesById: Map<string, ZoneSnapshot>): LatLng {
+// Exported: feasibility.ts's opposite-carriageway check needs the same
+// resolved location this file uses for routing, and a unit's location has one
+// home, not a copy recomputed per file.
+export function unitLocation(unit: UnitSnapshot, zonesById: Map<string, ZoneSnapshot>): LatLng {
   if (unit.lat !== null && unit.lng !== null) {
     return { lat: unit.lat, lng: unit.lng };
   }
