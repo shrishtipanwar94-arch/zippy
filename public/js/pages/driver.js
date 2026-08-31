@@ -169,6 +169,29 @@ document.querySelector('[data-action="report"]').addEventListener('click', async
   render();
 });
 
+// THE DRIVER'S ANSWER TO AN ESTIMATE. Three buttons, one handler, because they
+// differ only in the word they send — and the server decides what each means.
+const ESTIMATE_DECISIONS = {
+  'approve-estimate': 'APPROVE',
+  'decline-estimate': 'DECLINE',
+  'cancel-estimate': 'CANCEL',
+};
+
+for (const [action, decision] of Object.entries(ESTIMATE_DECISIONS)) {
+  document.querySelector(`[data-action="${action}"]`).addEventListener('click', async () => {
+    const estimate = getState().driverView?.estimate;
+    if (!estimate) return;
+    try {
+      await api.respondToEstimate(estimate.estimateId, decision);
+      setError(null);
+    } catch (error) {
+      setError(error.message);
+    }
+    // The answer changed the job, so re-read the panel the server words.
+    await refreshDriverView();
+  });
+}
+
 // One delegated listener rather than one per button: the answer buttons are
 // replaced whenever the question changes, and a listener bound to a removed
 // element is a leak and a bug waiting to happen.

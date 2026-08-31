@@ -35,6 +35,7 @@ import { guidanceFor } from '../domain/safetyGuidance.js';
 // becomes words, so the driver's screen and an invoice cannot format it
 // differently.
 import { formatRupees } from '../domain/money.js';
+import { approvedTotalFor } from '../commit/estimates.js';
 import { contendingFaults } from '../domain/capabilitySet.js';
 import { isFaultCode } from '../domain/faults.js';
 import type { FaultCode, FaultDistribution } from '../domain/faults.js';
@@ -73,7 +74,8 @@ driverRouter.get(
     // Everything below hangs off a job id the scoped read has already proved
     // the caller owns, so the unscoped client is correct here — the same
     // division intake.ts uses.
-    const [helper, hypothesis, eta, verification, estimate, events, replanning] = await Promise.all([
+    const [helper, hypothesis, eta, verification, estimate, events, replanning, approvedTotalPaise] =
+      await Promise.all([
       assignedHelper(job.id),
       prismaBase.faultHypothesis.findFirst({
         where: { jobId: job.id },
@@ -92,7 +94,12 @@ driverRouter.get(
       prismaBase.estimate.findFirst({
         where: { jobId: job.id },
         orderBy: { createdAt: 'desc' },
-        select: { totalPaise: true, lines: { select: { description: true, amountPaise: true } } },
+        select: {
+          id: true,
+          status: true,
+          totalPaise: true,
+          lines: { select: { description: true, amountPaise: true } },
+        },
       }),
       prismaBase.jobEvent.findMany({
         where: { jobId: job.id },
@@ -103,6 +110,7 @@ driverRouter.get(
       prismaBase.actionRequest.count({
         where: { jobId: job.id, status: 'PENDING', kind: { in: REPLANNING_KINDS } },
       }),
+      approvedTotalFor(prismaBase, job.id),
     ]);
 
     const arrivingAt = eta ? new Date(eta.computedAt.getTime() + eta.etaSeconds * 1000) : null;
@@ -122,7 +130,7 @@ driverRouter.get(
       arrival: arrivalView(arrivingAt, eta?.degraded ?? false),
       helper,
       guidance: guidanceFor(job.safetyLevel),
-      estimate: estimateView(estimate),
+      estimate: withDeclineOption(estimateView(estimate), approvedTotalPaise),
       completionCode: completionCodeView(verification),
       // Oldest first: the driver reads this like a story, not like a log.
       updates: driverUpdatesFor([...events].reverse()).slice(-UPDATE_LIMIT),
@@ -183,22 +191,51 @@ function arrivalView(
 // The itemised estimate, shown BEFORE the completion code is entered — the
 // driver knows what the work costs before confirming it was done.
 //
-// GENERATING estimates is the money domain's job (Phase 15c) and nothing
-// writes an `estimates` row yet, so today this reads null on every real job.
-// The read path is built and covered by a test that inserts one, because the
-// ordering rule — cost before confirmation — is a Phase 15 promise about this
-// screen, and retrofitting it after payment exists is how it gets forgotten.
+// FROM PHASE 15c STAGE 2 THIS IS ALSO A QUESTION, not only a statement. An
+// estimate still SENT is one the technician is waiting on, and `awaitingAnswer`
+// is what turns the card into approve / decline / cancel. Whether the driver
+// may actually answer is the server's decision on the respond route; this only
+// says whether there is anything to answer.
 function estimateView(
-  estimate: { totalPaise: number; lines: { description: string; amountPaise: number }[] } | null,
-): { lines: { description: string; amount: string }[]; total: string } | null {
+  estimate: {
+    id: string;
+    status: string;
+    totalPaise: number;
+    lines: { description: string; amountPaise: number }[];
+  } | null,
+): {
+  estimateId: string;
+  lines: { description: string; amount: string }[];
+  total: string;
+  awaitingAnswer: boolean;
+  // Declining means "finish at the scope I already agreed", so it is only
+  // offered when there IS a prior approval. Computed by the caller, which is
+  // the only place that knows.
+  mayDecline: boolean;
+} | null {
   if (!estimate) return null;
   return {
+    estimateId: estimate.id,
     lines: estimate.lines.map((line) => ({
       description: line.description,
       amount: formatRupees(line.amountPaise),
     })),
     total: formatRupees(estimate.totalPaise),
+    awaitingAnswer: estimate.status === 'SENT',
+    mayDecline: false,
   };
+}
+
+// DECLINE IS ONLY OFFERED WHEN THERE IS SOMETHING TO FALL BACK TO. Declining
+// the first estimate would leave the job paused with no approved scope to
+// finish, so the server refuses it — and a button that always fails is worse
+// than no button.
+function withDeclineOption(
+  view: ReturnType<typeof estimateView>,
+  approvedTotalPaise: number | null,
+): ReturnType<typeof estimateView> {
+  if (!view) return null;
+  return { ...view, mayDecline: view.awaitingAnswer && approvedTotalPaise !== null };
 }
 
 function completionCodeView(

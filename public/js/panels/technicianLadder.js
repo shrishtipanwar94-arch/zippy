@@ -34,6 +34,7 @@ const STATUS_LABEL = {
   ON_SITE: 'On scene',
   DIAGNOSING: 'Diagnosing',
   WORKING: 'Working',
+  AWAITING_APPROVAL: 'Waiting on the driver',
 };
 
 export function render(state) {
@@ -66,7 +67,7 @@ function jobMarkup(job, state) {
           <span class="badge bg-secondary">${escapeText(STATUS_LABEL[job.status] ?? job.status)}</span>
         </p>
 
-        ${job.nextStep === 'COMPLETE' ? completionMarkup(job) : ladderButtonMarkup(job)}
+        ${nextActionMarkup(job)}
 
         <hr />
         <p class="small mb-1">Found something different?</p>
@@ -78,8 +79,15 @@ function jobMarkup(job, state) {
           <option value="NOISE_OR_SMELL">Noise or smell</option>
           <option value="STUCK_OR_DAMAGED">Stuck or damaged</option>
         </select>
-        <button class="btn btn-outline-warning w-100" data-diagnose="${escapeText(job.jobId)}" ${offline ? 'disabled' : ''}>
+        <button class="btn btn-outline-warning w-100 mb-2" data-diagnose="${escapeText(job.jobId)}" ${offline ? 'disabled' : ''}>
           File a new diagnosis
+        </button>
+        <!-- Online only, like the diagnosis: pricing reads the job's pinned
+             price list and its current diagnosis, neither of which the phone
+             holds, and a queued estimate would be priced against a fault the
+             driver has already been quoted for. -->
+        <button class="btn btn-outline-info w-100" data-estimate="${escapeText(job.jobId)}" ${offline ? 'disabled' : ''}>
+          Send the driver a cost
         </button>
         ${
           offline
@@ -88,6 +96,23 @@ function jobMarkup(job, state) {
         }
       </div>
     </div>`;
+}
+
+// WHAT THE TECHNICIAN CAN DO NEXT. Three cases, and the middle one is the
+// point of Phase 15c stage 2: a job waiting on a driver's decision has NO next
+// rung — `nextStepFor` returns null for AWAITING_APPROVAL because the ladder
+// has no rank for it — so the card says who it is waiting on rather than
+// offering a button that the server would refuse.
+function nextActionMarkup(job) {
+  if (job.status === 'AWAITING_APPROVAL') {
+    return `
+      <div class="alert alert-warning py-2 px-3 mb-0">
+        Work is paused until the driver approves the cost. You will see this
+        card change when they answer.
+      </div>`;
+  }
+  if (job.nextStep === 'COMPLETE') return completionMarkup(job);
+  return ladderButtonMarkup(job);
 }
 
 function ladderButtonMarkup(job) {

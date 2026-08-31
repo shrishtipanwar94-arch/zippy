@@ -105,6 +105,14 @@ function renderEstimate(panel, estimate) {
 
   setText(panel, 'estimate-total', estimate.total);
 
+  // WHETHER THERE IS ANYTHING TO ANSWER is the server's call, not this panel's
+  // — `awaitingAnswer` and `mayDecline` come from GET /jobs/:id/driver-view,
+  // computed where the approval history actually lives.
+  const actions = panel.querySelector('[data-field="estimate-actions"]');
+  if (actions) actions.hidden = !estimate.awaitingAnswer;
+  const decline = panel.querySelector('[data-action="decline-estimate"]');
+  if (decline) decline.hidden = !estimate.mayDecline;
+
   const list = panel.querySelector('[data-field="estimate-lines"]');
   if (!list) return;
   list.replaceChildren();

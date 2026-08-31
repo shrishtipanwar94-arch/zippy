@@ -51,6 +51,65 @@ export function capabilitiesForFault(fault: FaultCode): string[] {
   return CAPABILITIES_BY_FAULT[fault];
 }
 
+// ---------------------------------------------------------------------------
+// WHAT A REPAIR CONSUMES — the estimate's half of "what does this fault need".
+//
+// The map above answers "what SKILL do we send"; this answers "what PARTS get
+// used up", and they sit together because they are the same question asked by
+// two different consumers. Dispatch reads the first and has no use for the
+// second — a van is chosen by what its crew can do, not by what the job will
+// bill — while the estimate builder (Phase 15c) reads this one.
+//
+// BY SKU, not by part id, because the id is a database key the seed happens to
+// generate and the SKU is the thing a parts catalogue is actually organised
+// around. `prisma/seed/parts.ts` owns the list these must match.
+//
+// AN EMPTY LIST IS A REAL ANSWER, and four faults have one. A jump start
+// consumes nothing — the leads are equipment, not stock. A lockout consumes
+// nothing. A tow consumes nothing; the tow itself is the charge. Those jobs
+// are labour and a callout, and an estimate that invented a part for them
+// would be wrong in the direction that costs the customer money.
+//
+// Quantities are one of each. A repair needing two of something is real (two
+// front brake pads are already a "set") and is not modelled: the technician
+// revising the estimate is the mechanism for anything the table did not
+// predict, which is the whole point of the re-approval loop.
+const PARTS_BY_FAULT: Record<FaultCode, string[]> = {
+  FLAT_BATTERY: [],
+  FAILED_BATTERY: ['BAT-45AH'],
+  ALTERNATOR_FAILURE: ['ALT-RECON', 'DRIVE-BELT'],
+  STARTER_MOTOR: ['STR-MOTOR-RECON'],
+  OUT_OF_FUEL: ['PETROL-5L'],
+  FLAT_TYRE: ['TYRE-REPAIR-KIT'],
+  KEYS_LOCKED_IN: [],
+  KEY_FAILURE: ['KEY-FOB-BLANK'],
+  ENGINE_OVERHEAT: ['COOLANT-5L'],
+  BRAKE_FAILURE: ['BRK-PAD-FRONT', 'BRK-FLUID-DOT4'],
+  EV_HV_FAULT: [],
+  IMMOBILISED_UNKNOWN: [],
+};
+
+export function partSkusForFault(fault: FaultCode): string[] {
+  return PARTS_BY_FAULT[fault];
+}
+
+// WHICH LABOUR RATE APPLIES. Two codes exist on the seeded price list —
+// STANDARD and SPECIALIST — and the split is by whether the work needs a
+// certification rather than by how long it takes. High-voltage work, key
+// programming and brakes are the three a workshop would not let an
+// uncertified technician touch; everything else is standard roadside labour.
+// Hand-set, like the durations in src/engine/durations.ts, and for the same
+// reason: there is no historical data to fit it to.
+const SPECIALIST_FAULTS: ReadonlySet<FaultCode> = new Set<FaultCode>([
+  'EV_HV_FAULT',
+  'KEY_FAILURE',
+  'BRAKE_FAILURE',
+]);
+
+export function labourCodeForFault(fault: FaultCode): string {
+  return SPECIALIST_FAULTS.has(fault) ? 'SPECIALIST' : 'STANDARD';
+}
+
 // Base rate of each fault across all callouts, before any symptom is known.
 // Hand-set from what a roadside operation actually sees: flat batteries and
 // flat tyres dominate, specialist EV and key work is rare. These are the

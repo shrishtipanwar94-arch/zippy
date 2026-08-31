@@ -138,3 +138,16 @@ export function listPromotions(jobId) {
 export function confirmPromotion(promotionId, decision) {
   return request('POST', `/promotions/${promotionId}/confirm`, { decision });
 }
+
+// --- estimates and approval -------------------------------------------------
+
+// The technician prices what they found. Online only: it reads the job's
+// pinned price list and its diagnosis, neither of which the phone holds.
+export function raiseEstimate(jobId, towKilometres) {
+  return request('POST', `/jobs/${jobId}/estimate`, towKilometres ? { towKilometres } : {});
+}
+
+// The driver's answer. The only call in the client that can unpause a job.
+export function respondToEstimate(estimateId, decision) {
+  return request('POST', `/estimates/${estimateId}/respond`, { decision });
+}

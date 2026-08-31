@@ -1449,3 +1449,274 @@ And the brief's own test, from `tests/pricing.test.ts`: a list is ended while a
 job is still running, a successor takes over, and the job's pinned id plus its
 creation instant still resolve to exactly the rate it was quoted — because
 neither reads the clock.
+
+## Phase 15c Stage 2 — Estimate and approval / 2026-08-31 / PARTIAL
+
+Stage 2 of Phase 15c only: estimates, the re-approval loop, and the pause.
+Payment, the three settlement paths, the ledger and payouts (sections 3-5) are
+not started. Contract coverage — the "Covered by contract (GOLD) −₹900 /
+Payable ₹1,440" half of the brief's example — is settlement, and is deferred
+with them.
+
+### Built
+
+**Migration** `20260831230000_phase15c_awaiting_approval` — one line,
+`ALTER TYPE "JobStatus" ADD VALUE 'AWAITING_APPROVAL' BEFORE
+'AWAITING_DESTINATION'`.
+
+**Domain — pure**
+- `src/domain/estimateApproval.ts` — `reapprovalDecision`, returning
+  NEEDS_FIRST_APPROVAL, NEEDS_REAPPROVAL (with the allowance and the overrun)
+  or COVERED.
+- `src/domain/faults.ts` — `partSkusForFault` and `labourCodeForFault` added
+  beside `capabilitiesForFault`.
+
+**Commit**
+- `src/commit/estimates.ts` — `buildEstimate`, `approvedTotalFor`, and the
+  private `priceTheWork` that assembles parts, labour, an optional tow and the
+  callout from the job's pinned list.
+- `src/commit/estimateResponses.ts` — `respondToEstimate`: APPROVE, DECLINE,
+  CANCEL.
+
+**API** — `POST /jobs/:id/estimate`, `GET /jobs/:id/estimate`,
+`POST /estimates/:id/respond` (`src/api/estimates.ts`). Two new permission
+resources, `estimate` and `estimateApproval`.
+
+**Config** — `ESTIMATE_REAPPROVAL_TOLERANCE_BPS`, default 1000 (10%).
+
+**Surfaces** — the driver's estimate card gained approve / decline / cancel and
+a sentence for the paused state; the technician's card gained "Send the driver
+a cost" and a paused banner; `AWAITING_APPROVAL` added to the technician
+board's open statuses so a paused job does not vanish.
+
+**Tests** — `tests/estimates.test.ts` (24). Suite: 33 files, 468 tests.
+
+### Decisions
+
+**Decision:** The pause is a JOB STATUS, not a flag on the job.
+**Why:** This is the best decision in the stage. The brief says work "PAUSES at
+AWAITING_APPROVAL — it does not continue optimistically", and a boolean would
+make that a rule every write path has to remember to check. As a status it is
+enforced by something that already exists: the technician's ladder advances by
+RANK between known statuses, and AWAITING_APPROVAL deliberately has no rank
+(`src/domain/jobLadder.ts`), so `ladderMove` returns OFF_LADDER and every rung
+— including COMPLETE — is refused with "this job is not open for work". The
+pause is structural. Nobody had to write a check for it.
+**Alternative:** `job.awaitingApproval: Boolean`.
+**Why not:** Every existing transition would need to consult it, and the one
+that forgot would be the bug.
+**Tradeoff:** An enum value costs a migration, and `ADD VALUE` cannot run
+inside a transaction on older Postgres. Worth it.
+
+**Decision:** Only an INCREASE asks the driver again.
+**Why:** The rule most likely to be got wrong by someone reaching for
+`Math.abs`. A revision that comes in cheaper needs no new approval — the driver
+already agreed to spend more than that, and stopping a repair to say it will
+cost less is a pause that helps nobody. Proved live: the first revision on the
+manual walk-through came in at ₹402 against ₹948 approved, was COVERED, and the
+job never stopped.
+**Tradeoff:** A cheaper revision is auto-APPROVED on arrival rather than left
+SENT. Leaving it SENT would be asking a question nobody needs to answer.
+
+**Decision:** The approved total is the MAXIMUM approved, not the latest.
+**Why:** A revision that came in cheaper and was approved does not shrink what
+the driver has agreed to spend — they consented to a ceiling. Taking the latest
+would make the next small overrun re-ask for no reason.
+
+**Decision:** Tolerance in basis points, configurable.
+**Why:** It is a commercial policy, not a fact: 0 bps re-approves every rupee,
+a higher number trusts technicians on small overruns. Basis points rather than
+a float percentage because money here is integers and a float percentage is a
+rounding argument waiting to happen — and `technicians.rating_bps` already set
+the house style. The allowance rounds DOWN, because an allowance is a limit and
+rounding a limit up lets a revision through on half a paise.
+
+**Decision:** DECLINE is only meaningful against a prior approval, and is
+refused otherwise.
+**Why:** "Decline" means "do not do the extra work, finish what I agreed" —
+which requires something to have been agreed. Declining the FIRST estimate
+would leave the job paused with no approved scope to finish and no way out. The
+route answers 409 naming the two answers that do work
+(`allowed: ['APPROVE', 'CANCEL']`), and the driver's card hides the decline
+button unless `mayDecline`.
+**Alternative:** Treat a first-estimate decline as a cancellation.
+**Why not:** They are different intentions and only the driver knows which they
+meant. Guessing would cancel jobs people did not mean to cancel.
+
+**Decision:** A technician cannot approve their own estimate, enforced in the
+permission table by splitting `estimate` from `estimateApproval`.
+**Why:** A re-approval loop where the person doing the work can wave it through
+is a formality. The whole value of the pause is that somebody else says yes.
+**Tradeoff:** A DISPATCHER may also answer, so a driver on a roadside with no
+signal can approve over the phone — and `estimate_approvals.channel` records
+which, so "approved in the app" and "approved over the phone" stay
+distinguishable in a dispute.
+
+**Decision:** An estimate is immutable; a revision is a NEW estimate.
+**Why:** The approval points at an estimate, so the pair answers "what exactly
+did this customer agree to, and when?" — the question a billing dispute is made
+of. Editing an estimate in place would silently rewrite what was approved.
+**Tradeoff:** Several rows per job. That is a record, not clutter.
+
+**Decision:** Only one estimate may be outstanding at a time.
+**Why:** Two live estimates is two answers to wait for and no way to say which
+one an approval was about. A second `buildEstimate` while one is SENT returns
+ALREADY_AWAITING rather than superseding it — superseding would need a status
+the enum does not have, and REJECTED would mean "the driver said no", which is
+a lie.
+
+**Decision:** No tow line without a supplied distance.
+**Why:** A tow is metered, the workshop is not chosen until Phase 22, and an
+invented distance is an invented charge. A caller that knows passes it.
+
+**Decision:** Labour hours come from `engine/durations.ts`.
+**Why:** It is the same duration model the cost function reasons about, so what
+a job is QUOTED and what the solver EXPECTED it to take cannot drift apart.
+
+### Concurrency
+
+**Scenario:** Two answers to one estimate — the driver double-taps, or the
+driver answers in the app while a dispatcher answers on the phone.
+**What races:** Two writers on one `estimates` row, each then writing an
+approval and moving the job.
+**Why dangerous:** Two approval rows for one estimate (blocked by the unique
+`estimate_id`, so the second would be a hard 500 rather than a clean answer),
+and a job moved twice.
+**How handled:** A conditional `updateMany … WHERE status = 'SENT'` claims the
+row before anything else happens — the same shape holds.ts, offers.ts and
+eventPromotions.ts use. The loser reads the current status and returns
+ALREADY_ANSWERED. Proved with a real `Promise.all` of two concurrent approvals
+asserting exactly one APPROVED and exactly one approval row.
+
+**Scenario:** An approval arrives after a dispatcher has cancelled the job.
+**How handled:** `resumeWork` is conditional on the job still being
+AWAITING_APPROVAL, so a late approval cannot resurrect a cancelled job. The
+estimate still records as approved, which is true — somebody did approve it.
+
+**Scenario:** An estimate is raised against a job that has already finished.
+**How handled:** `pauseForApproval` is conditional on the job being ON_SITE,
+DIAGNOSING or WORKING, so a stray estimate cannot drag a resolved or cancelled
+job back into an open state.
+
+### Weaknesses introduced
+
+1. **The parts-per-fault table is one of each, hand-written.** A repair needing
+   two of something is real and is not modelled. The re-approval loop is the
+   stated mechanism for anything the table did not predict, which is honest but
+   means the first estimate is systematically a floor rather than a best guess.
+2. **A part the pinned list does not price is silently skipped.** The line
+   simply does not appear, so the estimate is quietly low rather than visibly
+   incomplete. A driver approving it has approved less than the work needs.
+   Logged, not surfaced.
+3. **Labour reads "Labour, 0.33h".** Correct — twenty minutes for a puncture,
+   from the duration model — and not how an invoice is written. Minutes, or a
+   minimum billable increment, is the real answer.
+4. **No cancellation consequences.** Cancelling ends the job and nothing else:
+   a technician who drove out and diagnosed is owed something, and that is the
+   cancellation policy at stage 3. Deliberately not inlined here.
+5. **`taxPaise` is written as 0 on every estimate.** GST is real on an Indian
+   roadside invoice and is named in the brief as deliberate headroom.
+6. **Contract coverage is absent**, so the estimate shows the full cost with no
+   "covered / payable" split. A GOLD fleet driver currently sees a number they
+   will not pay.
+7. **Nothing regenerates an estimate when a diagnosis changes.** The technician
+   must press the button. Making a diagnosis auto-price would be reasonable and
+   would also mean a job could pause without anybody choosing to.
+8. **The tolerance is one global number.** Per-contract tolerances are the
+   obvious next want and would live on `Contract`.
+9. **No estimate appears on the dispatcher's console.** An operator cannot see
+   that a job is paused on money without reading the job status.
+
+### Concepts now genuinely in use
+
+- A state machine used as an enforcement mechanism: the pause is real because
+  the ladder has no rank for it, not because anything checks a flag.
+- Immutable financial documents with a separate approval record, so consent is
+  auditable rather than inferred.
+- A one-directional tolerance — the asymmetry between "costs more than you
+  agreed" and "costs less" is the whole rule.
+- Ceiling semantics for consent: what the customer agreed to is the maximum
+  they said yes to, not the most recent number.
+
+### Interview angle
+
+"The technician opens the car and the job is twice the price. What happens?"
+A new estimate is written — never an edit, because the approval points at the
+old one — and if it exceeds the approved total by more than the configured
+tolerance the JOB STATUS becomes AWAITING_APPROVAL. That is not a flag anybody
+checks: the technician's status ladder advances by rank and AWAITING_APPROVAL
+has no rank, so every rung including "finish job" is refused until a driver
+answers.
+
+"Why does a cheaper revision not need approval?" Because consent is a ceiling.
+The driver already agreed to spend more than that, so re-asking delays a repair
+to deliver good news — which is why the comparison is one-directional and not
+an absolute difference.
+
+### What broke
+
+- **A paused job vanished from the technician's board.**
+  `/technician/work` filters to the statuses a technician has work on, and
+  AWAITING_APPROVAL was not among them — so the moment an estimate paused the
+  job, it disappeared from the screen of the person standing next to the car.
+  Found by reasoning through the surface rather than by a test, which is worth
+  admitting: the API tests all passed. AWAITING_APPROVAL is now on the list
+  precisely BECAUSE the technician cannot advance it — a paused job is still
+  theirs, and what they see is why it is stopped and who it is waiting on.
+
+- **Three copies of "what has the driver agreed to spend".** Written twice in
+  `estimateResponses.ts` differing only in whether the parameter was a
+  `PrismaClient` or a `TransactionClient`, and once more in `estimates.ts`.
+  Collapsed to one exported function typed on `TransactionClient`, which a
+  `PrismaClient` satisfies. Caught while re-reading rather than by a tool.
+
+- **The new enum value broke the typecheck, which is what it is for.**
+  `headlineFor` switches exhaustively over `JobStatus`, so adding
+  AWAITING_APPROVAL failed the build until the driver had a sentence for it.
+  That is the Phase 15 translation map doing exactly the job it was built for:
+  a new state cannot reach a driver's screen without somebody writing the
+  words.
+
+- **A typo survived into a union member name** — `allowanceP7aise?: never` on
+  the NEEDS_FIRST_APPROVAL branch. Never read, so nothing failed; removed on
+  re-reading. Worth recording because a type that is never read is a type
+  nothing checks.
+
+### The stage check, performed
+
+`npm run test:fast` — 33 files, 468 tests, green; the new file run twice, so it
+is re-runnable against the shared database.
+
+End to end against the seeded catalogue, through the real routes:
+
+```
+technician raises an estimate on a flat tyre
+  ISSUED  ₹948  NEEDS_FIRST_APPROVAL  paused=true
+  jobs.status                      AWAITING_APPROVAL
+  lines   PART    Tyre puncture repair kit   45000
+          LABOUR  Labour, 0.33h              19800
+          CALLOUT Callout                    30000
+
+technician tries to finish the job          REJECTED "this job is not open for work"
+technician tries to approve their own       403
+driver declines with nothing to fall back   409 allowed: [APPROVE, CANCEL]
+driver approves                             APPROVED, jobs.status WORKING
+  estimate_approvals  DRIVER | APP | 2026-08-31 17:44:22
+
+technician re-diagnoses -> flat battery     revision ₹402
+  COVERED, paused=false, job never stopped   <- cheaper needs no new answer
+
+technician re-diagnoses -> alternator       revision ₹8,698
+  NEEDS_REAPPROVAL, jobs.status AWAITING_APPROVAL
+  driver's card: awaitingAnswer=true, mayDecline=true, 4 itemised lines
+
+driver declines the extra work              DECLINED, approvedTotalPaise 94800
+  jobs.status  WORKING            <- finishes at the scope already agreed
+  estimates    94800 APPROVED / 40200 APPROVED / 869800 REJECTED
+  events       ESTIMATE_ISSUED, ESTIMATE_APPROVED, ESTIMATE_ISSUED,
+               ESTIMATE_ISSUED, ESTIMATE_DECLINED
+```
+
+The middle step is the one worth keeping: a revision that came in CHEAPER was
+covered by the existing approval and the job never paused, which is the
+one-directional tolerance working on a real job rather than in a unit test.

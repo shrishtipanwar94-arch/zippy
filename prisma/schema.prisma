@@ -84,6 +84,11 @@ enum JobStatus {
   ON_SITE
   DIAGNOSING
   WORKING
+  // Work has PAUSED pending a driver's decision on an estimate (Phase 15c).
+  // Deliberately not a flag on the job: it is a state the technician's status
+  // ladder cannot advance out of, which is what makes "work does not continue
+  // optimistically" structural rather than a rule somebody remembers.
+  AWAITING_APPROVAL
   AWAITING_DESTINATION
   TOWING
   RESOLVED

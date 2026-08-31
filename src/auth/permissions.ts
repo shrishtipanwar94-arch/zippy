@@ -52,6 +52,14 @@ export type Resource =
   // rule lives in src/domain/promotionPolicy.ts.
   | 'chatMessage'
   | 'eventPromotion'
+  // The money domain's two halves, and they are two resources rather than one
+  // because they are done by different people. A TECHNICIAN prices what they
+  // found; the DRIVER says whether they will pay for it. A technician who
+  // could approve their own estimate is not a re-approval loop, it is a
+  // formality — the pause is only worth anything because somebody else has to
+  // say yes.
+  | 'estimate'
+  | 'estimateApproval'
   | 'actionRequest'
   // Taking one of the solver's competing plans. Its own resource because it is
   // the one console action that WRITES — everything else the console does is a
@@ -69,6 +77,9 @@ const PERMISSIONS: PermissionTable = {
     // A driver confirms exactly one KIND of promotion — a safety change — and
     // that narrowing is promotionPolicy's, not this table's.
     eventPromotion: ['read', 'update'],
+    // They see what it costs, and they are the only role that can answer.
+    estimate: ['read'],
+    estimateApproval: ['update'],
   },
   TECHNICIAN: {
     job: ['read', 'update'],
@@ -82,6 +93,8 @@ const PERMISSIONS: PermissionTable = {
     technicianAction: ['read', 'update'],
     chatMessage: ['read', 'create'],
     eventPromotion: ['read', 'update'],
+    // Prices what they found; cannot approve it.
+    estimate: ['read', 'create'],
   },
   DISPATCHER: {
     job: ['read', 'create', 'update', 'delete'],
@@ -95,6 +108,12 @@ const PERMISSIONS: PermissionTable = {
     planSelection: ['update'],
     chatMessage: ['read', 'create'],
     eventPromotion: ['read', 'update'],
+    // A dispatcher reads estimates and may answer one on the driver's behalf —
+    // a driver on a roadside with no signal still has a phone call, and the
+    // approval records the channel so "approved in the app" and "approved over
+    // the phone" are distinguishable afterwards.
+    estimate: ['read'],
+    estimateApproval: ['update'],
     // Bull Board at /admin/queues — reads queue state, can retry or discard a
     // job. An operator surface, so it gets the operator role.
     queueAdmin: ['read'],

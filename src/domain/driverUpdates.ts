@@ -27,6 +27,10 @@ const SENTENCES: Record<string, string> = {
   TECHNICIAN_DIAGNOSING: 'Your technician is checking what is wrong.',
   TECHNICIAN_WORKING: 'Your technician has started work.',
   DIAGNOSIS_CHANGED: 'Your technician has taken a closer look and updated what they think is wrong.',
+  ESTIMATE_ISSUED: 'We have worked out what this will cost. Please review it.',
+  ESTIMATE_APPROVED: 'You approved the cost. Work can continue.',
+  // Declining is not a failure — the job finishes at the scope already agreed.
+  ESTIMATE_DECLINED: 'You declined the extra work. We will finish what you already approved.',
   // A re-plan reads as reassurance rather than alarm on purpose: from the
   // driver's side the fact that matters is that somebody is still coming.
   DISPATCH_REQUEUED: 'We are arranging different help for you.',

@@ -26,7 +26,19 @@ export const technicianRouter = Router();
 
 // The statuses a technician still has work to do on. A RESOLVED or CANCELLED
 // job drops off their screen; the dispatcher keeps it.
-const OPEN_STATUSES = ['COMMITTED', 'EN_ROUTE', 'ON_SITE', 'DIAGNOSING', 'WORKING'] as const;
+//
+// AWAITING_APPROVAL IS ON THIS LIST even though the technician cannot advance
+// it. A paused job is still theirs — they are standing next to the car — and
+// dropping it off the board would tell them it had been taken away. What they
+// see instead is why it is stopped and who it is waiting on.
+const OPEN_STATUSES = [
+  'COMMITTED',
+  'EN_ROUTE',
+  'ON_SITE',
+  'DIAGNOSING',
+  'WORKING',
+  'AWAITING_APPROVAL',
+] as const;
 
 // Gated on `technicianAction`, not on `job`. A DRIVER may `read` `job` — it is
 // how they see their own incident — so guarding this board on `job` let a

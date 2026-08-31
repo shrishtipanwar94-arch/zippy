@@ -128,6 +128,20 @@ document.querySelector('[data-panel="ladder"]').addEventListener('click', async 
     return;
   }
 
+  const estimateButton = clicked.target.closest('button[data-estimate]');
+  if (estimateButton) {
+    try {
+      await api.raiseEstimate(estimateButton.dataset.estimate);
+      setError(null);
+    } catch (error) {
+      // A job with no pinned price list answers 409 rather than failing — see
+      // src/api/estimates.ts. The technician is told why in a sentence.
+      setError(error.message);
+    }
+    await refreshWork();
+    return;
+  }
+
   const diagnoseButton = clicked.target.closest('button[data-diagnose]');
   if (!diagnoseButton) return;
   try {

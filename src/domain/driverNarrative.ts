@@ -84,6 +84,11 @@ export function headlineFor(context: NarrativeContext): string {
       return `${who} is checking what is wrong.`;
     case 'WORKING':
       return `${who} is working on your vehicle now.`;
+    // WORK HAS PAUSED, and the sentence says so plainly rather than leaving a
+    // driver to wonder why nothing is happening. It points at the estimate
+    // card below it, which is the only thing that can unpause the job.
+    case 'AWAITING_APPROVAL':
+      return `${who} has worked out what is needed. Please check the cost below before they carry on.`;
     case 'AWAITING_DESTINATION':
       return 'Confirming a workshop that can take your car.';
     case 'TOWING':

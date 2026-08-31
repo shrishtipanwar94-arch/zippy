@@ -80,6 +80,19 @@ const envSchema = z.object({
   // measures what the partitioning costs in decision quality, and that
   // measurement is only meaningful if the threshold can be moved.
   SOLVER_ZONE_PARTITION_THRESHOLD: z.coerce.number().int().positive().default(400),
+
+  // HOW MUCH AN ESTIMATE MAY GROW BEFORE THE DRIVER IS ASKED AGAIN (Phase 15c).
+  //
+  // In basis points of the already-approved total — 1000 bps is 10% — because
+  // money in this codebase is integers and a percentage stored as a float is a
+  // rounding argument waiting to happen. The schema already uses bps for
+  // `technicians.rating_bps`.
+  //
+  // Configurable because it is a commercial policy, not a fact: a workshop
+  // chain that wants every rupee re-approved sets it to 0, and one that trusts
+  // its technicians on small overruns sets it higher. 10% is a plausible
+  // starting point and is not a measured figure.
+  ESTIMATE_REAPPROVAL_TOLERANCE_BPS: z.coerce.number().int().min(0).default(1000),
 });
 
 function loadConfig() {

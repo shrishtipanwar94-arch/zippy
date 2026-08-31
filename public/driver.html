@@ -209,7 +209,23 @@
           <div class="card-body">
             <h2 class="h6">What this comes to</h2>
             <ul class="list-unstyled mb-2" data-field="estimate-lines"></ul>
-            <p class="h5 mb-0">Total <span data-field="estimate-total"></span></p>
+            <p class="h5 mb-2">Total <span data-field="estimate-total"></span></p>
+            <!-- Only shown while an estimate is actually waiting on an answer.
+                 Declining means "finish what I already agreed", so it appears
+                 only when there IS something to fall back to — the server
+                 refuses it otherwise, and a button that always fails is worse
+                 than no button. -->
+            <div data-field="estimate-actions" class="d-grid gap-2" hidden>
+              <button class="btn btn-success btn-lg" data-action="approve-estimate">
+                Approve this cost
+              </button>
+              <button class="btn btn-outline-light" data-action="decline-estimate" hidden>
+                Just do what I already approved
+              </button>
+              <button class="btn btn-outline-danger" data-action="cancel-estimate">
+                Cancel the job
+              </button>
+            </div>
           </div>
         </div>
 
