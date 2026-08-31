@@ -1720,3 +1720,296 @@ driver declines the extra work              DECLINED, approvedTotalPaise 94800
 The middle step is the one worth keeping: a revision that came in CHEAPER was
 covered by the existing approval and the job never paused, which is the
 one-directional tolerance working on a real job rather than in a unit test.
+
+## Phase 15c Stage 3 — Payment / 2026-09-01 / PARTIAL
+
+Stage 3 of Phase 15c only: the provider seam, the three settlement paths, the
+two-stage authorise/capture split, and the cancellation policy. The ledger
+(section 4) and payouts (section 5) are not started.
+
+### Built
+
+**Migration** `20260901000000_phase15c_payment` — a `SettlementPath` enum and
+`jobs.settlement_path`; `PENDING_AUTHORISATION` added to `PaymentStatus`.
+
+**The provider seam**
+- `src/payments/provider.ts` — `PaymentProvider`: authorise, capture,
+  voidAuthorisation. Three operations, no more.
+- `src/payments/stubProvider.ts` — `StubProvider` (always succeeds, remembers
+  what it holds, refuses an over-capture, idempotent by key) and
+  `FailingStubProvider` (per-operation, DECLINED or UNREACHABLE).
+
+**Domain — pure**
+- `src/domain/cancellationPolicy.ts` — `cancellationCharge` over four stages,
+  and `cancellationStageFor` mapping a JobStatus onto one.
+- `src/domain/settlementPath.ts` — `resolveSettlementPath`, `usesGateway`.
+
+**Commit**
+- `src/commit/settlement.ts` — `settlementPathFor`, `serviceTypeFor`.
+- `src/commit/payments.ts` — `authoriseCallout`, `captureOnCompletion`,
+  `settleCancellation`, the shared `captureAgainstPayment`, and the `Quietly`
+  wrappers the dispatch path uses.
+- `src/commit/authorisationRetry.ts` — `retryPendingAuthorisations`, run by the
+  cleanup sweep.
+
+**Wiring** — the settlement path is pinned in `createIntakeJob`; the callout is
+authorised when the technician's accept commits the reservation; the capture is
+triggered by the COMPLETE ladder step (the verification code); a cancellation
+settles from the estimate-respond route.
+
+**Tests** — `tests/payments.test.ts` (34). Suite: 34 files, 502 tests.
+
+### Decisions
+
+**Decision:** Failure is a RETURN VALUE, and DECLINED is a different value from
+UNREACHABLE.
+**Why:** The two need opposite responses. Declined means the provider answered
+and the answer was no — a retry gets the same answer. Unreachable means we
+never heard, so the charge may or may not exist on their side, which is why
+every request carries an idempotency key and why retrying is the only way to
+find out. Collapsing both into `throw` would make the retry sweep either
+useless or dangerous.
+**Alternative:** Throw on failure.
+**Why not:** An exception is the wrong shape for an expected outcome, and it
+loses the distinction that decides what to do next.
+
+**Decision:** The stub REMEMBERS what it authorised, and refuses a capture
+larger than the hold.
+**Why:** Without it, "never truncate — get a second authorisation" has nothing
+to push against and the test would pass against a stub that would have let a
+single oversized capture through. A stub that is more permissive than
+production is a stub that hides the bug it exists to catch.
+**Tradeoff:** A Map that lives for the process. It is not a database and a
+restart forgets, which is correct for a stand-in.
+
+**Decision:** A contracted FLEET is FLEET_TENANT even when the service is not
+covered.
+**Why:** An uncovered service on a fleet contract is an invoice line argued
+about at month end. It is not a moment to ask a stranded fleet driver for a
+card, and they would not have one to give.
+**Tradeoff:** Uncovered fleet work is invoiced rather than refused. That is a
+commercial choice and it is the right one at a roadside.
+
+**Decision:** A consumer whose contract does not cover THIS service is a
+walk-in for THIS job.
+**Why:** That is what "covered services" means. Coverage is per service type,
+not per customer.
+
+**Decision:** The settlement path is pinned at job creation, like the price
+list.
+**Why:** The terms a customer is served under are the terms in force when they
+asked for help. A contract lapsing while a technician drives out must not
+retroactively hand them a bill they were never quoted.
+**Tradeoff:** A job created moments before a contract activates settles as a
+walk-in. Correct, and the same trade the price list makes.
+
+**Decision:** Authorise the CALLOUT FEE ONLY at commit.
+**Why:** You cannot charge the full amount before dispatch because nobody knows
+it — the fault is a distribution and it may be a ₹640 belt or a ₹2,340
+alternator plus a tow. What IS known is the callout fee: fixed, small, and owed
+the moment somebody drives out.
+
+**Decision:** THE VERIFICATION CODE TRIGGERS THE CAPTURE.
+**Why:** It could have been a status change or a dispatcher pressing something.
+Tying it to the code means the money moves on the one signal that comes from
+the CUSTOMER's side of the transaction — the technician's "I am done" is a
+claim, and the code is the driver confirming it. Every other trigger would let
+a job be charged for on one party's word.
+
+**Decision:** Never truncate a capture; never leave money held. Both rules in
+ONE function, used by completion and cancellation.
+**Why:** They are the two ways to get money wrong in opposite directions.
+Capturing only what was held silently bills the customer less than they
+approved and leaves the business short; capturing less than the hold and
+walking away leaves a customer's money frozen until the provider's expiry. An
+ON_SCENE cancellation charges callout PLUS parts, which EXCEEDS the callout-only
+hold — so it needs the same second authorisation a completion does, and a
+second copy of that logic in a file about money is a second place to get it
+wrong.
+**Tradeoff:** Two captures against two authorisations on the ordinary path.
+That is what the provider is actually holding, so it is honest rather than
+convenient.
+
+**Decision:** A failed authorisation flags itself and the job dispatches anyway.
+**Why:** Invariant 8 and the brief twice: a stranded driver does not wait for a
+card to clear. Every dispatch-path call goes through a `Quietly` wrapper, so a
+payment failure cannot fail the thing that called it.
+**Tradeoff:** Work can be done that is never paid for. That is the correct
+direction of failure for roadside assistance, and the retry sweep plus the
+operator flag are what bound it.
+
+**Decision:** The payment row is created BEFORE the provider is called.
+**Why:** A row created only on success makes an unreachable gateway
+indistinguishable from a job nobody tried to charge. Creating it first leaves
+something to show an operator and something for the sweep to find.
+
+**Decision:** A retry SWEEP, not a retrying queue job per payment.
+**Why:** The failure being recovered from is usually the provider being down,
+which affects every job at once. A per-payment retry job is a thundering herd
+against a gateway that is already unwell; one periodic pass paces itself and
+needs no new queue.
+**Tradeoff:** Up to one cleanup interval of delay. Nothing is waiting on it.
+
+**Decision:** The sweep runs OUTSIDE the cleanup transaction.
+**Why:** Every other sweep is pure database work that belongs in one atomic
+pass. This one talks to a payment provider, and holding a Postgres transaction
+open across network calls to a gateway that may be timing out is how a slow
+vendor becomes a database incident.
+
+### Concurrency
+
+**Scenario:** A completion capture runs twice — the technician's offline queue
+replays the COMPLETE step, or a redelivery fires the hook again.
+**What races:** Two captures against the same authorisation.
+**Why dangerous:** Charging a customer twice is the worst bug in this file.
+**How handled:** Three layers, and they are independent. The ladder step itself
+is idempotent (Phase 15's `technician_actions` unique key), so the second
+replay never reaches the capture. If it did, `captureOnCompletion` returns
+early on a payment already CAPTURED. If THAT were missed, every capture request
+carries a key derived from the job (`complete-cap-<jobId>`) and the provider
+returns the original result rather than charging again. Proved by calling
+`captureOnCompletion` twice and asserting the capture rows do not grow.
+
+**Scenario:** The retry sweep runs while a commit is authorising the same job.
+**How handled:** Both derive the same key from the job id (`auth-<jobId>`), so
+the provider recognises the repeat and returns the first result instead of
+placing a second hold. The key is derived rather than random precisely so that
+two independent callers agree on it without coordinating.
+
+**Scenario:** A cancellation and a completion arrive together.
+**Not handled, and recorded below.** Nothing serialises them, so a job could in
+principle be captured for both. In practice the job status makes it
+impossible — a cancelled job is not on the ladder — but that is a fact about
+another module, not a guarantee this one enforces.
+
+### Weaknesses introduced
+
+1. **A cancellation and a completion are not serialised against each other.**
+   Two capture paths exist on one payment and only the job's status separates
+   them. A conditional update claiming the payment before capturing is the real
+   fix.
+2. **`PENDING_AUTHORISATION` does not record WHY.** The provider distinguishes
+   DECLINED from UNREACHABLE and the payment event stores it, but the status
+   does not — so the retry sweep re-attempts declines it could skip. Wasteful
+   rather than wrong, because the idempotency key makes it harmless.
+3. **Parts consumed is a parameter nobody supplies.** `settleCancellation`
+   takes `partsConsumedPaise` and the only caller passes nothing, so an
+   ON_SCENE cancellation currently charges the callout fee alone. Tracking what
+   a technician actually opened is inventory (Phase 18); the policy is right
+   and its most interesting input is not wired.
+4. **A capture failure leaves the payment FAILED with no retry.** Unlike a
+   failed authorisation, nothing sweeps it. The money is owed and visible and
+   nobody chases it automatically.
+5. **CONTRACT_CONSUMER is resolved but not yet honoured in the estimate.** The
+   path is pinned and no gateway is called, but the estimate still shows the
+   full cost with no "covered / payable" split — so a covered consumer sees a
+   number they will not pay. Carried from stage 2.
+6. **No `ContractBilling` rows are written.** FLEET_TENANT jobs are "invoiced
+   monthly" in the sense that no gateway is called; nothing accumulates them
+   into an invoice. That is the ledger's neighbourhood.
+7. **The stub's memory is per-process.** A test that authorised in one file
+   cannot capture in another. Correct for a stand-in, and worth knowing before
+   somebody tries.
+8. **No refunds.** The `Refund` table is untouched. A capture taken in error is
+   currently corrected by nothing.
+9. **`payments.method` is always CARD on the walk-in path.** UPI is the
+   dominant Indian rail and is a column value away, but nothing chooses it.
+
+### Concepts now genuinely in use
+
+- A vendor seam defined by the failure modes rather than by the happy path —
+  DECLINED and UNREACHABLE are different because they need different responses.
+- Authorise-then-capture as a two-stage commitment under uncertainty: hold what
+  is known, take what is agreed.
+- Idempotency keys DERIVED from a durable id so two independent callers agree
+  on one without coordinating.
+- A commercial policy as a pure function, so the rule a customer argues with is
+  a thing you can read aloud and point a test at.
+
+### Interview angle
+
+"You cannot charge the customer at dispatch because you do not know the amount
+yet. What do you do?" Authorise the one thing that IS known — the callout fee —
+and capture the approved total at completion, topping the authorisation up if
+it is larger. Never truncate to what happens to be held, because that silently
+bills less than the customer agreed to; and never leave the remainder held if
+it is smaller, because that is their money.
+
+"What if the gateway is down when the job commits?" The job dispatches anyway.
+Payment is never on the dispatch critical path — a stranded driver does not
+wait for a card to clear — so the payment is flagged PENDING_AUTHORISATION, an
+operator sees it on the incident timeline, and a sweep retries it with the same
+derived idempotency key so a retry cannot place a second hold.
+
+### What broke
+
+- **THE APPEND-ONLY TRIGGER REFUSED TO LET A TEST TIDY UP, and it was right.**
+  This file creates a job per test through real intake, and `zippy_test` keeps
+  them — which matters because `GET /jobs` returns the 50 NEWEST jobs and two
+  older suites (ownership, tenancy) assert a dispatcher's list contains theirs.
+  Twenty accumulating jobs pushed them off the end and broke both.
+  The obvious fix was to delete them in the fixture. Postgres refused:
+  `append-only table job_events: DELETE is not permitted` — deleting a job
+  cascades to its events, and that trigger has been in the schema since Phase 1
+  specifically so nothing, not even a test, can quietly erase an audit trail.
+  So the fixture AGES the jobs instead, dating them into the past where they
+  are still auditable and simply never in the newest fifty. A good outcome: the
+  rule was in the database rather than in a convention, so it held.
+
+- **A fixture upsert stranded its own data for the THIRD time in this phase.**
+  Moving the jobs into the past meant the contracts had to start earlier too —
+  but `contract.upsert`'s `update` named only `active`, so rows from the
+  previous run kept `startsAt: 2030` and every settlement path resolved to
+  WALK_IN. Two settlement tests and three gateway tests failed together and
+  looked like a logic bug in `resolveSettlementPath`, which was correct all
+  along. The update now names every field the fixture cares about. Stage 1 hit
+  this on rate rows, stage 2 avoided it by deleting and rebuilding, and stage 3
+  hit it again on a table that cannot simply be deleted.
+
+- **The cancellation path could not have paid its own bill.** An ON_SCENE
+  cancellation charges the callout fee PLUS parts consumed — which is MORE than
+  the callout-only authorisation — and the first draft captured it directly
+  against that hold. The stub refused it, correctly, because a real gateway
+  would. Fixed by routing both completion and cancellation through one
+  `captureAgainstPayment` that tops the authorisation up. Worth recording as
+  the moment the stub earned its keep: a permissive stub would have let this
+  ship.
+
+- **Heredocs ate a large edit again**, silently writing nothing while reporting
+  nothing. Caught by grepping for the new symbol rather than by trusting the
+  exit code — the same lesson as the CLAUDE.md note about rejected Bash calls,
+  from the other direction: check the disk, not the report.
+
+### The stage check, performed
+
+`npm run test:fast` — 34 files, 502 tests, green, run twice so the new file is
+re-runnable against the shared database.
+
+The brief's own list, and where each is proved in `tests/payments.test.ts`:
+
+```
+three settlement paths from the contract     FLEET_TENANT / CONTRACT_CONSUMER / WALK_IN
+a GOLD fleet job never calls the provider    provider.calls === []   <- asserted on the
+                                             PROVIDER, not on our rows
+capture exceeding the authorisation          ₹300 held, ₹2,340 approved
+                                             -> captures [30000, 204000], second auth,
+                                                payment CAPTURED at 234000
+top-up declined                              CAPTURE_FAILED, payment FAILED,
+                                             amount NOT reduced, zero captures
+partial capture                              remainder voided in captureAgainstPayment
+double capture, same keys                    two capture rows from ONE completion;
+                                             the second call adds none
+provider unreachable at commit               PENDING_AUTHORISATION, job stays COMMITTED,
+                                             PAYMENT_AUTHORISATION_PENDING event raised
+retry sweep                                  recovers it to AUTHORISED
+cancel at each of the four stages            VOID / VOID / callout / callout + parts
+```
+
+End to end against the seeded contracts, through the real intake route:
+
+```
+driver-metrocab-1  (GOLD fleet)     settlementPath FLEET_TENANT
+driver-walkin-1    (no contract)    settlementPath WALK_IN
+```
+
+Both pinned on the job row and on the `JOB_CREATED` payload.

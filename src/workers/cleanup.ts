@@ -25,6 +25,8 @@ import type { Job, Queue } from 'bullmq';
 import type { Prisma } from '@prisma/client';
 import { runIdempotently } from '../queues/idempotent.js';
 import { escalateClosedSlaWindows } from '../commit/slaEscalation.js';
+import { retryPendingAuthorisations } from '../commit/authorisationRetry.js';
+import { prismaBase } from '../infra/prismaBase.js';
 
 export const CLEANUP_SCHEDULER_ID = 'cleanup-sweep';
 export const CLEANUP_INTERVAL_MS = 5 * 60 * 1000; // 5 minutes
@@ -67,4 +69,17 @@ export async function processCleanup(job: Job): Promise<void> {
         `raised ${slaEscalated} SLA breach follow-ups`,
     );
   });
+
+  // OUTSIDE THE TRANSACTION, deliberately. Every other sweep above is pure
+  // database work that belongs in one atomic pass; this one talks to a payment
+  // provider, and holding a Postgres transaction open across a series of
+  // network calls to a gateway that may be timing out is how a slow vendor
+  // becomes a database incident.
+  //
+  // It is also outside `runIdempotently`: re-running it is already safe,
+  // because each authorisation reuses a key derived from its job, and a sweep
+  // that skipped itself after a crash would leave the payments it had not
+  // reached waiting a full interval for no reason.
+  const authorised = await retryPendingAuthorisations(prismaBase);
+  if (authorised > 0) await job.log(`recovered ${authorised} pending callout authorisations`);
 }

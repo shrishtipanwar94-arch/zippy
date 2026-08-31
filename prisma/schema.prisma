@@ -148,6 +148,22 @@ enum ActionStatus {
   CANCELLED
 }
 
+// HOW A JOB GETS PAID FOR, decided once at job creation from the driver's
+// tenant and contract and then never recomputed (Phase 15c). An enum rather
+// than a String — the schema's rule is that only genuine state machines get
+// enums, and this is a classification — because it is the branch that decides
+// whether a gateway is called at all, and a typo'd string would silently take
+// a job down the wrong payment path.
+enum SettlementPath {
+  // A fleet with a contract. Invoiced monthly; no gateway is ever called.
+  FLEET_TENANT
+  // A consumer whose contract covers this service. Zero payable, no gateway —
+  // but the driver still sees the estimate with the deduction.
+  CONTRACT_CONSUMER
+  // Nobody's contract covers this. Authorise, then capture.
+  WALK_IN
+}
+
 enum PaymentMethod {
   CARD
   UPI
@@ -157,6 +173,11 @@ enum PaymentMethod {
 
 enum PaymentStatus {
   PENDING
+  // We TRIED to authorise and could not — the gateway declined or was
+  // unreachable. Operationally different from PENDING ("nothing attempted
+  // yet"): this one is flagged for an operator and owned by a retry sweep,
+  // and the job dispatched anyway (Phase 15c, invariant 8).
+  PENDING_AUTHORISATION
   AUTHORISED
   CAPTURED
   REFUNDED
@@ -533,19 +554,23 @@ model UnitStatusHistory {
 // ============================================================================
 
 model Job {
-  id                   String      @id @default(cuid())
-  tenantId             String?     @map("tenant_id")
-  driverId             String      @map("driver_id")
-  vehicleId            String      @map("vehicle_id")
-  zoneId               String      @map("zone_id")
-  status               JobStatus   @default(DRAFT)
-  safetyLevel          SafetyLevel @default(NORMAL) @map("safety_level")
-  serviceType          String?     @map("service_type")
-  version              Int         @default(0)
-  assignedUnitId       String?     @map("assigned_unit_id")
-  assignedTechnicianId String?     @map("assigned_technician_id")
-  priceListId          String?     @map("price_list_id")
-  slaPolicyId          String?     @map("sla_policy_id")
+  id                   String          @id @default(cuid())
+  tenantId             String?         @map("tenant_id")
+  driverId             String          @map("driver_id")
+  vehicleId            String          @map("vehicle_id")
+  zoneId               String          @map("zone_id")
+  status               JobStatus       @default(DRAFT)
+  safetyLevel          SafetyLevel     @default(NORMAL) @map("safety_level")
+  serviceType          String?         @map("service_type")
+  version              Int             @default(0)
+  assignedUnitId       String?         @map("assigned_unit_id")
+  assignedTechnicianId String?         @map("assigned_technician_id")
+  priceListId          String?         @map("price_list_id")
+  slaPolicyId          String?         @map("sla_policy_id")
+  // Resolved at creation from Contract and CoveredService and NEVER
+  // recomputed, for the same reason `price_list_id` is pinned: the terms a
+  // customer is served under are the terms in force when they asked.
+  settlementPath       SettlementPath? @map("settlement_path")
 
   // Location refinement — a feasibility input, not a UX nicety. Carriageway
   // direction is first-class: a unit on the far side of a divided highway is

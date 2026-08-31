@@ -22,6 +22,8 @@ import { prismaBase } from '../infra/prismaBase.js';
 import { authenticate, requirePermission } from './middleware/authenticate.js';
 import { buildEstimate } from '../commit/estimates.js';
 import { respondToEstimate } from '../commit/estimateResponses.js';
+import { settleCancellation } from '../commit/payments.js';
+import { logger } from '../infra/logger.js';
 import { formatRupees } from '../domain/money.js';
 
 export const estimatesRouter = Router();
@@ -164,12 +166,16 @@ estimatesRouter.post(
     // said the role may answer estimates; this says which ones.
     const estimate = await prismaBase.estimate.findUnique({
       where: { id: estimateId },
-      select: { jobId: true },
+      select: { jobId: true, job: { select: { status: true } } },
     });
     if (!estimate || !(await visibleJobId(estimate.jobId))) {
       res.status(404).json({ error: 'not_found' });
       return;
     }
+    // READ BEFORE THE CANCEL, not after. The cancellation policy's whole
+    // question is what was happening when the driver pulled out, and by the
+    // time `respondToEstimate` returns the row already says CANCELLED.
+    const statusAtCancellation = estimate.job.status;
 
     const result = await respondToEstimate(prismaBase, {
       estimateId,
@@ -195,6 +201,21 @@ estimatesRouter.post(
         allowed: ['APPROVE', 'CANCEL'],
       });
       return;
+    }
+
+    if (result.outcome === 'CANCELLED') {
+      // WHAT A CANCELLATION COSTS is a pure function
+      // (src/domain/cancellationPolicy.ts); this is where its answer is acted
+      // on. Never allowed to fail the cancellation itself — the driver has
+      // pulled out whether or not a gateway is reachable.
+      try {
+        await settleCancellation(prismaBase, {
+          jobId: result.jobId,
+          statusAtCancellation,
+        });
+      } catch (error) {
+        logger.error({ err: error, jobId: result.jobId }, 'could not settle a cancellation');
+      }
     }
 
     res.json(result);

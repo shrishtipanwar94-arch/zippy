@@ -14,7 +14,7 @@
 // first hypothesis is missing is not a partially-created job, it is a job the
 // question selector would crash on.
 
-import type { Prisma, PrismaClient, SafetyLevel } from '@prisma/client';
+import type { Prisma, PrismaClient, SafetyLevel, SettlementPath } from '@prisma/client';
 import { classifySymptoms } from '../domain/faultRules.js';
 import type { SymptomPayload } from '../domain/symptoms.js';
 import { buildSafetyContext, triageSafety } from '../domain/safety.js';
@@ -23,6 +23,7 @@ import { locationColumns } from '../domain/location.js';
 import type { LocationInput } from '../domain/location.js';
 import { nearestZone } from '../domain/geo.js';
 import { priceListInForce } from '../pricing/priceList.js';
+import { settlementPathFor } from '../commit/settlement.js';
 import { logger } from '../infra/logger.js';
 import { appendJobEvent } from './events.js';
 import { recordHypothesis } from './hypothesis.js';
@@ -58,6 +59,11 @@ export type IntakeResult = {
   // The prices this job will settle at, whatever happens to the catalogue
   // afterwards. Null when no list was in force — see resolvePriceListId.
   priceListId: string | null;
+  // WHICH OF THE THREE WAYS this job settles, resolved from the driver's
+  // contract at this instant and never asked again. A contract that lapses
+  // while a technician is driving out does not retroactively hand the customer
+  // a bill they were never quoted.
+  settlementPath: SettlementPath;
   safetyLevel: SafetyLevel;
   safetyReasonCodes: string[];
   entropyBits: number;
@@ -124,6 +130,14 @@ export async function createIntakeJob(db: PrismaClient, request: IntakeRequest):
   return runIntakeTransaction(db, async (tx) => {
     const zoneId = await resolveZoneId(tx, columns.lat, columns.lng);
     const priceListId = await resolvePriceListId(tx, request);
+    // Pinned for the same reason the price list is. Unlike the price list this
+    // has no null case: every job settles SOME way, and a job with no contract
+    // is a walk-in rather than an unanswerable question.
+    const settlementPath = await settlementPathFor(tx, {
+      tenantId: request.tenantId,
+      onHighway: columns.onHighway,
+      at: request.at,
+    });
 
     const job = await tx.job.create({
       data: {
@@ -132,6 +146,7 @@ export async function createIntakeJob(db: PrismaClient, request: IntakeRequest):
         vehicleId: request.vehicleId,
         zoneId,
         priceListId,
+        settlementPath,
         status: 'INTAKE',
         safetyLevel: triage.level,
         createdAt: request.at,
@@ -174,7 +189,7 @@ export async function createIntakeJob(db: PrismaClient, request: IntakeRequest):
       // The pinned price list is on the event as well as the column: the
       // column is what the job settles at, this is the record that it was
       // decided at creation and by whom.
-      payload: { zoneId, priceListId },
+      payload: { zoneId, priceListId, settlementPath },
     });
     await appendJobEvent(tx, {
       ...common,
@@ -230,6 +245,7 @@ export async function createIntakeJob(db: PrismaClient, request: IntakeRequest):
       jobId: job.id,
       zoneId,
       priceListId,
+      settlementPath,
       safetyLevel: triage.level,
       safetyReasonCodes: triage.reasonCodes,
       entropyBits: hypothesis.entropy,

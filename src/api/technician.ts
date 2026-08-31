@@ -20,6 +20,7 @@ import { authenticate, requirePermission } from './middleware/authenticate.js';
 import { recordTechnicianDecision } from '../commit/saga.js';
 import { applyTechnicianAction } from '../commit/technicianActions.js';
 import { recordArrivalEstimateQuietly } from '../commit/arrivalEstimate.js';
+import { authoriseCalloutQuietly, captureOnCompletionQuietly } from '../commit/payments.js';
 import { LADDER_STEPS, nextStepFor } from '../domain/jobLadder.js';
 
 export const technicianRouter = Router();
@@ -177,7 +178,14 @@ technicianRouter.post(
 
     // An accept that committed the reservation is the first moment we can say
     // when this driver will be reached. Never allowed to fail the response.
-    if (state === 'COMMITTED') await recordArrivalEstimateQuietly(prismaBase, offer.jobId);
+    if (state === 'COMMITTED') {
+      await recordArrivalEstimateQuietly(prismaBase, offer.jobId);
+      // STAGE ONE OF THE TWO-STAGE SPLIT: the callout fee, and nothing else,
+      // because nobody yet knows what the repair costs. `Quietly` is the whole
+      // invariant — a stranded driver does not wait for a card to clear, so a
+      // failed authorisation flags itself and the job commits regardless.
+      await authoriseCalloutQuietly(prismaBase, offer.jobId);
+    }
 
     res.json({ offerId: offer.id, jobId: offer.jobId, sagaState: state });
   },
@@ -233,6 +241,16 @@ technicianRouter.post(
     // computed when the offer was accepted.
     if (result.outcome === 'APPLIED' && body.step === 'EN_ROUTE') {
       await recordArrivalEstimateQuietly(prismaBase, jobId);
+    }
+
+    // THE CODE IS WHAT RELEASES THE MONEY. Not a status change, not a
+    // dispatcher pressing something: the driver reads a code off their phone
+    // and the technician types it, so the capture is triggered by the one
+    // signal that comes from the CUSTOMER's side of the transaction. Quietly,
+    // because the work is done and the job is complete either way — a failed
+    // capture is money to chase, not a reason to refuse to finish a job.
+    if (result.outcome === 'APPLIED' && body.step === 'COMPLETE') {
+      await captureOnCompletionQuietly(prismaBase, jobId);
     }
 
     // EVERY OUTCOME IS 200, INCLUDING REJECTED. A queued action is replayed
