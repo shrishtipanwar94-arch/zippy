@@ -61,6 +61,13 @@ export type JobEventMessage = {
   eventType: string;
   payload: unknown;
   at: string;
+  // Carried from Phase 14. The console's incident timeline filters by zone and
+  // colours by safety level, and a pushed event that lacked them would have to
+  // be rendered blank or trigger a lookup per event — which is a fetch per
+  // arrival on the exact panel that exists to avoid fetching. Both are free
+  // here: routing already reads the job to pick its rooms.
+  zoneId: string;
+  safetyLevel: string;
 };
 
 export async function publishJobEvents(events: PublishableJobEvent[]): Promise<void> {
@@ -90,7 +97,7 @@ async function routeAndEmit(target: Emittable, events: PublishableJobEvent[]): P
   const jobIds = [...new Set(events.map((event) => event.jobId))];
   const jobs = await prismaBase.job.findMany({
     where: { id: { in: jobIds } },
-    select: { id: true, zoneId: true, tenantId: true },
+    select: { id: true, zoneId: true, tenantId: true, safetyLevel: true },
   });
 
   const jobsById = new Map(jobs.map((job) => [job.id, job]));
@@ -109,6 +116,8 @@ async function routeAndEmit(target: Emittable, events: PublishableJobEvent[]): P
       eventType: event.eventType,
       payload: event.payload,
       at: event.at.toISOString(),
+      zoneId: job.zoneId,
+      safetyLevel: job.safetyLevel,
     };
 
     // `to()` takes the whole list and unions it, and Socket.IO delivers once

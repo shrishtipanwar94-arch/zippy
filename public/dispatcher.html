@@ -44,14 +44,39 @@
 
       <!-- THE THREE PLANS. Phase 4's per-row unit dropdown lived in this page
            and is gone: a dispatcher chooses between whole plans now, not
-           between units one job at a time. Nothing here reserves anything —
-           holds are Phase 11. -->
+           between units one job at a time. Selecting one RECORDS the decision
+           (and its override reason); it does not reserve anything — that is
+           Phase 13's action queue, one job at a time. -->
+      <div data-field="plan-error" class="alert alert-warning py-1 px-2 small" hidden></div>
       <div class="row g-2 mb-3" data-panel="plans"></div>
 
       <!-- THE CONSOLE. Two panels side by side: what happened, and why the
            system decided what it did about it. Phase 14 Stage 1 builds only
            these two — the scarcity panel, competing plans, the priority queue
            and the map are later stages. -->
+      <!-- SCARCITY AND THE QUEUE. Two whole-board reads: what the fleet is thin
+           on, and which job to look at next. Both refresh on demand rather
+           than per event — a single job event rarely changes either. -->
+      <div class="row g-3 mb-3">
+        <div class="col-lg-5">
+          <div class="card h-100">
+            <div class="card-header d-flex gap-2 align-items-center">
+              <span>Capability scarcity</span>
+              <button data-action="refresh-board" class="btn btn-sm btn-outline-secondary ms-auto py-0">
+                Refresh
+              </button>
+            </div>
+            <div class="card-body p-2" data-panel="scarcity"></div>
+          </div>
+        </div>
+        <div class="col-lg-7">
+          <div class="card h-100">
+            <div class="card-header">Priority queue — safety first, then SLA risk, then age</div>
+            <div class="card-body p-2" data-panel="queue"></div>
+          </div>
+        </div>
+      </div>
+
       <div class="row g-3 mb-3">
         <div class="col-lg-7">
           <div class="card h-100">

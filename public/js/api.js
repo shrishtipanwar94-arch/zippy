@@ -52,6 +52,22 @@ export function getDecision(jobId) {
   return request('GET', `/jobs/${jobId}/decision`);
 }
 
+export function getScarcity() {
+  return request('GET', '/capabilities/scarcity');
+}
+
+export function getQueue() {
+  return request('GET', '/queue');
+}
+
+export function selectPlan(planVariantId, overrideReasonCode) {
+  return request(
+    'POST',
+    `/plans/${planVariantId}/select`,
+    overrideReasonCode ? { overrideReasonCode } : {},
+  );
+}
+
 export function createIntake(payload) {
   return request('POST', '/jobs/intake', payload);
 }

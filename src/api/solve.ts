@@ -58,6 +58,16 @@ solveRouter.post('/solve', authenticate, requirePermission('read', 'solverRun'),
     jobId: null,
   });
 
+  // The engine returns plans as in-memory objects; `persistSolverRun` writes a
+  // `plan_variants` row per plan. A dispatcher selecting a plan is pointing at
+  // one of those ROWS, so the response has to carry their ids — without them
+  // the console can show three plans and take none of them.
+  const variants = await prismaBase.planVariant.findMany({
+    where: { solverRunId },
+    select: { id: true, label: true },
+  });
+  const variantByLabel = new Map(variants.map((variant) => [variant.label, variant.id]));
+
   res.json({
     solverRunId,
     snapshotHash: outcome.snapshotHash,
@@ -66,7 +76,10 @@ solveRouter.post('/solve', authenticate, requirePermission('read', 'solverRun'),
     feasibleCount: outcome.feasibleCount,
     zonePartitioned: outcome.zonePartitioned,
     wallClockMs: outcome.wallClockMs,
-    plans: outcome.plans,
+    plans: outcome.plans.map((plan) => ({
+      ...plan,
+      planVariantId: variantByLabel.get(plan.label) ?? null,
+    })),
     rejected: outcome.rejected.map((rejection) => ({
       jobId: rejection.jobId,
       unitId: rejection.option.unitId,

@@ -170,3 +170,188 @@ rejections grouped under NO_TECHNICIAN_ON_SHIFT.
   colour before: the Phase 4 pages are deliberately unstyled Bootstrap
   defaults. Created now to the documented spec rather than invented, which is
   the difference between "the palette exists" and "a palette exists".
+
+## Phase 14 Stage 2 — live timeline, scarcity, competing plans, priority queue / 2026-08-31 / PARTIAL
+
+Items 1-4 and 6. Only the live map (item 5) remains, and the phase's own note
+says it is the one to cut.
+
+### Built
+
+`src/domain/scarcity.ts` — `classifyShare`, `summarise`, `byUrgency`,
+`RED_SHARE` (0.1), `AMBER_SHARE` (0.25). Pure.
+
+`src/domain/priority.ts` — `compareForQueue`, `orderQueue`, `slaRisk`,
+`ageMinutes`, `SAFETY_ORDER`. Pure, `now` passed in.
+
+`src/commit/decisionRecords.ts` — `selectPlan`, `latestDecisionFor`,
+`RECOMMENDED_PLAN`. The writer `decision_records` has been waiting for since
+Phase 1.
+
+`src/api/console.ts` — three more endpoints: `GET /capabilities/scarcity`,
+`GET /queue`, `POST /plans/:id/select`. Plus the inspector fix.
+
+`src/realtime/publish.ts` and `replay.ts` — `JobEventMessage` now carries
+`zoneId` and `safetyLevel`.
+
+`src/api/solve.ts` — the response carries each plan's persisted
+`planVariantId`.
+
+`src/auth/permissions.ts` — `planSelection` resource, DISPATCHER-only.
+
+Frontend: `panels/scarcity.js`, `panels/queue.js`, `panels/plans.js` rewritten
+with selection and the override box, `socket.js` pushing into the timeline,
+`state.js` (`pushTimelineEvent`, scarcity, queue, plan selection, reason
+drafts), and the console markup.
+
+Tests: `tests/priority.test.ts` (15), `tests/consoleRoutes.test.ts` grown to
+25. Suite 333 fast across 24 files, 9 concurrency. `tsc --noEmit`,
+`eslint src evaluation`, `npm run build` clean.
+
+Smoke-tested against the compiled build. Scarcity on the seeded fleet:
+`EV_HV_CERTIFICATION` 2/24 crews (red); `BRAKE_REPAIR` 3/24 crews from 8
+technicians and 6 units — the coupling visible in one row. Queue: 292 jobs,
+81 HIGH_RISK first. Plan selection: BALANCED recorded 14 decisions with no
+reason; FASTEST_RESOLUTION refused with 422 and no rows written; the same plan
+with a reason recorded 14 decisions and 14 `PLAN_OVERRIDDEN` events. The
+inspector then returned `runSource: decision-record` with the override reason
+attached, where before Stage 2 it always returned `latest-solve`.
+
+### Decisions
+
+- **Decision:** the recommended plan needs no reason; the other two do.
+  **Why:** taking BALANCED is agreeing with the model, and demanding
+  justification for agreement is friction that teaches operators to type
+  "ok" into a box. Taking a different plan is a judgement the model did not
+  make — a road closed ten minutes ago, a customer who has already waited
+  twice — and if that judgement is not written down, "why did we send the
+  slower van?" is unanswerable six weeks later.
+  **Alternative:** require a reason for every selection, or none.
+  **Why not:** the first trains people to defeat it; the second loses the only
+  information the table exists to hold.
+  **Tradeoff:** BALANCED is now load-bearing in a way it was not — it is the
+  vector Phase 10 measures AND the one that skips the reason box, so changing
+  the recommendation changes what counts as an override.
+
+- **Decision:** the override is refused with 422 BEFORE anything is written.
+  **Why:** a half-recorded override would put the assignments on the record
+  with no explanation, which is precisely the state the table exists to
+  prevent. 422 rather than 400 because the request is well-formed; what is
+  missing is a justification, not a field.
+  **Alternative:** write the decisions and leave the reason nullable.
+  **Why not:** a nullable reason on an override is indistinguishable from a
+  recommendation taken normally.
+  **Tradeoff:** the client has to know which plans need a reason, or it will
+  discover it by being rejected. The panel shows the box only on the two
+  override plans, so the UI and the server agree rather than the browser
+  guessing.
+
+- **Decision:** selecting a plan RECORDS a decision; it does not dispatch.
+  **Why:** turning a plan into reservations means one saga per assignment, and
+  Phase 13 already built that path — one job at a time, with a dispatcher
+  confirming each. One click starting fourteen sagas is not something this
+  phase asks for.
+  **Alternative:** select and dispatch in one action.
+  **Why not:** it is a large, hard-to-undo action built by implication.
+  **Tradeoff:** selection is currently inert beyond the audit trail. A
+  dispatcher who selects a plan still has to work the action queue to make any
+  of it real, and nothing on screen says so.
+
+- **Decision:** the inspector resolves its solver run in three steps —
+  decision record, then the run behind the current assignment, then the newest
+  run.
+  **Why:** Stage 1 answered "the newest run that touched this job", which
+  after Phase 13 is routinely a zone re-plan that decided nothing about it.
+  The run that put THIS unit on THIS job is matched on the unit, not on
+  recency.
+  **Alternative:** always use the newest run.
+  **Why not:** it is the bug.
+  **Tradeoff:** three queries in the worst case where one would do, and
+  `runSource` in the response so a reader knows which of the three answered.
+
+- **Decision:** the published job event carries `zoneId` and `safetyLevel`.
+  **Why:** the timeline filters by zone and colours by safety. A pushed event
+  without them would have to be rendered blank or trigger a lookup per arrival
+  — a fetch per event on the one panel that exists to avoid fetching. Routing
+  already reads the job to choose its rooms, so both fields are free.
+  **Alternative:** look them up client-side from the jobs already in state.
+  **Why not:** a job that arrives via an event is not in state yet, which is
+  exactly the case the timeline most needs to render.
+  **Tradeoff:** the message got wider, and `replay.ts` had to be changed in
+  step so a replayed event is indistinguishable from a live one. That
+  indistinguishability is load-bearing: the client de-duplicates by
+  `(job, sequence)` and must not need to know where a message came from.
+
+- **Decision:** scarcity reports CREWED PAIRS as the headline, with units and
+  technicians beside it.
+  **Why:** a capability on a van whose driver is not certified in it cannot be
+  dispatched. "6 units and 8 technicians" reads as comfortable; 3 crews is the
+  truth, and on the seeded fleet `BRAKE_REPAIR` is exactly that.
+  **Alternative:** report unit counts, which is what the phase's example
+  ("flatbed 3/24") suggests.
+  **Why not:** it overstates capacity by exactly the amount the coupling
+  costs, which is the thing the panel exists to make visible.
+  **Tradeoff:** three numbers per row instead of one.
+
+### Weaknesses introduced
+
+- **Scarcity and the queue do not update live.** Both are whole-board reads
+  refreshed on demand; only the timeline is pushed. A single job event rarely
+  changes either, so per-event refetching would be a request per arrival — but
+  a dispatcher watching the scarcity panel through a busy hour is watching a
+  stale number, and nothing says how stale.
+- **Selecting a plan is inert beyond the audit trail.** See the decision
+  above. Nothing on the screen tells the operator that.
+- **A plan can be selected twice**, writing a second set of decision records.
+  There is no "already decided" guard, so two dispatchers acting on the same
+  board both leave a record and the newest silently wins in the inspector.
+  That is arguably correct — both really did decide — but it is not designed,
+  it is unhandled.
+- **`RECOMMENDED_PLAN` is a constant in two conceptual places.**
+  `decisionRecords.ts` owns it and `panels/plans.js` repeats the literal
+  `'BALANCED'` to decide whether to show the reason box. They cannot drift
+  silently in the same way a duplicated rule would — the server refuses
+  regardless — but the browser can show the wrong affordance.
+- **The queue reads every pending job on every request.** 292 rows today, no
+  pagination, no cap. The timeline learned that lesson and the queue did not.
+- **Age is displayed in raw minutes**, so a three-month-old simulated job reads
+  `131038m`. Correct and unreadable.
+- **Still no test asserts the scroll behaviour**, which is the phase's own
+  acceptance check and needs a browser.
+
+### What broke
+
+- **The invariant-2 test started failing for a reason that had nothing to do
+  with the solver.** `tests/solve.test.ts` asserted that `solve()` leaves eight
+  tables' ROW COUNTS unchanged — true, and only checkable while nothing else is
+  writing. `zippy_test` is shared and vitest runs files in parallel, so the
+  moment this stage added a suite that writes decision records the count drifted
+  mid-assertion and the test went red.
+
+  Fixed by scoping it to identifiers the test invents (`inv2-job-a` and
+  friends) which do not exist in the database at all: if `solve()` wrote
+  anything about the snapshot it was handed, a row referencing one of them
+  would appear. Zero before and zero after is proof about this solve
+  specifically, immune to concurrent activity in either direction, and it also
+  asserts the before-count is genuinely zero so the after-count means
+  something rather than merely matching.
+
+  The general lesson is the one Phase 13 hit from the other direction: a
+  shared test database punishes any assertion phrased about the whole
+  database. Phrase them about your own rows.
+
+- **`/solve` returned plans with no way to select them.** The engine's plans
+  are in-memory objects; `persistSolverRun` writes the `plan_variants` rows a
+  selection points at, and the response carried neither the ids nor a way to
+  get them. Caught while writing the panel — the Select button had nothing to
+  put in its `data-plan-variant-id`. Fixed by reading the variants back after
+  persisting rather than by changing `persistSolverRun`'s signature, which
+  three callers depend on.
+
+- **A Stage 1 test asserted something Stage 2 made false.** `consoleRoutes`
+  had a test named "says plainly that there is no DecisionRecord behind this",
+  asserting the response note matched `/no writer/i`. Giving the table a writer
+  made that claim wrong. Rewritten rather than deleted: what must still be
+  true is that the response distinguishes a solver PROPOSAL from a human
+  DECISION, which it now does via `runSource`, and there is a test for each of
+  the two states.

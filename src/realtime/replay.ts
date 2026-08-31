@@ -45,19 +45,29 @@ export type ReplayResult = {
   truncated: boolean;
 };
 
-function toMessage(row: {
-  jobId: string;
-  sequence: number;
-  eventType: string;
-  payload: Prisma.JsonValue;
-  at: Date;
-}): JobEventMessage {
+// A replayed event must be indistinguishable from a live one, or the client
+// has to branch on where a message came from — which is exactly the bug
+// at-least-once delivery with idempotent apply exists to avoid. So the zone
+// and safety level Phase 14 added to the live message are filled in here too,
+// from the job the events belong to.
+function toMessage(
+  row: {
+    jobId: string;
+    sequence: number;
+    eventType: string;
+    payload: Prisma.JsonValue;
+    at: Date;
+  },
+  job: { zoneId: string; safetyLevel: string },
+): JobEventMessage {
   return {
     jobId: row.jobId,
     sequence: row.sequence,
     eventType: row.eventType,
     payload: row.payload,
     at: row.at.toISOString(),
+    zoneId: job.zoneId,
+    safetyLevel: job.safetyLevel,
   };
 }
 
@@ -68,18 +78,29 @@ export async function replayJobEvents(
 ): Promise<ReplayResult> {
   // One more than the cap, so a full page is distinguishable from an
   // overflowing one without a second count query.
-  const rows = await prismaBase.jobEvent.findMany({
-    where: { jobId, sequence: { gt: afterSequence } },
-    orderBy: { sequence: 'asc' },
-    take: limit + 1,
-    select: { jobId: true, sequence: true, eventType: true, payload: true, at: true },
-  });
+  const [rows, job] = await Promise.all([
+    prismaBase.jobEvent.findMany({
+      where: { jobId, sequence: { gt: afterSequence } },
+      orderBy: { sequence: 'asc' },
+      take: limit + 1,
+      select: { jobId: true, sequence: true, eventType: true, payload: true, at: true },
+    }),
+    prismaBase.job.findUnique({
+      where: { id: jobId },
+      select: { zoneId: true, safetyLevel: true },
+    }),
+  ]);
 
   if (rows.length > limit) {
     return { jobId, events: [], throughSequence: afterSequence, truncated: true };
   }
 
-  const events = rows.map(toMessage);
+  // A job that vanished between the events being written and this replay has
+  // no zone to report. Replaying its events with a blank zone is better than
+  // failing the whole replay, and the append-only trigger means this can only
+  // happen for a job that never had events in the first place.
+  const context = job ?? { zoneId: '', safetyLevel: 'NORMAL' };
+  const events = rows.map((row) => toMessage(row, context));
   return {
     jobId,
     events,

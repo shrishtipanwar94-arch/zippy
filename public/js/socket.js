@@ -14,6 +14,7 @@ import {
   applyJobEvent,
   cursorFor,
   getState,
+  pushTimelineEvent,
   render,
   resetJobHistory,
   setConnection,
@@ -51,7 +52,13 @@ export function connect() {
   });
 
   socket.on('job:event', (event) => {
-    if (applyJobEvent(event)) render();
+    // TWO CONSUMERS, ONE MESSAGE. `applyJobEvent` maintains the per-job history
+    // and the jobs table; `pushTimelineEvent` maintains the console's incident
+    // feed. Both are called unconditionally and each reports whether it changed
+    // anything, because `||` would short-circuit and skip the second.
+    const jobChanged = applyJobEvent(event);
+    const timelineChanged = pushTimelineEvent(event);
+    if (jobChanged || timelineChanged) render();
   });
 
   socket.on('job:replay', (replay) => {
@@ -66,7 +73,13 @@ export function connect() {
 
     let changed = false;
     for (const event of replay.events) {
+      // Same two consumers as the live path. A replayed event carries the same
+      // shape as a live one (realtime/replay.ts fills in zone and safety
+      // precisely so this branch does not have to differ), and the timeline
+      // de-duplicates by (job, sequence) so an overlap with the live stream is
+      // absorbed rather than doubled.
       if (applyJobEvent(event)) changed = true;
+      if (pushTimelineEvent(event)) changed = true;
     }
     if (changed) render();
   });

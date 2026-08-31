@@ -6,12 +6,21 @@
 // dispatcher sees is what actually happened rather than a second opinion
 // generated at render time.
 //
-// GET /events    the incident timeline: job_events, filterable
-// GET /jobs/:id/decision   "why this technician?": the last solve for one job
+// GET  /events                  the incident timeline: job_events, filterable
+// GET  /jobs/:id/decision       "why this technician?" for one job
+// GET  /capabilities/scarcity   how thin the fleet is on each skill
+// GET  /queue                   pending jobs, safety-first
+// POST /plans/:id/select        a dispatcher takes a plan; an override explains itself
+//
+// Only the last of the five writes anything.
 
 import { Router } from 'express';
+import { z } from 'zod';
 import { prismaBase } from '../infra/prismaBase.js';
 import { authenticate, requirePermission } from './middleware/authenticate.js';
+import { summarise, byUrgency } from '../domain/scarcity.js';
+import { orderQueue, slaRisk, ageMinutes } from '../domain/priority.js';
+import { selectPlan, latestDecisionFor, RECOMMENDED_PLAN } from '../commit/decisionRecords.js';
 
 export const consoleRouter = Router();
 
@@ -91,22 +100,12 @@ consoleRouter.get(
 // ---------------------------------------------------------------------------
 // WHY THIS TECHNICIAN?
 //
-// THE DecisionRecord TABLE IS EMPTY, and this endpoint deliberately does not
-// pretend otherwise. `decision_records` has existed since Phase 1 and nothing
-// has ever written a row: the natural writer is the moment a saga commits an
-// assignment (Phase 12), which records the option chosen, who chose it, and
-// any override reason. That is a write, and this stage is a read.
-//
-// What DOES exist is everything the record would hold, one level down:
-// `dispatch_options` carries every option the solver generated for a job —
-// each rejected one with its feasibility reason code, each chosen one with
-// its full cost breakdown — keyed to the `solver_run` that produced them. So
-// the inspector reads the last solve for a job and renders that.
-//
-// The distinction matters for one reason a dispatcher would notice: without a
-// DecisionRecord there is no record of a HUMAN overriding the solver, because
-// nothing captures that a person chose differently from the plan. The screen
-// shows what the solver decided and why, not what the operator did with it.
+// From Stage 2 this is answerable two ways, and the response says which.
+// When a dispatcher has selected a plan there is a DecisionRecord, so the
+// screen shows what a HUMAN chose — with their override reason if they
+// departed from the recommendation. When nobody has selected anything it falls
+// back to the solver's own reasoning, which is still true but is a proposal
+// rather than a decision. `runSource` names which of the two is on screen.
 consoleRouter.get(
   '/jobs/:id/decision',
   authenticate,
@@ -139,23 +138,42 @@ consoleRouter.get(
       return;
     }
 
-    // The most recent solve that considered this job. A job can appear in many
-    // runs — every zone re-plan touches it — and the newest is the one whose
-    // reasoning still applies.
-    const option = await prismaBase.dispatchOption.findFirst({
-      where: { jobId: id },
-      orderBy: { solverRun: { createdAt: 'desc' } },
-      select: { solverRunId: true },
-    });
+    // WHICH RUN EXPLAINS THIS JOB'S CURRENT ASSIGNMENT.
+    //
+    // Stage 1 answered "the most recent run that touched this job", which is
+    // the wrong question and was wrong more often after Phase 13: a zone
+    // re-plan touches every pending job in the zone without changing who is
+    // going to any of them, so the newest run is routinely a run that decided
+    // nothing about this job.
+    //
+    // The authoritative answer is the DecisionRecord written when a dispatcher
+    // selected a plan. Falling back, in order:
+    //   1. the decision record's run — what a human actually chose
+    //   2. the newest run that produced a FEASIBLE option matching the job's
+    //      current assignment — the run whose plan the assignment came from
+    //   3. the newest run that considered the job at all — for a job with no
+    //      assignment yet, where the last solve genuinely is the live answer
+    const decision = await latestDecisionFor(prismaBase, id);
+    const solverRunId =
+      decision.solverRunId ?? (await runBehindAssignment(id, job)) ?? (await newestRunFor(id));
 
-    if (!option) {
-      res.json({ job, solverRun: null, chosen: [], rejected: [], hypothesis: job.faultHypotheses[0] ?? null });
+    if (!solverRunId) {
+      res.json({
+        job,
+        solverRun: null,
+        chosen: [],
+        rejected: [],
+        hypothesis: job.faultHypotheses[0] ?? null,
+        decisionRecord: null,
+        overrideReasonCode: null,
+        runSource: 'none',
+      });
       return;
     }
 
     const [solverRun, options] = await Promise.all([
       prismaBase.solverRun.findUnique({
-        where: { id: option.solverRunId },
+        where: { id: solverRunId },
         select: {
           id: true,
           trigger: true,
@@ -168,7 +186,7 @@ consoleRouter.get(
         },
       }),
       prismaBase.dispatchOption.findMany({
-        where: { solverRunId: option.solverRunId, jobId: id },
+        where: { solverRunId, jobId: id },
         select: {
           id: true,
           unitId: true,
@@ -200,11 +218,218 @@ consoleRouter.get(
       // different questions and the panel renders them differently.
       chosen: options.filter((candidate) => candidate.feasible),
       rejected: options.filter((candidate) => !candidate.feasible),
-      // Stated in the response rather than only in a comment, so a caller
-      // cannot mistake this for a record of what a human decided.
-      decisionRecord: null,
-      decisionRecordNote:
-        'decision_records has no writer yet; this is the solver run, not a record of an operator override',
+      // From Stage 2 this can be a real record. When it is, the screen is
+      // showing what a HUMAN chose and why they differed from the
+      // recommendation; when it is null, it is showing what the solver
+      // proposed and nobody has committed to.
+      decisionRecord: decision.decisionRecordId,
+      overrideReasonCode: decision.overrideReasonCode,
+      runSource: decision.solverRunId
+        ? 'decision-record'
+        : job.assignedUnitId
+          ? 'current-assignment'
+          : 'latest-solve',
+    });
+  },
+);
+
+// ---------------------------------------------------------------------------
+// Which solver run actually produced the assignment a job is carrying now.
+// Matched on the UNIT rather than on recency: the run whose plan put this unit
+// on this job is the one that explains it, however many zone re-plans have
+// happened since without touching it.
+async function runBehindAssignment(
+  jobId: string,
+  job: { assignedUnitId: string | null },
+): Promise<string | null> {
+  if (!job.assignedUnitId) return null;
+  const option = await prismaBase.dispatchOption.findFirst({
+    where: { jobId, unitId: job.assignedUnitId, feasible: true },
+    orderBy: { solverRun: { createdAt: 'desc' } },
+    select: { solverRunId: true },
+  });
+  return option?.solverRunId ?? null;
+}
+
+async function newestRunFor(jobId: string): Promise<string | null> {
+  const option = await prismaBase.dispatchOption.findFirst({
+    where: { jobId },
+    orderBy: { solverRun: { createdAt: 'desc' } },
+    select: { solverRunId: true },
+  });
+  return option?.solverRunId ?? null;
+}
+
+// ---------------------------------------------------------------------------
+// CAPABILITY SCARCITY — the coupled constraint made visible.
+//
+// Two EV certifications against twenty-four units is the reason an EV job can
+// be unservable while half the fleet sits idle. A dispatcher who cannot see
+// that has no way to anticipate it.
+consoleRouter.get(
+  '/capabilities/scarcity',
+  authenticate,
+  requirePermission('read', 'unit'),
+  async (_req, res) => {
+    const [capabilities, units, technicians] = await Promise.all([
+      prismaBase.capability.findMany({ select: { code: true }, orderBy: { code: 'asc' } }),
+      prismaBase.unit.findMany({
+        where: { status: { not: 'OFFLINE' } },
+        select: {
+          id: true,
+          currentTechnicianId: true,
+          capabilities: { select: { capability: { select: { code: true } } } },
+        },
+      }),
+      prismaBase.technician.findMany({
+        where: { active: true },
+        select: {
+          id: true,
+          capabilities: { select: { capability: { select: { code: true } } } },
+        },
+      }),
+    ]);
+
+    const technicianCodes = new Map(
+      technicians.map((technician) => [
+        technician.id,
+        new Set(technician.capabilities.map((link) => link.capability.code)),
+      ]),
+    );
+    const crewedUnits = units.filter(
+      (unit) => unit.currentTechnicianId !== null && technicianCodes.has(unit.currentTechnicianId),
+    );
+
+    const rows = capabilities.map((capability) => {
+      const code = capability.code;
+      const unitHas = (unit: (typeof units)[number]): boolean =>
+        unit.capabilities.some((link) => link.capability.code === code);
+
+      // THE OPERATIVE NUMBER is crews where BOTH halves hold it: a capability
+      // on a van whose driver is not certified in it cannot be dispatched.
+      const pairs = crewedUnits.filter(
+        (unit) => unitHas(unit) && technicianCodes.get(unit.currentTechnicianId ?? '')?.has(code),
+      );
+
+      return summarise({
+        code,
+        crewedPairs: pairs.length,
+        unitsWithCapability: units.filter(unitHas).length,
+        techniciansWithCapability: technicians.filter((technician) =>
+          technicianCodes.get(technician.id)?.has(code),
+        ).length,
+        totalCrewedUnits: crewedUnits.length,
+        totalTechnicians: technicians.length,
+      });
+    });
+
+    res.json({
+      capabilities: rows.sort(byUrgency),
+      totalCrewedUnits: crewedUnits.length,
+      totalTechnicians: technicians.length,
+    });
+  },
+);
+
+// ---------------------------------------------------------------------------
+// THE PRIORITY QUEUE. Safety first, lexicographically — src/domain/priority.ts
+// carries the argument for why it is not a weighted score.
+consoleRouter.get('/queue', authenticate, requirePermission('read', 'job'), async (_req, res) => {
+  const now = new Date();
+
+  const jobs = await prismaBase.job.findMany({
+    where: { status: { in: ['INTAKE', 'PLANNED'] }, assignedUnitId: null },
+    select: {
+      id: true,
+      safetyLevel: true,
+      createdAt: true,
+      zoneId: true,
+      status: true,
+      slaPolicy: { select: { responseMinutes: true } },
+    },
+  });
+
+  const queued = jobs.map((job) => ({
+    id: job.id,
+    safetyLevel: job.safetyLevel,
+    createdAt: job.createdAt,
+    slaResponseMinutes: job.slaPolicy?.responseMinutes ?? null,
+    zoneId: job.zoneId,
+    status: job.status,
+  }));
+
+  // The three sort keys are returned alongside the order, so an operator can
+  // see WHY a job sits where it does rather than trusting the sequence.
+  res.json({
+    jobs: orderQueue(queued, now).map((job) => ({
+      id: job.id,
+      zoneId: job.zoneId,
+      status: job.status,
+      safetyLevel: job.safetyLevel,
+      slaRisk: Number(slaRisk(job, now).toFixed(3)),
+      ageMinutes: Math.round(ageMinutes(job, now)),
+      slaResponseMinutes: job.slaResponseMinutes,
+    })),
+    at: now.toISOString(),
+  });
+});
+
+// ---------------------------------------------------------------------------
+// SELECTING A PLAN. The only write in this file.
+//
+// IT RECORDS A DECISION; IT DOES NOT DISPATCH. Turning a plan into
+// reservations means one saga per assignment, and the path for that is Phase
+// 13's action queue — one job at a time, with a dispatcher confirming each. A
+// single click starting twenty sagas is not something this phase asks for, and
+// not something worth building by implication.
+const selectSchema = z
+  .object({ overrideReasonCode: z.string().min(3).max(200).optional() })
+  .strict();
+
+consoleRouter.post(
+  '/plans/:id/select',
+  authenticate,
+  requirePermission('update', 'planSelection'),
+  async (req, res) => {
+    const auth = req.auth;
+    const id = req.params.id;
+    if (!auth) {
+      res.status(401).json({ error: 'not_authenticated' });
+      return;
+    }
+    if (typeof id !== 'string' || id.length === 0) {
+      res.status(400).json({ error: 'invalid_request' });
+      return;
+    }
+    const body = selectSchema.parse(req.body ?? {});
+
+    const result = await selectPlan(prismaBase, {
+      planVariantId: id,
+      actor: { role: auth.role, id: auth.userId },
+      overrideReasonCode: body.overrideReasonCode ?? null,
+    });
+
+    if (result.outcome === 'NOT_FOUND') {
+      res.status(404).json({ error: 'not_found' });
+      return;
+    }
+    if (result.outcome === 'OVERRIDE_REASON_REQUIRED') {
+      // 422 rather than 400: the request was well-formed, and what is missing
+      // is a justification rather than a field.
+      res.status(422).json({
+        error: 'override_reason_required',
+        label: result.label,
+        recommended: result.recommended,
+      });
+      return;
+    }
+
+    res.json({
+      planVariantId: result.planVariantId,
+      label: result.label,
+      isOverride: result.isOverride,
+      recommended: RECOMMENDED_PLAN,
+      decisionsRecorded: result.decisionRecordIds.length,
     });
   },
 );

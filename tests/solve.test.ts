@@ -512,26 +512,39 @@ describe('snapshot hashing', () => {
 
 // ---------------------------------------------------------------------------
 // INVARIANT 2, ASSERTED AGAINST A REAL DATABASE.
+//
+// SCOPED TO THIS TEST'S OWN IDENTIFIERS, not to whole-table counts. The first
+// version counted every row in eight tables before and after — which proved
+// the point but only while nothing else was writing. `zippy_test` is shared
+// and vitest runs files in parallel, so the moment another suite wrote a
+// decision record mid-assertion this went red for a reason that had nothing to
+// do with the solver. A test that fails when unrelated code is merely BUSY is
+// not testing what it claims.
+//
+// The scoped version is also the stronger claim. The ids below (`inv2-*`) do
+// not exist in the database at all, so if `solve()` wrote ANYTHING about the
+// snapshot it was handed, a row referencing one of them would appear. Zero
+// before and zero after is proof about this solve specifically, and no amount
+// of concurrent activity elsewhere can fake it either way.
 describe('the solver writes nothing', () => {
-  const TABLES = [
-    'job',
-    'unit',
-    'technician',
-    'solverRun',
-    'dispatchOption',
-    'planVariant',
-    'jobEvent',
-    'unitHold',
-  ] as const;
+  const JOB_IDS = ['inv2-job-a', 'inv2-job-b'];
+  const UNIT_ID = 'inv2-unit';
+  const TECHNICIAN_ID = 'inv2-tech';
 
-  async function countAll(): Promise<Record<string, number>> {
-    const counts: Record<string, number> = {};
-    for (const table of TABLES) {
-      // Indexing the client by table name is exactly what this test needs and
-      // is not worth a switch statement.
-      counts[table] = await (prismaBase[table] as { count: () => Promise<number> }).count();
-    }
-    return counts;
+  // Every row any part of the dispatch path would create if the engine ever
+  // reached for a database, counted by the identifiers this test invents.
+  async function countTraces(): Promise<Record<string, number>> {
+    const [jobs, units, technicians, runs, options, variants, events, holds] = await Promise.all([
+      prismaBase.job.count({ where: { id: { in: JOB_IDS } } }),
+      prismaBase.unit.count({ where: { id: UNIT_ID } }),
+      prismaBase.technician.count({ where: { id: TECHNICIAN_ID } }),
+      prismaBase.solverRun.count({ where: { jobId: { in: JOB_IDS } } }),
+      prismaBase.dispatchOption.count({ where: { jobId: { in: JOB_IDS } } }),
+      prismaBase.planVariant.count({ where: { jobId: { in: JOB_IDS } } }),
+      prismaBase.jobEvent.count({ where: { jobId: { in: JOB_IDS } } }),
+      prismaBase.unitHold.count({ where: { unitId: UNIT_ID } }),
+    ]);
+    return { jobs, units, technicians, runs, options, variants, events, holds };
   }
 
   beforeAll(async () => {
@@ -542,17 +555,20 @@ describe('the solver writes nothing', () => {
     await prismaBase.$disconnect();
   });
 
-  it('leaves every table it could plausibly touch completely unchanged', async () => {
-    const before = await countAll();
+  it('leaves no trace of the snapshot it was handed', async () => {
+    const before = await countTraces();
+    // Nothing in this test's world exists yet, which is what makes the
+    // after-count meaningful rather than merely equal.
+    expect(Object.values(before).every((count) => count === 0)).toBe(true);
 
     await solve({
-      jobs: [job('j1'), job('j2')],
+      jobs: [job(JOB_IDS[0]!), job(JOB_IDS[1]!)],
       snapshot: {
         units: [
           {
-            id: 'u1',
+            id: UNIT_ID,
             zoneId: 'z1',
-            currentTechnicianId: 't1',
+            currentTechnicianId: TECHNICIAN_ID,
             capabilityCodes: ['JUMP_START'],
             lat: 12.94,
             lng: 77.63,
@@ -560,18 +576,18 @@ describe('the solver writes nothing', () => {
             status: 'AVAILABLE',
           },
         ],
-        technicians: [{ id: 't1', capabilityCodes: ['JUMP_START'] }],
-        shifts: [{ technicianId: 't1', ...allDayShift }],
+        technicians: [{ id: TECHNICIAN_ID, capabilityCodes: ['JUMP_START'] }],
+        shifts: [{ technicianId: TECHNICIAN_ID, ...allDayShift }],
         zones: [{ id: 'z1', centroidLat: 12.94, centroidLng: 77.63 }],
       },
       now: NOW,
       jobZone: new Map([
-        ['j1', 'z1'],
-        ['j2', 'z1'],
+        [JOB_IDS[0]!, 'z1'],
+        [JOB_IDS[1]!, 'z1'],
       ]),
       zonePartitionThreshold: HUGE_THRESHOLD,
     });
 
-    expect(await countAll()).toEqual(before);
+    expect(await countTraces()).toEqual(before);
   });
 });

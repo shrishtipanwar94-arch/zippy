@@ -37,12 +37,33 @@ const state = {
     zones: [],
     filters: { jobId: '', zoneId: '', eventType: '' },
     limit: 200,
+    // Keys already rendered, so an at-least-once socket delivery cannot show
+    // the same event twice.
+    seen: new Set(),
   },
 
   // WHY THIS TECHNICIAN. `jobId` is what the operator selected; `decision` is
   // what the server said about it. Kept apart so a slow response cannot make
   // the timeline highlight one job while the inspector shows another.
   inspector: { jobId: null, decision: null },
+
+  // Capability scarcity and the priority queue: both whole-board reads,
+  // refreshed on demand rather than per event.
+  scarcity: { capabilities: [], totalCrewedUnits: 0, totalTechnicians: 0 },
+  queue: { jobs: [], at: null },
+
+  // Which plan the dispatcher has taken, and the override reason if they
+  // departed from the recommendation.
+  planSelection: {
+    planVariantId: null,
+    label: null,
+    isOverride: false,
+    error: null,
+    // Per-plan override text, held in state rather than left in the DOM: the
+    // plans panel rebuilds wholesale, so an input's value would be discarded
+    // by any render that happened while the operator was typing.
+    reasonDraft: {},
+  },
 
   // jobId -> events, in sequence order
   events: {},
@@ -114,11 +135,79 @@ export function setSolve(result) {
   state.solve = result;
 }
 
+// A LIVE EVENT, PUSHED. The timeline is fetched once and then kept current by
+// the socket — the panel is called "live" and now is.
+//
+// The filters are applied HERE rather than by the panel, because state is what
+// the panel renders: an event that does not match the current filter must not
+// enter the array at all, or a filtered view would silently accumulate rows it
+// is supposed to be excluding and the count would stop matching the list.
+//
+// Returns whether anything changed, so the caller can skip a render.
+export function pushTimelineEvent(event) {
+  const filters = state.timeline.filters;
+  if (filters.jobId && event.jobId !== filters.jobId) return false;
+  if (filters.zoneId && event.zoneId !== filters.zoneId) return false;
+  if (filters.eventType && event.eventType !== filters.eventType) return false;
+
+  // The socket delivers at-least-once (Phase 4), so the same event can arrive
+  // twice — on a reconnect replay overlapping the live stream. Keyed on
+  // (job, sequence) because that pair is unique per event and is what the
+  // server guarantees; the row id is not carried on a socket message.
+  const key = `${event.jobId}#${event.sequence}`;
+  if (state.timeline.seen.has(key)) return false;
+  state.timeline.seen.add(key);
+
+  state.timeline.events.unshift({
+    id: key,
+    jobId: event.jobId,
+    sequence: event.sequence,
+    eventType: event.eventType,
+    payload: event.payload,
+    actorRole: event.actorRole ?? null,
+    at: event.at,
+    zoneId: event.zoneId ?? '',
+    safetyLevel: event.safetyLevel ?? 'NORMAL',
+  });
+
+  // Bounded, or a console left open overnight grows without limit. The cap
+  // matches the server's page size so the panel behaves the same whether a row
+  // arrived by fetch or by socket.
+  if (state.timeline.events.length > state.timeline.limit) {
+    const dropped = state.timeline.events.pop();
+    if (dropped) state.timeline.seen.delete(dropped.id);
+  }
+  return true;
+}
+
 export function setTimeline(result) {
-  state.timeline.events = result.events;
+  // The server returns a row id; a socket message does not. Both are keyed on
+  // (job, sequence) here so a fetched row and a pushed row for the same event
+  // are the same row, and a refetch after a push does not duplicate it.
+  state.timeline.events = result.events.map((event) => ({
+    ...event,
+    id: `${event.jobId}#${event.sequence}`,
+  }));
+  state.timeline.seen = new Set(state.timeline.events.map((event) => event.id));
   state.timeline.eventTypes = result.eventTypes;
   state.timeline.zones = result.zones;
   state.timeline.limit = result.limit;
+}
+
+export function setScarcity(result) {
+  state.scarcity = result;
+}
+
+export function setQueue(result) {
+  state.queue = result;
+}
+
+export function setPlanSelection(selection) {
+  state.planSelection = { ...state.planSelection, ...selection };
+}
+
+export function setOverrideReasonDraft(label, text) {
+  state.planSelection.reasonDraft = { ...state.planSelection.reasonDraft, [label]: text };
 }
 
 export function setTimelineFilter(name, value) {

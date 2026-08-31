@@ -37,7 +37,12 @@ export type Resource =
   // standing at the roadside looking at the engine, and only that person
   // should be able to overwrite what the fault is.
   | 'jobDiagnosis'
-  | 'actionRequest';
+  | 'actionRequest'
+  // Taking one of the solver's competing plans. Its own resource because it is
+  // the one console action that WRITES — everything else the console does is a
+  // read, and being allowed to look at plans is not the same as being allowed
+  // to commit the board to one.
+  | 'planSelection';
 
 type PermissionTable = Record<Role, Partial<Record<Resource, Action[]>>>;
 
@@ -62,6 +67,7 @@ const PERMISSIONS: PermissionTable = {
     // The RECOMMEND and APPROVE queues. A dispatcher executes a recommended
     // reassignment and signs off an escalation; nobody else sees either.
     actionRequest: ['read', 'update'],
+    planSelection: ['update'],
     // Bull Board at /admin/queues — reads queue state, can retry or discard a
     // job. An operator surface, so it gets the operator role.
     queueAdmin: ['read'],

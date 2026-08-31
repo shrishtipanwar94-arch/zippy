@@ -182,16 +182,18 @@ describe('GET /jobs/:id/decision — why this technician?', () => {
     expect(missing.missingCapabilities).toContain('EV_HV_CERTIFICATION');
   });
 
-  // THE HONESTY TEST. `decision_records` has no writer, so the endpoint must
-  // not imply it is showing a record of what a human decided.
-  it('says plainly that there is no DecisionRecord behind this', async () => {
+  // Stage 1 asserted this endpoint admitted `decision_records` had no writer.
+  // Stage 2 gave it one, so the claim changed: what must still be true is that
+  // the response distinguishes a SOLVER PROPOSAL from a HUMAN DECISION, and
+  // says which one is on screen.
+  it('reports the solver proposal, not a decision, until someone selects a plan', async () => {
     const response = await request(app)
       .get(`/jobs/${jobA}/decision`)
       .set('Authorization', `Bearer ${dispatcherToken()}`);
 
     expect(response.body.decisionRecord).toBeNull();
-    expect(response.body.decisionRecordNote).toMatch(/no writer/i);
-    expect(await prismaBase.decisionRecord.count()).toBe(0);
+    expect(response.body.overrideReasonCode).toBeNull();
+    expect(response.body.runSource).toBe('latest-solve');
   });
 
   it('returns an empty decision for a job no solve has considered', async () => {
@@ -427,4 +429,214 @@ async function buildFixture(): Promise<void> {
       },
     ],
   });
+}
+
+describe('GET /capabilities/scarcity', () => {
+  it('is not open to a driver', async () => {
+    const response = await request(app)
+      .get('/capabilities/scarcity')
+      .set('Authorization', `Bearer ${driverToken()}`);
+    expect(response.status).toBe(403);
+  });
+
+  // THE OPERATIVE NUMBER IS CREWED PAIRS. A capability on a van whose driver
+  // is not certified in it cannot be dispatched, so the pair count must never
+  // exceed either component count — that inequality is the whole claim the
+  // panel makes.
+  it('counts crews that can actually do the work, not units or technicians', async () => {
+    const response = await request(app)
+      .get('/capabilities/scarcity')
+      .set('Authorization', `Bearer ${dispatcherToken()}`);
+
+    expect(response.status).toBe(200);
+    expect(response.body.capabilities.length).toBeGreaterThan(0);
+
+    for (const row of response.body.capabilities) {
+      expect(row.crewedPairs).toBeLessThanOrEqual(row.unitsWithCapability);
+      expect(row.crewedPairs).toBeLessThanOrEqual(row.techniciansWithCapability);
+      expect(row.crewedPairs).toBeLessThanOrEqual(response.body.totalCrewedUnits);
+      expect(['ok', 'amber', 'red']).toContain(row.level);
+    }
+  });
+
+  it('puts the scarcest capability first', async () => {
+    const response = await request(app)
+      .get('/capabilities/scarcity')
+      .set('Authorization', `Bearer ${dispatcherToken()}`);
+
+    const order = { red: 0, amber: 1, ok: 2 } as Record<string, number>;
+    const levels = response.body.capabilities.map((row: { level: string }) => order[row.level]);
+    expect(levels).toEqual([...levels].sort((a, b) => a - b));
+  });
+});
+
+describe('GET /queue', () => {
+  it('puts safety above everything, lexicographically', async () => {
+    const response = await request(app)
+      .get('/queue')
+      .set('Authorization', `Bearer ${dispatcherToken()}`);
+
+    expect(response.status).toBe(200);
+
+    const rank = { HIGH_RISK: 0, ELEVATED: 1, NORMAL: 2 } as Record<string, number>;
+    const ranks = response.body.jobs.map((job: { safetyLevel: string }) => rank[job.safetyLevel]);
+    expect(ranks).toEqual([...ranks].sort((a, b) => a - b));
+
+    // And the fixture's HIGH_RISK job is genuinely ahead of its NORMAL one,
+    // which is the case that would break if the comparator were a weighted
+    // score rather than a tiered one.
+    const ids = response.body.jobs.map((job: { id: string }) => job.id);
+    if (ids.includes(jobA) && ids.includes(jobB)) {
+      expect(ids.indexOf(jobA)).toBeLessThan(ids.indexOf(jobB));
+    }
+  });
+
+  it('shows the three sort keys so the order can be checked rather than trusted', async () => {
+    const response = await request(app)
+      .get('/queue')
+      .set('Authorization', `Bearer ${dispatcherToken()}`);
+
+    const job = response.body.jobs[0];
+    expect(job).toHaveProperty('safetyLevel');
+    expect(job).toHaveProperty('slaRisk');
+    expect(job).toHaveProperty('ageMinutes');
+  });
+});
+
+describe('POST /plans/:id/select', () => {
+  it('records the recommended plan with no reason needed', async () => {
+    const plan = await planVariant('BALANCED');
+
+    const response = await request(app)
+      .post(`/plans/${plan}/select`)
+      .set('Authorization', `Bearer ${dispatcherToken()}`)
+      .send({});
+
+    expect(response.status).toBe(200);
+    expect(response.body.isOverride).toBe(false);
+    expect(response.body.decisionsRecorded).toBe(1);
+
+    const record = await prismaBase.decisionRecord.findFirstOrThrow({
+      where: { jobId: jobA },
+      orderBy: { createdAt: 'desc' },
+      select: { overrideReasonCode: true, selectedByRole: true, selectedOptionId: true, rejectedAlternatives: true },
+    });
+    expect(record.overrideReasonCode).toBeNull();
+    expect(record.selectedByRole).toBe('DISPATCHER');
+    expect(record.selectedOptionId).not.toBeNull();
+    // The rejected alternatives travel with the decision, so "why not the
+    // nearer van?" is answerable from the record itself.
+    expect((record.rejectedAlternatives as unknown[]).length).toBe(2);
+  });
+
+  // THE POINT OF THE TABLE. Taking a plan the solver did not recommend is a
+  // judgement the model did not make, and it has to explain itself or it
+  // vanishes.
+  it('refuses an override with no reason, before writing anything', async () => {
+    const plan = await planVariant('FASTEST_RESOLUTION');
+    const before = await prismaBase.decisionRecord.count();
+
+    const response = await request(app)
+      .post(`/plans/${plan}/select`)
+      .set('Authorization', `Bearer ${dispatcherToken()}`)
+      .send({});
+
+    expect(response.status).toBe(422);
+    expect(response.body.error).toBe('override_reason_required');
+    expect(response.body.recommended).toBe('BALANCED');
+    // Refused BEFORE writing: a half-recorded override would put the
+    // assignments on the record with no explanation.
+    expect(await prismaBase.decisionRecord.count()).toBe(before);
+  });
+
+  it('records an override together with its reason', async () => {
+    const plan = await planVariant('LOWEST_COST');
+
+    const response = await request(app)
+      .post(`/plans/${plan}/select`)
+      .set('Authorization', `Bearer ${dispatcherToken()}`)
+      .send({ overrideReasonCode: 'ring road closed since 14:02' });
+
+    expect(response.status).toBe(200);
+    expect(response.body.isOverride).toBe(true);
+
+    const record = await prismaBase.decisionRecord.findFirstOrThrow({
+      where: { jobId: jobA },
+      orderBy: { createdAt: 'desc' },
+      select: { overrideReasonCode: true },
+    });
+    expect(record.overrideReasonCode).toBe('ring road closed since 14:02');
+
+    // And it is on the job's own timeline, distinct from an ordinary
+    // selection, because the two mean different things to whoever reads it
+    // later.
+    expect(
+      await prismaBase.jobEvent.count({ where: { jobId: jobA, eventType: 'PLAN_OVERRIDDEN' } }),
+    ).toBeGreaterThan(0);
+  });
+
+  it('is not open to a driver', async () => {
+    const plan = await planVariant('BALANCED');
+    const response = await request(app)
+      .post(`/plans/${plan}/select`)
+      .set('Authorization', `Bearer ${driverToken()}`)
+      .send({});
+    expect(response.status).toBe(403);
+  });
+
+  it('404s a plan that does not exist', async () => {
+    const response = await request(app)
+      .post('/plans/no-such-plan/select')
+      .set('Authorization', `Bearer ${dispatcherToken()}`)
+      .send({});
+    expect(response.status).toBe(404);
+  });
+
+  // THE STAGE 1 BUG. The inspector showed whichever solve had touched the job
+  // most recently, which after Phase 13 is routinely a zone re-plan that
+  // decided nothing about it. Once a human has selected a plan, the record of
+  // that selection is the authoritative answer.
+  it('makes the inspector show the decision a human made', async () => {
+    const plan = await planVariant('BALANCED');
+    await request(app)
+      .post(`/plans/${plan}/select`)
+      .set('Authorization', `Bearer ${dispatcherToken()}`)
+      .send({});
+
+    const response = await request(app)
+      .get(`/jobs/${jobA}/decision`)
+      .set('Authorization', `Bearer ${dispatcherToken()}`);
+
+    expect(response.body.runSource).toBe('decision-record');
+    expect(response.body.decisionRecord).not.toBeNull();
+    expect(response.body.solverRun.trigger).toBe('CONSOLE_TEST');
+  });
+});
+
+// The plan variant for one label on the fixture's solver run, created lazily so
+// each test gets a fresh row rather than sharing a selected one.
+async function planVariant(label: string): Promise<string> {
+  const run = await prismaBase.solverRun.findFirstOrThrow({
+    where: { jobId: jobA, trigger: 'CONSOLE_TEST' },
+    select: { id: true },
+  });
+  const created = await prismaBase.planVariant.create({
+    data: {
+      solverRunId: run.id,
+      jobId: jobA,
+      label,
+      assignments: [
+        {
+          jobId: jobA,
+          unitId: `${PREFIX}-unit-good`,
+          technicianId: `${PREFIX}-tech-good`,
+          totalCost: 44.2,
+        },
+      ],
+      metrics: { assignedCount: 1, unassignedCount: 0, unassignedJobIds: [] },
+      totalCost: 44.2,
+    },
+    select: { id: true },
+  });
+  return created.id;
 }

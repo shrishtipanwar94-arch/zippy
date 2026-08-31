@@ -16,6 +16,10 @@ import {
   setTimelineFilter,
   setInspectorJob,
   setInspectorDecision,
+  setScarcity,
+  setQueue,
+  setPlanSelection,
+  setOverrideReasonDraft,
   getState,
 } from '../state.js';
 import * as api from '../api.js';
@@ -25,12 +29,18 @@ import { render as renderJobsTable } from '../panels/jobsTable.js';
 import { render as renderPlans } from '../panels/plans.js';
 import { render as renderTimeline } from '../panels/timeline.js';
 import { render as renderInspector } from '../panels/inspector.js';
+import { render as renderScarcity } from '../panels/scarcity.js';
+import { render as renderQueue } from '../panels/queue.js';
+import { renderSelectionError } from '../panels/plans.js';
 
 registerPanel(renderSession);
 registerPanel(renderJobsTable);
 registerPanel(renderPlans);
 registerPanel(renderTimeline);
 registerPanel(renderInspector);
+registerPanel(renderScarcity);
+registerPanel(renderQueue);
+registerPanel(renderSelectionError);
 
 function value(selector) {
   return document.querySelector(selector).value.trim();
@@ -46,7 +56,7 @@ document.querySelector('[data-action="login"]').addEventListener('click', async 
     // polling is the Phase 17 fallback, not the mechanism.
     const jobs = await api.listJobs();
     setJobs(jobs.jobs);
-    await refreshTimeline();
+    await Promise.all([refreshTimeline(), refreshBoard()]);
     connect();
   } catch (error) {
     setError(error.message);
@@ -110,5 +120,83 @@ document.querySelector('[data-panel="timeline"]').addEventListener('click', asyn
 
 document.querySelector('[data-action="refresh-timeline"]').addEventListener('click', async () => {
   await refreshTimeline();
+  render();
+});
+
+// Scarcity and the queue are whole-board reads rather than per-event ones: a
+// single job event rarely changes either, and refetching both on every arrival
+// would be a request per event on a board taking one every few seconds.
+async function refreshBoard() {
+  try {
+    const [scarcity, queue] = await Promise.all([api.getScarcity(), api.getQueue()]);
+    setScarcity(scarcity);
+    setQueue(queue);
+    setError(null);
+  } catch (error) {
+    setError(error.message);
+  }
+}
+
+document.querySelector('[data-action="refresh-board"]').addEventListener('click', async () => {
+  await refreshBoard();
+  render();
+});
+
+// The inspect button appears in two panels now — the timeline and the queue —
+// so the handler is bound once on a common ancestor rather than per panel.
+document.querySelector('[data-panel="queue"]').addEventListener('click', async (clicked) => {
+  const button = clicked.target.closest('[data-action="inspect"]');
+  if (!button) return;
+  await inspect(button.dataset.jobId);
+});
+
+async function inspect(jobId) {
+  setInspectorJob(jobId);
+  render(); // paint the selection immediately; the decision arrives after
+  try {
+    setInspectorDecision(await api.getDecision(jobId));
+    setError(null);
+  } catch (error) {
+    setError(error.message);
+  }
+  render();
+}
+
+// ---------------------------------------------------------------------------
+// SELECTING A PLAN.
+
+const plansPanel = document.querySelector('[data-panel="plans"]');
+
+// Typing is captured into state on every keystroke, because the panel rebuilds
+// wholesale and an input's value would otherwise be discarded by any render
+// that happened mid-sentence.
+plansPanel.addEventListener('input', (typed) => {
+  const field = typed.target.closest('[data-field="override-reason"]');
+  if (!field) return;
+  setOverrideReasonDraft(field.dataset.plan, field.value);
+});
+
+plansPanel.addEventListener('click', async (clicked) => {
+  const button = clicked.target.closest('[data-action="select-plan"]');
+  if (!button) return;
+
+  const label = button.dataset.plan;
+  const reason = getState().planSelection.reasonDraft[label] ?? '';
+
+  try {
+    const result = await api.selectPlan(button.dataset.planVariantId, reason.trim() || undefined);
+    setPlanSelection({
+      planVariantId: result.planVariantId,
+      label: result.label,
+      isOverride: result.isOverride,
+      error: null,
+    });
+    setError(null);
+  } catch (error) {
+    // The server refuses an override with no reason (422). Surfaced next to
+    // the plans rather than in the page-level error strip, because it is a
+    // correction to the thing the operator is doing rather than a failure.
+    setPlanSelection({ error: error.message });
+  }
   render();
 });
