@@ -20,6 +20,7 @@
 
 import type { Prisma, PrismaClient } from '@prisma/client';
 import { appendJobEvent } from '../intake/events.js';
+import { isUniqueViolation } from '../infra/prismaErrors.js';
 
 // The plan the solver puts forward when nobody says otherwise. Fixed here
 // rather than chosen per run, and it matches the vector the Phase 10 harness
@@ -39,6 +40,10 @@ export type SelectPlanInput = {
 export type SelectPlanOutcome =
   | { outcome: 'RECORDED'; planVariantId: string; label: string; decisionRecordIds: string[]; isOverride: boolean }
   | { outcome: 'OVERRIDE_REASON_REQUIRED'; label: string; recommended: string }
+  // Somebody already decided this solve. Not an error: two dispatchers can be
+  // looking at the same board, and the second one pressing Select is a normal
+  // thing to happen rather than a fault.
+  | { outcome: 'ALREADY_SELECTED'; label: string }
   | { outcome: 'NOT_FOUND' };
 
 export async function selectPlan(
@@ -98,53 +103,73 @@ export async function selectPlan(
 
   const decisionRecordIds: string[] = [];
 
-  // One transaction for the whole plan. A plan half-recorded would leave some
-  // jobs explained and others not, from a single click.
-  await db.$transaction(async (tx) => {
-    for (const assignment of assignments) {
-      const forJob = optionsByJob.get(assignment.jobId) ?? [];
-      const selected = forJob.find(
-        (option) => option.feasible && option.unitId === assignment.unitId,
-      );
+  // ONE TRANSACTION FOR THE WHOLE PLAN, and it is what makes the constraint
+  // below sufficient. A plan half-recorded would leave some jobs explained and
+  // others not from a single click — and on the losing side of a race it would
+  // leave the loser's first few jobs written before it discovered it had lost.
+  // Rolling the lot back means the winner's plan is the only one on the record.
+  try {
+    await db.$transaction(async (tx) => {
+      for (const assignment of assignments) {
+        const forJob = optionsByJob.get(assignment.jobId) ?? [];
+        const selected = forJob.find(
+          (option) => option.feasible && option.unitId === assignment.unitId,
+        );
 
-      const record = await tx.decisionRecord.create({
-        data: {
+        const record = await tx.decisionRecord.create({
+          data: {
+            jobId: assignment.jobId,
+            solverRunId: plan.solverRunId,
+            selectedOptionId: selected?.id ?? null,
+            selectedByRole: input.actor.role,
+            selectedById: input.actor.id,
+            overrideReasonCode: isOverride ? reason : null,
+            costBreakdown: (selected?.costBreakdown ?? {}) as Prisma.InputJsonValue,
+            coveredFaultProbability: selected?.coveredFaultProbability ?? null,
+            rejectedAlternatives: forJob
+              .filter((option) => !option.feasible)
+              .map((option) => ({
+                unitId: option.unitId,
+                technicianId: option.technicianId,
+                rejectionCode: option.rejectionCode,
+                rejectionDetail: option.rejectionDetail,
+              })) satisfies Prisma.InputJsonValue,
+          },
+          select: { id: true },
+        });
+        decisionRecordIds.push(record.id);
+
+        await appendJobEvent(tx, {
           jobId: assignment.jobId,
-          solverRunId: plan.solverRunId,
-          selectedOptionId: selected?.id ?? null,
-          selectedByRole: input.actor.role,
-          selectedById: input.actor.id,
-          overrideReasonCode: isOverride ? reason : null,
-          costBreakdown: (selected?.costBreakdown ?? {}) as Prisma.InputJsonValue,
-          coveredFaultProbability: selected?.coveredFaultProbability ?? null,
-          rejectedAlternatives: forJob
-            .filter((option) => !option.feasible)
-            .map((option) => ({
-              unitId: option.unitId,
-              technicianId: option.technicianId,
-              rejectionCode: option.rejectionCode,
-              rejectionDetail: option.rejectionDetail,
-            })) satisfies Prisma.InputJsonValue,
-        },
-        select: { id: true },
-      });
-      decisionRecordIds.push(record.id);
-
-      await appendJobEvent(tx, {
-        jobId: assignment.jobId,
-        eventType: isOverride ? 'PLAN_OVERRIDDEN' : 'PLAN_SELECTED',
-        payload: {
-          planVariantId: plan.id,
-          label: plan.label,
-          unitId: assignment.unitId,
-          technicianId: assignment.technicianId,
-          overrideReasonCode: isOverride ? reason : null,
-        },
-        actorRole: input.actor.role,
-        actorId: input.actor.id,
-      });
+          eventType: isOverride ? 'PLAN_OVERRIDDEN' : 'PLAN_SELECTED',
+          payload: {
+            planVariantId: plan.id,
+            label: plan.label,
+            unitId: assignment.unitId,
+            technicianId: assignment.technicianId,
+            overrideReasonCode: isOverride ? reason : null,
+          },
+          actorRole: input.actor.role,
+          actorId: input.actor.id,
+        });
+      }
+    });
+  } catch (error) {
+    // THE DATABASE ARBITRATES, not a prior read. `decision_records` carries a
+    // unique index on (job_id, solver_run_id), so two dispatchers selecting
+    // plans for the same solve both attempt the insert and exactly one
+    // succeeds. Checking first and then writing would leave a window between
+    // the check and the insert that both callers pass through — the same
+    // TOCTOU argument Phase 5 made for the queue's idempotency key and Phase
+    // 11 made for the unit hold.
+    //
+    // The loser's whole transaction rolls back, so it leaves no partial plan
+    // and no stray PLAN_OVERRIDDEN events behind.
+    if (isUniqueViolation(error)) {
+      return { outcome: 'ALREADY_SELECTED', label: plan.label };
     }
-  });
+    throw error;
+  }
 
   return {
     outcome: 'RECORDED',

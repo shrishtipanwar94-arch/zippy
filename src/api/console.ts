@@ -413,6 +413,13 @@ consoleRouter.post(
       res.status(404).json({ error: 'not_found' });
       return;
     }
+    if (result.outcome === 'ALREADY_SELECTED') {
+      // 409, not an error page: another dispatcher got there first, which is a
+      // normal outcome on a shared board. The label tells the caller what was
+      // actually chosen so the console can show it rather than guess.
+      res.status(409).json({ error: 'already_selected', label: result.label });
+      return;
+    }
     if (result.outcome === 'OVERRIDE_REASON_REQUIRED') {
       // 422 rather than 400: the request was well-formed, and what is missing
       // is a justification rather than a field.

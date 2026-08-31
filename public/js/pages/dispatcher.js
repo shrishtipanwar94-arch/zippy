@@ -32,6 +32,7 @@ import { render as renderInspector } from '../panels/inspector.js';
 import { render as renderScarcity } from '../panels/scarcity.js';
 import { render as renderQueue } from '../panels/queue.js';
 import { renderSelectionError } from '../panels/plans.js';
+import { render as renderMap } from '../panels/map.js';
 
 registerPanel(renderSession);
 registerPanel(renderJobsTable);
@@ -41,6 +42,7 @@ registerPanel(renderInspector);
 registerPanel(renderScarcity);
 registerPanel(renderQueue);
 registerPanel(renderSelectionError);
+registerPanel(renderMap);
 
 function value(selector) {
   return document.querySelector(selector).value.trim();

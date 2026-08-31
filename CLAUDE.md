@@ -109,6 +109,25 @@ DISJOINT rather than merely rare — there is only one non-tow capability pair n
 seeded crew holds, so two files both reaching for "something scarce" will
 collide.
 
+**In a shared test database, never assert a raw table count.** `zippy_test` is
+shared by every suite and vitest runs files in parallel, so any assertion
+phrased about the whole database drifts the moment another test — or a panel,
+or a sweep — writes concurrently. Phase 14 hit it exactly: the invariant-2 test
+proved "the solver writes nothing" by counting rows in eight tables before and
+after, which was true and only checkable while nothing else was writing; adding
+a suite that wrote decision records turned it red for a reason that had nothing
+to do with the solver. Assert only on rows the test itself created or can
+uniquely identify — invent an id prefix and count `WHERE id LIKE 'mytest-%'`.
+The scoped version is usually the STRONGER claim too: counting rows that cannot
+exist unless the code under test created them proves something about that code
+specifically, rather than about the database being quiet.
+
+The same rule applies to fixtures competing for a shared row. Once
+`decision_records` gained a unique index on `(job_id, solver_run_id)`, every
+selection test sharing one solver run made the first test to run the only one
+that could write. Each test that needs to make a decision now creates its own
+run.
+
 **A rejected Bash tool call may still have run.** The rejection text is written
 for the Edit/Write case, where the harness performs the write and can decline
 to. A Bash command that was already executing cannot be unwound: check the disk

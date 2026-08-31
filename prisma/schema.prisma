@@ -913,6 +913,17 @@ model DecisionRecord {
   solverRun      SolverRun?      @relation(fields: [solverRunId], references: [id])
   selectedOption DispatchOption? @relation(fields: [selectedOptionId], references: [id])
 
+  // ONE DECISION PER JOB PER SOLVE. Two dispatchers looking at the same board
+  // can both press Select, and without this the job ends up with two decision
+  // records and two PLAN_OVERRIDDEN events describing incompatible choices.
+  // The constraint is the arbiter — the same shape Phases 5, 11 and 12 use —
+  // rather than a read-then-write, which has a window between the check and
+  // the insert that two concurrent callers both pass through.
+  //
+  // Scoped to the RUN, not the job: a later solve is a genuinely new decision
+  // (a re-dispatch, a changed diagnosis) and must be recordable. What this
+  // forbids is deciding the same solve twice.
+  @@unique([jobId, solverRunId])
   @@index([jobId, createdAt])
   @@map("decision_records")
 }

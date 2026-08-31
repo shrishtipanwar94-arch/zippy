@@ -26,15 +26,7 @@ import type { Prisma, PrismaClient } from '@prisma/client';
 import { prismaBase } from '../infra/prismaBase.js';
 import { logger } from '../infra/logger.js';
 import type { QueueName } from './names.js';
-
-function isUniqueViolation(error: unknown): boolean {
-  return (
-    typeof error === 'object' &&
-    error !== null &&
-    'code' in error &&
-    (error as { code: unknown }).code === 'P2002'
-  );
-}
+import { isUniqueViolation } from '../infra/prismaErrors.js';
 
 export type IdempotentResult = { alreadyProcessed: boolean };
 

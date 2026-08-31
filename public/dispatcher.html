@@ -10,6 +10,10 @@
     />
     <!-- The palette docs/UI.md has specified since Phase 0. Loaded after
          Bootstrap so the tokens re-skin it rather than fight it. -->
+    <link
+      href="https://cdn.jsdelivr.net/npm/leaflet@1.9.4/dist/leaflet.css"
+      rel="stylesheet"
+    />
     <link href="/css/tokens.css" rel="stylesheet" />
   </head>
   <body class="p-3 console">
@@ -126,6 +130,18 @@
         </div>
       </div>
 
+      <!-- THE LIVE MAP. Built last and deliberately: most time, least insight.
+           Markers are created once and moved in place — see panels/map.js. -->
+      <div class="card mb-3">
+        <div class="card-header d-flex gap-2 align-items-center">
+          <span>Live map</span>
+          <span data-field="map-summary" class="ms-auto text-muted"></span>
+        </div>
+        <div class="card-body p-0">
+          <div data-panel="map" style="height: 22rem"></div>
+        </div>
+      </div>
+
       <table class="table table-sm" data-panel="jobs-table">
         <thead>
           <tr>
@@ -142,6 +158,7 @@
     </div>
 
     <script src="https://cdn.jsdelivr.net/npm/morphdom@2.7.4/dist/morphdom-umd.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/leaflet@1.9.4/dist/leaflet.js"></script>
     <script src="/socket.io/socket.io.js"></script>
     <script type="module" src="/js/pages/dispatcher.js"></script>
   </body>

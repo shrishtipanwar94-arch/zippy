@@ -355,3 +355,182 @@ attached, where before Stage 2 it always returned `latest-solve`.
   true is that the response distinguishes a solver PROPOSAL from a human
   DECISION, which it now does via `runSource`, and there is a test for each of
   the two states.
+
+## Phase 14 — Dispatch console / 2026-08-31 / Commit: "phase 14: dispatch console"
+
+Built across three stages (285df01, d6bad1a, this). All six items.
+
+### Built
+
+Stage 3 and the carried-over guard:
+
+`prisma/migrations/20260831120000_decision_record_one_per_solve` — a unique
+index on `decision_records(job_id, solver_run_id)`, plus a one-off delete of
+the duplicates development data already held.
+
+`src/infra/prismaErrors.ts` — `isUniqueViolation`, extracted from
+`queues/idempotent.ts` so "what does P2002 mean" has one definition.
+
+`src/commit/decisionRecords.ts` — the whole selection wrapped in try/catch
+around its transaction, returning `ALREADY_SELECTED` on a constraint
+violation. `src/api/console.ts` reports it as 409.
+
+`public/js/panels/map.js` — Leaflet + OpenStreetMap via CDN, no API key. The
+map, tile layer and layer group are created once; markers live in a
+`Map<jobId, marker>` and are moved with `setLatLng`/`setStyle`.
+
+`public/dispatcher.html` — Leaflet CSS and JS from the CDN, the map panel.
+
+`CLAUDE.md` — a fourth gotcha: never assert a raw table count in a shared test
+database.
+
+Tests: `tests/consolePanels.test.ts` (8), `tests/consoleRoutes.test.ts` grown
+to 30. Suite 346 fast across 25 files, 9 concurrency. `tsc --noEmit`,
+`eslint src evaluation`, `npm run build` clean.
+
+The whole phase: the live incident timeline (fetched, then pushed over the
+socket), the "why this technician?" inspector, capability scarcity by crewed
+pairs, competing plans with a recorded override reason, the lexicographic
+priority queue, and the live map.
+
+### Decisions
+
+- **Decision:** the idempotency guard is scoped to `(job_id, solver_run_id)`,
+  not to the job.
+  **Why:** a later solve is a genuinely new decision — a re-dispatch, a changed
+  diagnosis — and has to stay recordable. What must not happen twice is
+  deciding the SAME solve, which is where two dispatchers produce two records
+  describing incompatible choices and the inspector silently shows whichever
+  landed last.
+  **Alternative:** one decision per job, ever.
+  **Why not:** it would make Phase 13's re-dispatch unrecordable, which is the
+  half of the system this table is most useful for.
+  **Tradeoff:** a dispatcher who selects BALANCED and immediately changes their
+  mind gets a 409 rather than an amendment. For an audit table that is the
+  right default — the first decision really was made — but there is no way to
+  supersede a decision short of a new solve.
+
+- **Decision:** the database arbitrates, via the constraint, rather than a
+  read-then-write.
+  **Why:** the same TOCTOU argument Phase 5 made for the queue's idempotency
+  key and Phase 11 for the unit hold. Two callers checking "has this been
+  decided?" both pass the read before either writes.
+  **Alternative:** `findFirst` then `create`.
+  **Why not:** it has a window, and the window is exactly two dispatchers on
+  one board — the case the guard exists for.
+  **Tradeoff:** the losing caller does the whole read-and-build before finding
+  out, so a conflict costs a wasted transaction. At three options per job that
+  is nothing.
+
+- **Decision:** the map's source discipline is asserted by reading the file,
+  not by rendering it.
+  **Why:** the phase's acceptance check is visual and needs a browser. The
+  DEFECT it hunts for has a signature in the source — `innerHTML =` on a
+  scrolling container, `clearLayers()`, a rebuilt layer group — and that is
+  checkable now.
+  **Alternative:** add jsdom and assert on real nodes.
+  **Why not:** the stack is locked in CLAUDE.md and jsdom is not in it. Adding
+  a dependency to satisfy one test is not a call to make silently.
+  **Tradeoff:** stated plainly — these tests cannot prove the console does not
+  flicker. They prove the two panels most at risk still follow the discipline
+  that prevents it, and turn a silent regression into a failing build.
+
+- **Decision:** the panel source assertions strip comments before matching.
+  **Why:** third occurrence of the same trap. Phase 7's engine grep matched a
+  comment explaining why Prisma was not imported; Phase 8's cost grep matched a
+  comment listing deliberate exclusions; `map.js` opens by promising it never
+  calls `map.remove()`, which a naive search reads as a call. Both earlier
+  times the COMMENT was reworded.
+  **Alternative:** reword again.
+  **Why not:** a source assertion that cannot tell code from prose punishes
+  exactly the files that document themselves best, and this codebase documents
+  itself heavily on purpose.
+  **Tradeoff:** the stripper is two regexes and would be confused by `//`
+  inside a string literal. No panel has one.
+
+### Concurrency
+
+- **Scenario:** two dispatchers select a plan for the same solve at the same
+  moment.
+  **What races:** two `decision_records` inserts on the same
+  `(job_id, solver_run_id)`.
+  **Why dangerous:** two records and two `PLAN_OVERRIDDEN` events describing
+  incompatible choices, with the inspector showing whichever committed last —
+  and an audit trail that contradicts itself is worse than none, because it
+  will be believed.
+  **How handled:** a unique index. Both attempt the insert, one commits, the
+  loser gets P2002 and its WHOLE transaction rolls back, so it leaves neither a
+  partial plan nor a stray event.
+  **Assumption relied on:** the selection runs in one transaction. It does —
+  and that is what makes rolling back the loser clean rather than partial.
+  Proved with a real `Promise.all` of two concurrent `selectPlan` calls
+  asserting exactly one `RECORDED` and exactly one new row.
+
+### Weaknesses — DEFERRED, NOT FORGOTTEN
+
+Carried forward from Stages 1-3 and explicitly not fixed in this phase:
+
+1. **Scarcity and the priority queue do not update live.** Only the timeline is
+   pushed over the socket; both other panels are whole-board reads refreshed on
+   demand. A dispatcher watching scarcity through a busy hour is watching a
+   stale number and nothing on screen says how stale. The fix is either a
+   periodic refetch or a coarse "board changed" socket event — deliberately not
+   a refetch per job event, which would be a request per arrival.
+2. **The queue reads every pending job on every request** — 292 rows today, no
+   pagination and no cap. The timeline learned that lesson (500) and the queue
+   did not.
+3. **Age renders as raw minutes**, so a three-month-old simulated job reads
+   `131038m`. Correct and unreadable.
+4. **Selecting a plan is inert beyond the audit trail.** It records the
+   decision; it does not reserve anything. Turning a plan into reservations is
+   Phase 13's action queue, one job at a time — and nothing on the screen tells
+   the operator that, so a dispatcher may reasonably believe they have
+   dispatched.
+5. **`RECOMMENDED_PLAN` is duplicated in the browser.**
+   `commit/decisionRecords.ts` owns it and `panels/plans.js` repeats the
+   literal `'BALANCED'` to decide whether to show the reason box. The server
+   refuses regardless, so they cannot disagree about what is ALLOWED — only
+   about which affordance is shown.
+6. **The inspector shows the run behind the current assignment, which is a
+   heuristic when no DecisionRecord exists.** It matches on the unit, so a job
+   assigned the same unit by two different runs resolves to the newer.
+7. **No test asserts the visual properties.** See the decision above.
+
+### What broke
+
+- **The migration could not be created the normal way, for two reasons at
+  once.** `prisma migrate dev` is interactive and refused to run
+  non-interactively; and the dev database already held duplicates —
+  ten `(job, run)` groups in `zippy` and three in `zippy_test` — written by the
+  Stage 2 smoke test, which selected two different plans for one run precisely
+  because nothing yet forbade it. Hand-wrote the migration: a delete keeping
+  the EARLIEST row per group, then the unique index. Keeping the earliest is
+  the right choice and worth stating — it is the decision that was actually
+  first, and a later contradicting one is exactly what the constraint exists to
+  stop being written.
+
+- **Three selection tests failed the moment the guard worked.** They shared one
+  solver run, so the first test to select made every later one conflict. The
+  constraint was correct and the tests were wrong: each now creates its own run
+  via `freshRun()`. This is the same lesson as the new CLAUDE.md gotcha seen
+  from the other side — a shared fixture row is shared state, and shared state
+  makes tests depend on the order they happen to run in.
+
+- **`freshRun()` initially created a run with no dispatch options**, so a plan
+  could still be selected but the decision record carried a null
+  `selectedOptionId`. The test asserting otherwise failed, which was the
+  fixture being silently weaker than it looked rather than the code being
+  wrong. `freshRun()` now writes the same three options the main fixture does,
+  from one shared helper so the two cannot drift.
+
+- **The panel source assertion matched its own subject's documentation** — see
+  the decision above. Fixed by stripping comments rather than by rewording, on
+  the third occurrence.
+
+- **THE VISUAL ACCEPTANCE CHECK HAS NOT BEEN PERFORMED.** The simulator was run
+  for real — `npm run sim -- --rate 40 --duration 120 --live` against the
+  compiled build, producing 75 jobs and 900 job events over roughly two minutes
+  of wall clock — which exercises the write path and the fan-out under the load
+  the check specifies. But "scroll holds, no flicker" is a claim about pixels,
+  and no browser has run this page. The code is written for it and the
+  discipline is now guarded by tests; whether it actually holds is unverified.

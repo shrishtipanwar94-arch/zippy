@@ -1,0 +1,100 @@
+// THE PANELS' RENDERING DISCIPLINE, asserted against their source.
+//
+// Phase 14's acceptance check is visual: run the simulator at 40 jobs/hour,
+// scroll halfway down, and wait — "either failure means a panel is blasting
+// innerHTML". That check needs a browser and has not been performed.
+//
+// What CAN be checked without one is the specific defect it hunts for. The
+// failure has a signature in the source: a live, scrolling panel that assigns
+// to `innerHTML` on its container, or a map that recreates its layer, rebuilds
+// every node on every event and throws away scroll position, open popups and
+// pan state with it.
+//
+// These are source assertions, which are weaker than a DOM test and stronger
+// than nothing. They cannot prove the console does not flicker; they can prove
+// the two panels most at risk still follow the discipline that stops it, and
+// they turn a silent regression into a failing build. The honest limit is
+// recorded in DECISIONS.log rather than papered over here.
+
+import { describe, expect, it } from 'vitest';
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
+
+// CODE ONLY, COMMENTS STRIPPED — and this is the third time this project has
+// needed it. Phase 7's engine grep matched a comment explaining why Prisma was
+// NOT imported; Phase 8's cost grep matched a comment listing what the file
+// deliberately excludes; and `map.js` opens by promising it never calls
+// `map.remove()`, which a naive search reads as a call.
+//
+// A source assertion that cannot tell code from prose punishes exactly the
+// files that document themselves best. Stripping comments first fixes the
+// mechanism rather than the wording, so a panel is free to name the thing it
+// avoids.
+function code(name: string): string {
+  return readFileSync(join('public', 'js', 'panels', name), 'utf8')
+    .replace(/\/\*[\s\S]*?\*\//g, '')
+    .replace(/^\s*\/\/.*$/gm, '');
+}
+
+describe('the live timeline patches rather than rebuilds', () => {
+  const source = code('timeline.js');
+
+  // The rows container is the thing that must never be wholesale replaced:
+  // it is what the operator is scrolled into.
+  it('never assigns innerHTML to the rows container', () => {
+    expect(source).not.toMatch(/list\.innerHTML\s*=/);
+    expect(source).not.toMatch(/timeline-rows[^\n]*innerHTML\s*=/);
+  });
+
+  it('adds and removes individual rows', () => {
+    expect(source).toMatch(/list\.prepend\(/);
+    expect(source).toMatch(/row\.remove\(\)/);
+  });
+
+  // Prepending to a scrolled list pushes content down by the height of what
+  // was added. Without correcting for it, reading row 40 while three events
+  // arrive silently moves the reader to row 43.
+  it('corrects scroll position after prepending', () => {
+    expect(source).toMatch(/scrollTop/);
+    expect(source).toMatch(/scrollHeight/);
+  });
+});
+
+describe('the map moves markers rather than recreating them', () => {
+  const source = code('map.js');
+
+  // The three ways to make every pin blink.
+  it('never removes the map, clears the layer, or rebuilds the layer group', () => {
+    expect(source).not.toMatch(/map\.remove\(\)/);
+    expect(source).not.toMatch(/clearLayers\(/);
+    // exactly one layerGroup, created once
+    expect(source.match(/layerGroup\(/g)?.length ?? 0).toBe(1);
+  });
+
+  it('keeps a registry of markers so they can be found again', () => {
+    expect(source).toMatch(/markers\s*=\s*new Map\(\)/);
+    expect(source).toMatch(/markers\.get\(/);
+    expect(source).toMatch(/markers\.delete\(/);
+  });
+
+  it('moves an existing marker in place', () => {
+    expect(source).toMatch(/setLatLng\(/);
+    expect(source).toMatch(/setStyle\(/);
+  });
+
+  it('creates the map only when it does not already exist', () => {
+    expect(source).toMatch(/if \(!map\)/);
+  });
+});
+
+describe('the panels that DO rebuild are the ones with nothing to lose', () => {
+  // Stated as a test so the distinction is deliberate rather than accidental:
+  // these show one selection's worth of content and change only when the
+  // operator asks for something different, so there is no scroll position or
+  // input state a rebuild would discard.
+  it('inspector, scarcity and queue use replaceChildren', () => {
+    for (const name of ['inspector.js', 'scarcity.js', 'queue.js']) {
+      expect(code(name), name).toMatch(/replaceChildren\(/);
+    }
+  });
+});

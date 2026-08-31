@@ -11,6 +11,7 @@ import request from 'supertest';
 import { createApp } from '../src/api/app.js';
 import { prismaBase } from '../src/infra/prismaBase.js';
 import { issueAccessToken } from '../src/auth/tokens.js';
+import { selectPlan } from '../src/commit/decisionRecords.js';
 
 const app = createApp();
 const PREFIX = 'console';
@@ -378,9 +379,16 @@ async function buildFixture(): Promise<void> {
     select: { id: true },
   });
 
+  await writeOptions(run.id);
+}
+
+// One chosen option and two rejected ones, shared by the fixture's run and by
+// every `freshRun()`. In one place so the two cannot drift into testing
+// different worlds.
+async function writeOptions(solverRunId: string): Promise<void> {
   await prismaBase.dispatchOption.create({
     data: {
-      solverRunId: run.id,
+      solverRunId,
       jobId: jobA,
       unitId: `${PREFIX}-unit-good`,
       technicianId: `${PREFIX}-tech-good`,
@@ -404,7 +412,7 @@ async function buildFixture(): Promise<void> {
   await prismaBase.dispatchOption.createMany({
     data: [
       {
-        solverRunId: run.id,
+        solverRunId,
         jobId: jobA,
         unitId: `${PREFIX}-unit-near`,
         technicianId: `${PREFIX}-tech-near`,
@@ -416,7 +424,7 @@ async function buildFixture(): Promise<void> {
         rejectionDetail: 'missing: EV_HV_CERTIFICATION',
       },
       {
-        solverRunId: run.id,
+        solverRunId,
         jobId: jobA,
         unitId: `${PREFIX}-unit-busy`,
         technicianId: `${PREFIX}-tech-busy`,
@@ -505,7 +513,10 @@ describe('GET /queue', () => {
 
 describe('POST /plans/:id/select', () => {
   it('records the recommended plan with no reason needed', async () => {
-    const plan = await planVariant('BALANCED');
+    // Its own run: one decision is allowed per solve, so a test that shares a
+    // run with another selection test is testing the order they happened to
+    // run in.
+    const plan = await planVariant('BALANCED', await freshRun());
 
     const response = await request(app)
       .post(`/plans/${plan}/select`)
@@ -533,7 +544,7 @@ describe('POST /plans/:id/select', () => {
   // judgement the model did not make, and it has to explain itself or it
   // vanishes.
   it('refuses an override with no reason, before writing anything', async () => {
-    const plan = await planVariant('FASTEST_RESOLUTION');
+    const plan = await planVariant('FASTEST_RESOLUTION', await freshRun());
     const before = await prismaBase.decisionRecord.count();
 
     const response = await request(app)
@@ -550,7 +561,7 @@ describe('POST /plans/:id/select', () => {
   });
 
   it('records an override together with its reason', async () => {
-    const plan = await planVariant('LOWEST_COST');
+    const plan = await planVariant('LOWEST_COST', await freshRun());
 
     const response = await request(app)
       .post(`/plans/${plan}/select`)
@@ -576,7 +587,7 @@ describe('POST /plans/:id/select', () => {
   });
 
   it('is not open to a driver', async () => {
-    const plan = await planVariant('BALANCED');
+    const plan = await planVariant('BALANCED', await freshRun());
     const response = await request(app)
       .post(`/plans/${plan}/select`)
       .set('Authorization', `Bearer ${driverToken()}`)
@@ -597,7 +608,8 @@ describe('POST /plans/:id/select', () => {
   // decided nothing about it. Once a human has selected a plan, the record of
   // that selection is the authoritative answer.
   it('makes the inspector show the decision a human made', async () => {
-    const plan = await planVariant('BALANCED');
+    const run = await freshRun();
+    const plan = await planVariant('BALANCED', run);
     await request(app)
       .post(`/plans/${plan}/select`)
       .set('Authorization', `Bearer ${dispatcherToken()}`)
@@ -609,20 +621,165 @@ describe('POST /plans/:id/select', () => {
 
     expect(response.body.runSource).toBe('decision-record');
     expect(response.body.decisionRecord).not.toBeNull();
-    expect(response.body.solverRun.trigger).toBe('CONSOLE_TEST');
+    // The run the DECISION points at, not whichever solve was newest — the
+    // Stage 1 bug this fix exists for.
+    expect(response.body.solverRun.id).toBe(run);
   });
 });
 
-// The plan variant for one label on the fixture's solver run, created lazily so
-// each test gets a fresh row rather than sharing a selected one.
-async function planVariant(label: string): Promise<string> {
-  const run = await prismaBase.solverRun.findFirstOrThrow({
-    where: { jobId: jobA, trigger: 'CONSOLE_TEST' },
+describe('selecting a plan is idempotent', () => {
+  // A JOB CANNOT HAVE ITS PLAN DECIDED TWICE FOR ONE SOLVE. Two dispatchers
+  // watching the same board can both press Select, and without a guard the job
+  // ends up with two decision records and two events describing incompatible
+  // choices — with the inspector silently showing whichever landed last.
+  //
+  // The guard is a unique index on (job_id, solver_run_id), the same shape
+  // Phases 5, 11 and 12 use: the database arbitrates, rather than a read
+  // followed by a write with a window in between that both callers pass
+  // through.
+  it('lets exactly one of two CONCURRENT selections write', async () => {
+    const plan = await planVariant('BALANCED', await freshRun());
+    const before = await prismaBase.decisionRecord.count({ where: { jobId: jobA } });
+
+    // Fired together, not one after the other — a sequential pair would be
+    // caught by any check-then-write and proves nothing about the race.
+    const [first, second] = await Promise.all([
+      selectPlan(prismaBase, {
+        planVariantId: plan,
+        actor: { role: 'DISPATCHER', id: 'dispatcher-one' },
+      }),
+      selectPlan(prismaBase, {
+        planVariantId: plan,
+        actor: { role: 'DISPATCHER', id: 'dispatcher-two' },
+      }),
+    ]);
+
+    const outcomes = [first.outcome, second.outcome].sort();
+    expect(outcomes).toEqual(['ALREADY_SELECTED', 'RECORDED']);
+
+    // EXACTLY ONE ROW, not two. This is the assertion that would fail on a
+    // double-write even if both callers were somehow told they had won.
+    expect(await prismaBase.decisionRecord.count({ where: { jobId: jobA } })).toBe(before + 1);
+  });
+
+  it('leaves no half-written plan behind when it loses', async () => {
+    const plan = await planVariant('BALANCED', await freshRun());
+    await selectPlan(prismaBase, {
+      planVariantId: plan,
+      actor: { role: 'DISPATCHER', id: 'dispatcher-one' },
+    });
+
+    const eventsBefore = await prismaBase.jobEvent.count({
+      where: { jobId: jobA, eventType: 'PLAN_SELECTED' },
+    });
+
+    const again = await selectPlan(prismaBase, {
+      planVariantId: plan,
+      actor: { role: 'DISPATCHER', id: 'dispatcher-two' },
+    });
+
+    expect(again.outcome).toBe('ALREADY_SELECTED');
+    // The loser's whole transaction rolled back, so it wrote no event either.
+    expect(
+      await prismaBase.jobEvent.count({ where: { jobId: jobA, eventType: 'PLAN_SELECTED' } }),
+    ).toBe(eventsBefore);
+  });
+
+  // A DIFFERENT plan for the SAME solve is the same decision being made twice,
+  // and is refused for the same reason.
+  it('refuses a second, contradicting plan for the same solve', async () => {
+    const run = await freshRun();
+    const balanced = await planVariant('BALANCED', run);
+    const fastest = await planVariant('FASTEST_RESOLUTION', run);
+
+    const first = await selectPlan(prismaBase, {
+      planVariantId: balanced,
+      actor: { role: 'DISPATCHER', id: 'dispatcher-one' },
+    });
+    expect(first.outcome).toBe('RECORDED');
+
+    const second = await selectPlan(prismaBase, {
+      planVariantId: fastest,
+      actor: { role: 'DISPATCHER', id: 'dispatcher-two' },
+      overrideReasonCode: 'changed my mind',
+    });
+    expect(second.outcome).toBe('ALREADY_SELECTED');
+  });
+
+  // But a LATER solve is a genuinely new decision — a re-dispatch, a changed
+  // diagnosis — and must stay recordable. The constraint is scoped to the run
+  // precisely so this keeps working.
+  it('allows a decision on a later solve for the same job', async () => {
+    const runOne = await freshRun();
+    const runTwo = await freshRun();
+
+    const first = await selectPlan(prismaBase, {
+      planVariantId: await planVariant('BALANCED', runOne),
+      actor: { role: 'DISPATCHER', id: 'dispatcher-one' },
+    });
+    const second = await selectPlan(prismaBase, {
+      planVariantId: await planVariant('BALANCED', runTwo),
+      actor: { role: 'DISPATCHER', id: 'dispatcher-one' },
+    });
+
+    expect(first.outcome).toBe('RECORDED');
+    expect(second.outcome).toBe('RECORDED');
+  });
+
+  it('reports the conflict over HTTP as a 409', async () => {
+    const plan = await planVariant('BALANCED', await freshRun());
+    const send = () =>
+      request(app)
+        .post(`/plans/${plan}/select`)
+        .set('Authorization', `Bearer ${dispatcherToken()}`)
+        .send({});
+
+    expect((await send()).status).toBe(200);
+    const second = await send();
+    expect(second.status).toBe(409);
+    expect(second.body.error).toBe('already_selected');
+  });
+});
+
+// A solver run of its own, with the same three options the fixture's run has:
+// one chosen with a full cost breakdown and two rejected with reason codes.
+//
+// A run with no options would still let a plan be SELECTED — the decision
+// record would simply carry a null `selectedOptionId` — which is a silently
+// weaker fixture than it looks. Every selection test here is really about the
+// record that comes out, so the run it selects from has to have something to
+// select.
+async function freshRun(): Promise<string> {
+  const run = await prismaBase.solverRun.create({
+    data: {
+      jobId: jobA,
+      trigger: 'CONSOLE_TEST_RUN',
+      snapshotHash: `hash-${Date.now()}-${Math.random()}`,
+      optionCount: 3,
+      feasibleCount: 1,
+      wallClockMs: 1,
+      zonePartitioned: false,
+    },
     select: { id: true },
   });
+  await writeOptions(run.id);
+  return run.id;
+}
+
+// The plan variant for one label on the fixture's solver run, created lazily so
+// each test gets a fresh row rather than sharing a selected one.
+async function planVariant(label: string, solverRunId?: string): Promise<string> {
+  const runId =
+    solverRunId ??
+    (
+      await prismaBase.solverRun.findFirstOrThrow({
+        where: { jobId: jobA, trigger: 'CONSOLE_TEST' },
+        select: { id: true },
+      })
+    ).id;
   const created = await prismaBase.planVariant.create({
     data: {
-      solverRunId: run.id,
+      solverRunId: runId,
       jobId: jobA,
       label,
       assignments: [
