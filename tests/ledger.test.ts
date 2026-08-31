@@ -18,6 +18,7 @@ import {
   CASH_IN_TRANSIT_ACCOUNT,
   CUSTOMER_RECEIVABLE_ACCOUNT,
   PLATFORM_COMMISSION_ACCOUNT,
+  PLATFORM_COVERAGE_COST_ACCOUNT,
   cashCollectionLines,
   commissionPaise,
   compensationLines,
@@ -25,7 +26,9 @@ import {
   imbalanceOf,
   isBalanced,
   payoutDecision,
+  settlementBookingFor,
   technicianAccountCode,
+  tenantReceivableAccountCode,
 } from '../src/domain/ledger.js';
 import {
   UnbalancedTransactionError,
@@ -90,6 +93,7 @@ describe('the shape of a balanced transaction', () => {
   it('books the brief’s worked example and it sums to zero', () => {
     const lines = completionLines({
       technicianCode: technicianAccountCode(TECH),
+      settlement: settlementBookingFor('WALK_IN', null),
       totalPaise: TOTAL,
       commissionPaise: COMMISSION,
     });
@@ -261,6 +265,100 @@ describe('a job completes', () => {
 });
 
 // ---------------------------------------------------------------------------
+
+// THE TEST THE OLD BOOKING WOULD HAVE PASSED.
+//
+// Every assertion in this file up to here checks that a transaction SUMS TO
+// ZERO — and a completion booked against the wrong account sums to zero
+// perfectly. That is exactly how `earnings.ts` charged a customer receivable on
+// every settlement path, including customers who owe nothing, without a single
+// test going red.
+//
+// So this block asserts WHICH ACCOUNTS receive entries, not just that the
+// amounts cancel. The credit side must be identical on all three paths — the
+// technician earned what they earned and the platform's commission is margin —
+// and only the debit side moves.
+describe('who carries the cost of a completed job', () => {
+  it('maps each settlement path to its own account', () => {
+    expect(settlementBookingFor('WALK_IN', 'any-tenant').accountCode).toBe(
+      CUSTOMER_RECEIVABLE_ACCOUNT,
+    );
+    expect(settlementBookingFor('FLEET_TENANT', 'tenant-abc').accountCode).toBe(
+      tenantReceivableAccountCode('tenant-abc'),
+    );
+    expect(settlementBookingFor('CONTRACT_CONSUMER', 'tenant-abc').accountCode).toBe(
+      PLATFORM_COVERAGE_COST_ACCOUNT,
+    );
+  });
+
+  // A job created before settlement paths existed books where it always did,
+  // so the fix cannot rewrite the meaning of history.
+  it('falls back to the customer receivable for a job with no path', () => {
+    expect(settlementBookingFor(null, 'tenant-abc').accountCode).toBe(CUSTOMER_RECEIVABLE_ACCOUNT);
+    expect(settlementBookingFor('FLEET_TENANT', null).accountCode).toBe(CUSTOMER_RECEIVABLE_ACCOUNT);
+  });
+
+  it('bills a walk-in customer', async () => {
+    const accounts = await bookAndReadAccounts('walkin', 'WALK_IN');
+    expect(accounts.get(CUSTOMER_RECEIVABLE_ACCOUNT)).toBe(-TOTAL);
+    expect(accounts.has(PLATFORM_COVERAGE_COST_ACCOUNT)).toBe(false);
+    expect(accounts.has(tenantReceivableAccountCode(TENANT))).toBe(false);
+  });
+
+  // Invoiced monthly, so the debt is the FLEET'S and it is per tenant —
+  // "what does this fleet owe" is the question monthly invoicing exists to
+  // answer, and a pooled receivable cannot answer it.
+  it('bills a fleet against its own account, not the customer receivable', async () => {
+    const accounts = await bookAndReadAccounts('fleet', 'FLEET_TENANT');
+    expect(accounts.get(tenantReceivableAccountCode(TENANT))).toBe(-TOTAL);
+    expect(accounts.has(CUSTOMER_RECEIVABLE_ACCOUNT)).toBe(false);
+  });
+
+  // THE ONE THE OLD CODE GOT MOST WRONG. Their cover was paid for elsewhere, so
+  // nobody owes anything for this incident — a receivable here is an asset that
+  // will never be collected.
+  it('absorbs a covered consumer’s job as a platform expense', async () => {
+    const accounts = await bookAndReadAccounts('covered', 'CONTRACT_CONSUMER');
+    expect(accounts.get(PLATFORM_COVERAGE_COST_ACCOUNT)).toBe(-TOTAL);
+    expect(accounts.has(CUSTOMER_RECEIVABLE_ACCOUNT)).toBe(false);
+  });
+
+  // THE CREDIT SIDE DOES NOT MOVE. Commission is margin — what the business
+  // makes on the work — and the technician earned what they earned; neither
+  // depends on who settles.
+  it('pays the technician and takes commission identically on all three paths', async () => {
+    for (const [suffix, path] of [
+      ['walkin', 'WALK_IN'],
+      ['fleet', 'FLEET_TENANT'],
+      ['covered', 'CONTRACT_CONSUMER'],
+    ] as const) {
+      const accounts = await bookAndReadAccounts(suffix, path);
+      expect(accounts.get(technicianAccountCode(`${TECH}-${suffix}`))).toBe(EARNINGS);
+      expect(accounts.get(PLATFORM_COMMISSION_ACCOUNT)).toBe(COMMISSION);
+    }
+  });
+
+  it('leaves every one of them balanced', async () => {
+    for (const suffix of ['walkin', 'fleet', 'covered']) {
+      await expectBalanced(`completion:${jobIdFor(suffix)}`);
+    }
+  });
+
+  // A covered consumer or a fleet cannot hand a technician cash — one owes
+  // nothing and the other is invoiced. Booking it would credit a receivable
+  // that was never debited and put a customer in credit for a job they never
+  // owed for.
+  it('refuses a cash collection on a path that is not settled per incident', async () => {
+    for (const suffix of ['fleet', 'covered']) {
+      const result = await recordCashCollection(prismaBase, {
+        jobId: jobIdFor(suffix),
+        amountPaise: TOTAL,
+      });
+      expect(result.outcome).toBe('NOTHING_TO_RECORD');
+    }
+    await expectLedgerBalances();
+  });
+});
 
 describe('the driver pays cash', () => {
   const jobId = jobIdFor('cash');
@@ -461,6 +559,26 @@ describe('the chart of accounts', () => {
 
 // ---------------------------------------------------------------------------
 
+// Books one completion on a job with a given settlement path and returns the
+// resulting entries keyed by ACCOUNT CODE — which is the thing the old booking
+// got wrong and no amount-only assertion could see.
+async function bookAndReadAccounts(
+  suffix: string,
+  path: 'WALK_IN' | 'FLEET_TENANT' | 'CONTRACT_CONSUMER',
+): Promise<Map<string, number>> {
+  const jobId = jobIdFor(suffix);
+  await prismaBase.job.update({ where: { id: jobId }, data: { settlementPath: path } });
+  await approveEstimate(jobId, TOTAL);
+  const result = await recordJobCompletion(prismaBase, { jobId });
+  expect(['RECORDED', 'ALREADY_RECORDED']).toContain(result.outcome);
+
+  const entries = await prismaBase.ledgerEntry.findMany({
+    where: { transactionId: `completion:${jobId}` },
+    select: { amountPaise: true, account: { select: { code: true } } },
+  });
+  return new Map(entries.map((entry) => [entry.account.code, entry.amountPaise]));
+}
+
 async function approveEstimate(jobId: string, totalPaise: number): Promise<void> {
   const existing = await prismaBase.estimate.count({ where: { jobId, status: 'APPROVED' } });
   if (existing > 0) return;
@@ -600,18 +718,53 @@ async function buildFixture(): Promise<void> {
   // entries stay, because they cannot legally be removed.
   // The cash story belongs to its own technician, so its balance is purely its
   // own and the debt is unambiguous.
+  // One technician per settlement-path job, so "the technician was paid the
+  // same on every path" is an assertion about that job alone.
+  for (const suffix of ['walkin', 'fleet', 'covered']) {
+    const technicianId = `${TECH}-${suffix}`;
+    await prismaBase.user.upsert({
+      where: { id: `${technicianId}-user` },
+      update: {},
+      create: {
+        id: `${technicianId}-user`,
+        email: `${technicianId}@example.test`,
+        passwordHash: 'not-used',
+        role: 'TECHNICIAN',
+        name: 'Fixture Technician',
+      },
+    });
+    await prismaBase.technician.upsert({
+      where: { id: technicianId },
+      update: {},
+      create: {
+        id: technicianId,
+        userId: `${technicianId}-user`,
+        employeeCode: technicianId,
+        homeZoneId: `${PREFIX}-zone`,
+      },
+    });
+  }
+
   const owners: Record<string, string> = {
     complete: TECH,
     unapproved: TECH,
     released: TECH,
     cash: TECH_CASH,
     next: TECH_CASH,
+    walkin: `${TECH}-walkin`,
+    fleet: `${TECH}-fleet`,
+    covered: `${TECH}-covered`,
   };
   for (const [suffix, technicianId] of Object.entries(owners)) {
     const id = jobIdFor(suffix);
     await prismaBase.job.upsert({
       where: { id },
-      update: { priceListId: PRICE_LIST, createdAt: CREATED_AT, assignedTechnicianId: technicianId },
+      update: {
+        priceListId: PRICE_LIST,
+        createdAt: CREATED_AT,
+        assignedTechnicianId: technicianId,
+        settlementPath: 'WALK_IN',
+      },
       create: {
         id,
         tenantId: TENANT,
@@ -623,6 +776,9 @@ async function buildFixture(): Promise<void> {
         safetyLevel: 'NORMAL',
         createdAt: CREATED_AT,
         assignedTechnicianId: technicianId,
+        // A cash job IS a walk-in — a fleet is invoiced and a covered consumer
+        // owes nothing, so neither can hand over cash.
+        settlementPath: 'WALK_IN',
         onHighway: false,
         lat: 12.9352,
         lng: 77.6245,

@@ -30,6 +30,7 @@
 // trigger added in Phase 15c stage 4 — so an unbalanced transaction cannot be
 // committed even by a hand-written SQL statement.
 
+import type { SettlementPath } from '@prisma/client';
 import type { Paise } from './money.js';
 import { sumPaise } from './money.js';
 
@@ -53,6 +54,11 @@ export const CASH_IN_TRANSIT_ACCOUNT = 'cash-in-transit';
 // Earnings a payout run has COMMITTED to sending but which have not yet left
 // the building. Phase 22b discharges it when the transfer actually happens.
 export const PAYOUTS_PAYABLE_ACCOUNT = 'payouts:payable';
+// WHAT A COVERED CONSUMER'S JOB COSTS THE PLATFORM. Their cover was paid for
+// elsewhere — a subscription, not this incident — so nobody owes anything for
+// this job and the platform absorbs it. An expense line rather than a
+// receivable, because a receivable nobody will ever pay is not an asset.
+export const PLATFORM_COVERAGE_COST_ACCOUNT = 'platform:coverage-cost';
 
 export function technicianAccountCode(technicianId: string): string {
   return `technician:${technicianId}`;
@@ -63,7 +69,16 @@ export const PLATFORM_ACCOUNTS: { code: string; name: string; kind: AccountKind 
   { code: CUSTOMER_RECEIVABLE_ACCOUNT, name: 'Customer receivable', kind: 'ASSET' },
   { code: CASH_IN_TRANSIT_ACCOUNT, name: 'Cash in transit', kind: 'CLEARING' },
   { code: PAYOUTS_PAYABLE_ACCOUNT, name: 'Payouts payable', kind: 'LIABILITY' },
+  { code: PLATFORM_COVERAGE_COST_ACCOUNT, name: 'Coverage cost', kind: 'EXPENSE' },
 ];
+
+// A FLEET IS INVOICED, SO ITS DEBT IS ITS OWN. Per tenant rather than pooled,
+// because the whole point of monthly invoicing is being able to answer "what
+// does THIS fleet owe" — a single receivable account cannot. Mirrors
+// `technician:<id>`, and the account is created on first use.
+export function tenantReceivableAccountCode(tenantId: string): string {
+  return `tenant:${tenantId}`;
+}
 
 // ---------------------------------------------------------------------------
 // A TRANSACTION, before it is written.
@@ -96,12 +111,72 @@ export function commissionPaise(totalPaise: Paise, rateBps: number): Paise {
 }
 
 // ---------------------------------------------------------------------------
+// WHO CARRIES THE COST OF A COMPLETED JOB.
+//
+// THE CREDIT SIDE IS THE SAME ON EVERY PATH and the DEBIT SIDE IS NOT. That
+// split is the whole fix, and it is worth stating why each half is what it is.
+//
+// The technician earned what they earned, and the platform's commission is
+// MARGIN — it is what the business makes on the work, independent of who
+// settles it. Neither changes because the customer happens to hold a contract.
+// So both credit lines are identical across all three paths.
+//
+// What differs is who is out of pocket:
+//
+//   WALK_IN            the customer. A receivable, collected through a gateway.
+//   FLEET_TENANT       that fleet. A receivable against THEM, invoiced monthly
+//                      (the `ContractBilling` the phase spec names).
+//   CONTRACT_CONSUMER  the platform. Their cover was paid for elsewhere, so
+//                      nobody owes anything for this incident and the cost is
+//                      absorbed as an expense.
+//
+// Booking `customer:receivable` for all three — which this file did until the
+// fix — creates debt nobody will ever pay, and the ledger's invariant cannot
+// see it: the transaction still sums to zero. A booking can be internally
+// consistent and still describe something that is not true.
+export type SettlementBooking = {
+  accountCode: string;
+  memo: string;
+};
+
+export function settlementBookingFor(
+  path: SettlementPath | null,
+  tenantId: string | null,
+): SettlementBooking {
+  if (path === 'CONTRACT_CONSUMER') {
+    return {
+      accountCode: PLATFORM_COVERAGE_COST_ACCOUNT,
+      memo: 'covered by the customer’s contract; absorbed by the platform',
+    };
+  }
+
+  if (path === 'FLEET_TENANT' && tenantId) {
+    return {
+      accountCode: tenantReceivableAccountCode(tenantId),
+      memo: 'fleet owes the job total, invoiced monthly',
+    };
+  }
+
+  // WALK_IN, and the two fallbacks. A null path is a job created before
+  // settlement paths existed (or a fixture that never set one), and a
+  // FLEET_TENANT job with no tenant cannot happen through intake — both fall
+  // back to the customer receivable, which is exactly what those jobs were
+  // booked against before this fix, so historical entries stay correct.
+  return {
+    accountCode: CUSTOMER_RECEIVABLE_ACCOUNT,
+    memo: 'customer owes the job total',
+  };
+}
+
+// ---------------------------------------------------------------------------
 // THE THREE TRANSACTIONS THIS PHASE CAN WRITE.
 
-// A JOB IS COMPLETED. The customer owes the total; of that, the technician is
-// owed their earnings and the platform has earned its commission.
+// A JOB IS COMPLETED. Somebody owes the total; of that, the technician is owed
+// their earnings and the platform has earned its commission. WHO owes it is
+// `settlementBookingFor`'s answer, above.
 export function completionLines(input: {
   technicianCode: string;
+  settlement: SettlementBooking;
   totalPaise: Paise;
   commissionPaise: Paise;
 }): LedgerLine[] {
@@ -114,9 +189,9 @@ export function completionLines(input: {
       memo: 'platform commission',
     },
     {
-      accountCode: CUSTOMER_RECEIVABLE_ACCOUNT,
+      accountCode: input.settlement.accountCode,
       amountPaise: -input.totalPaise,
-      memo: 'customer owes the job total',
+      memo: input.settlement.memo,
     },
   ];
 }

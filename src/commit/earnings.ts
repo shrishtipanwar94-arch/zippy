@@ -24,8 +24,10 @@ import {
   commissionPaise,
   compensationLines,
   completionLines,
+  settlementBookingFor,
   technicianAccountCode,
 } from '../domain/ledger.js';
+import { usesGateway } from '../domain/settlementPath.js';
 import { postTransaction, technicianBalance } from './ledger.js';
 import type { PostResult } from './ledger.js';
 import { approvedTotalFor } from './estimates.js';
@@ -48,7 +50,11 @@ export async function recordJobCompletion(
 ): Promise<EarningsOutcome> {
   const job = await db.job.findUnique({
     where: { id: input.jobId },
-    select: { id: true, assignedTechnicianId: true },
+    // SETTLEMENT PATH AND TENANT, because WHO carries the cost of this job
+    // depends on both. Reading them here was the fix for a booking that
+    // charged a customer receivable on every path, including customers who owe
+    // nothing — see src/domain/ledger.ts.
+    select: { id: true, assignedTechnicianId: true, settlementPath: true, tenantId: true },
   });
   if (!job?.assignedTechnicianId) {
     return { outcome: 'NOTHING_TO_RECORD', reason: 'this job has no assigned technician' };
@@ -66,11 +72,16 @@ export async function recordJobCompletion(
   const earningsPaise = totalPaise - commission;
   const transactionId = `completion:${job.id}`;
 
+  // The credit side — the technician's earnings and the platform's margin — is
+  // identical on every path. Only the debit side moves.
+  const settlement = settlementBookingFor(job.settlementPath, job.tenantId);
+
   const posted = await postTransaction(db, {
     transactionId,
     jobId: job.id,
     lines: completionLines({
       technicianCode: technicianAccountCode(job.assignedTechnicianId),
+      settlement,
       totalPaise,
       commissionPaise: commission,
     }),
@@ -95,7 +106,15 @@ export async function recordJobCompletion(
     await appendJobEvent(tx, {
       jobId: job.id,
       eventType: 'EARNINGS_RECORDED',
-      payload: { transactionId, totalPaise, earningsPaise, commissionPaise: commission },
+      payload: {
+        transactionId,
+        totalPaise,
+        earningsPaise,
+        commissionPaise: commission,
+        // Which account carried it, so "who was billed for this job?" is
+        // answerable from the incident timeline and not only from the ledger.
+        settlementAccount: settlement.accountCode,
+      },
     });
   });
 
@@ -128,13 +147,25 @@ export async function recordCashCollection(
 ): Promise<CashOutcome> {
   const job = await db.job.findUnique({
     where: { id: input.jobId },
-    select: { id: true, assignedTechnicianId: true },
+    select: { id: true, assignedTechnicianId: true, settlementPath: true },
   });
   if (!job?.assignedTechnicianId) {
     return { outcome: 'NOTHING_TO_RECORD', reason: 'this job has no assigned technician' };
   }
   if (input.amountPaise <= 0) {
     return { outcome: 'NOTHING_TO_RECORD', reason: 'a cash collection must be positive' };
+  }
+  // ONLY A PER-INCIDENT PAYER CAN HAND OVER CASH. A fleet is invoiced monthly
+  // and a covered consumer owes nothing, so cash on either path is somebody
+  // taking money they should not have. Refusing also protects the books: this
+  // transaction CREDITS the customer receivable, and on a path that never
+  // debited it that would push the account positive — a customer in credit for
+  // a job they never owed for.
+  if (!job.settlementPath || !usesGateway(job.settlementPath)) {
+    return {
+      outcome: 'NOTHING_TO_RECORD',
+      reason: `${job.settlementPath ?? 'unknown'} jobs are not settled in cash`,
+    };
   }
 
   const technicianId = job.assignedTechnicianId;

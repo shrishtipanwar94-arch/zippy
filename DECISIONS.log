@@ -2658,10 +2658,38 @@ and unchanged.
 
 Named here rather than left to be discovered:
 
-- **Contract coverage is resolved but never applied to an estimate.** A
-  CONTRACT_CONSUMER job takes the no-gateway path correctly, but the driver
-  still sees the full cost with no "covered / payable" split — so a covered
-  customer sees a number they will not pay. The single largest gap.
+- **Contract coverage is resolved but applied NOWHERE — and the gap has two
+  halves, not one.** This entry originally recorded only the first half; the
+  second is the more serious and was found by tracing the charge paths
+  afterwards.
+
+  1. **The estimate display.** A CONTRACT_CONSUMER job takes the no-gateway
+     path correctly, but the driver still sees the full cost with no
+     "covered / payable" split — so a covered customer is asked to approve a
+     number they will never pay, and the approval record then says they
+     consented to a figure that was never real. Bad, but no money moves: every
+     provider call sits behind a `usesGateway` gate, so a covered consumer has
+     no payment row, no authorisation and no capture.
+
+  2. **THE LEDGER BOOKING, which is worse.** `src/commit/earnings.ts` never
+     reads `settlementPath`, so `completionLines` books
+     `customer:receivable −total` for EVERY path. On a covered consumer that is
+     a receivable against somebody who owes nothing; on a fleet it is a
+     receivable that should be an invoice line. The first half shows a customer
+     a wrong number; this one silently corrupts a revenue figure, and the
+     ledger's own invariant CANNOT catch it — the transaction still sums to
+     zero, because a booking can be internally consistent and still describe a
+     debt that does not exist.
+
+  **And stage 5's payout accrual (57247fc) sits downstream of it.** Technician
+  balances are computed from these completion transactions, so a technician who
+  worked a covered-consumer job has real, payable earnings standing on a
+  receivable that will never be collected. The platform side balances
+  (commission is booked too), so nothing in the suite goes red. This is not a
+  phantom number sitting in a report: it is money payable out.
+
+  Fixed in "phase 15c: fix settlement-path-blind ledger booking" — see that
+  entry, including the evidence that no reconciliation was needed.
 - **No cash-collection surface.** `recordCashCollection` is complete and
   tested; nothing on the technician's page calls it.
 - **No remittance**, so `cash-in-transit` has no writer and a technician in
@@ -2791,3 +2819,195 @@ And the brief's four ✅ criteria:
   provider — `provider.calls` is empty — rather than on the absence of our own
   rows, which would pass even if we had called a gateway and discarded the
   answer.
+
+## Phase 15c — Fix: settlement-path-blind ledger booking / 2026-09-01 / Commit: "phase 15c: fix settlement-path-blind ledger booking"
+
+A correctness fix to stage 4's booking, found after the phase closed by tracing
+the charge paths for a CONTRACT_CONSUMER. The Phase 15c stage 6 entry has been
+amended in place: the gap it recorded as an estimate-display problem is two
+problems, and the second is worse.
+
+### The defect
+
+`src/commit/earnings.ts` never read `settlementPath`, so `completionLines`
+booked `customer:receivable −total` on EVERY path:
+
+- **CONTRACT_CONSUMER** — a receivable against somebody who owes nothing. Their
+  cover was paid for elsewhere, not per incident.
+- **FLEET_TENANT** — a receivable in the wrong place. A fleet is invoiced
+  monthly and the debt is theirs, not a pooled customer line.
+
+**The ledger's own invariant could not catch it.** Every one of those
+transactions summed to zero, because a booking can be internally consistent and
+still describe a debt that does not exist. Every test stayed green.
+
+**And stage 5's payout accrual sits downstream.** Technician balances are
+computed from these completions, so a technician who worked a covered-consumer
+job had real, payable earnings standing on a receivable nobody would ever
+collect. Not a phantom number in a report — money payable out.
+
+### The fix
+
+**The credit side is identical on every path; only the debit side moves.**
+Commission is MARGIN — what the business makes on the work — and the technician
+earned what they earned. Neither depends on who settles, so both credit lines
+are unchanged across all three paths. What differs is who is out of pocket:
+
+```
+WALK_IN            customer:receivable      collected through a gateway
+FLEET_TENANT       tenant:<tenantId>        invoiced monthly (the spec's ContractBilling)
+CONTRACT_CONSUMER  platform:coverage-cost   absorbed; nobody owes anything
+```
+
+- `src/domain/ledger.ts` — `settlementBookingFor(path, tenantId)` returning the
+  account AND its memo; `PLATFORM_COVERAGE_COST_ACCOUNT` (EXPENSE);
+  `tenantReceivableAccountCode`. `completionLines` now takes the booking.
+- `src/commit/earnings.ts` — reads `settlementPath` and `tenantId`, passes the
+  booking, and puts the chosen account on the `EARNINGS_RECORDED` event so "who
+  was billed for this job?" is answerable from the incident timeline.
+- `tests/ledger.test.ts` — a new block asserting WHICH ACCOUNTS receive entries.
+
+### Decisions
+
+**Decision:** A fleet's receivable is PER TENANT (`tenant:<id>`), not pooled.
+**Why:** "What does this fleet owe" is the question monthly invoicing exists to
+answer, and a single receivable account cannot answer it. Mirrors
+`technician:<id>`, and the account-on-first-use machinery already handles it.
+
+**Decision:** A covered consumer's job is an EXPENSE, not a zero-value entry or
+a written-off receivable.
+**Why:** The cost is real — a technician was paid — it is simply borne by the
+platform rather than the customer. Booking a receivable and later writing it off
+would say the customer owed something and then did not, which is false: they
+never did. `platform:coverage-cost` says the true thing on the first attempt.
+**What it produces:** on a covered job the platform's net position is
+commission +K and coverage −T, i.e. −E — out of pocket exactly the technician's
+earnings, which is precisely right for a job whose revenue arrived as a
+subscription somewhere else.
+
+**Decision:** A null `settlementPath` falls back to `customer:receivable`.
+**Why:** Jobs created before stage 3 have no path, and so do several fixtures.
+Falling back to what they were ALREADY booked against means the fix cannot
+rewrite the meaning of history — the 59 existing completion transactions in
+`zippy_test` stay correct rather than becoming inconsistent with new ones.
+
+**Decision:** `recordCashCollection` now refuses any path that is not WALK_IN.
+**Why:** Found while making the completion path-aware, and it is the same bug
+from the other side. A fleet is invoiced and a covered consumer owes nothing, so
+neither can hand a technician cash — and the cash transaction CREDITS the
+customer receivable, so on a path that never debited it, it would push the
+account POSITIVE. A customer in credit for a job they never owed for.
+
+**Decision:** The test asserts account CODES, not just amounts.
+**Why:** This is the whole lesson. Every existing assertion checked that a
+transaction summed to zero, and the wrong booking summed to zero perfectly. A
+ledger test that only checks arithmetic cannot see money going to the wrong
+place.
+
+### Concurrency
+
+**Nothing new.** The change is to which account code a line names; the write
+path, its transaction, its idempotency and the deferred balance trigger are all
+unchanged.
+
+### Reconciliation — none was needed, and that is checked rather than assumed
+
+Before changing anything, both databases were queried for completions on jobs
+with a non-null settlement path:
+
+```
+dev   SELECT j.settlement_path, count(DISTINCT e.transaction_id) ... -> (0 rows)
+test  -> 59 completions, ALL on jobs with settlement_path NULL
+```
+
+So no job with a settlement path had ever had a completion booked: the defect
+was real but never exercised, because the only jobs reaching
+`recordJobCompletion` were fixtures with no path set. Nothing is mis-booked and
+no compensating transaction is required. Had there been any, the correction
+would have been a compensating transaction per job — the ledger is append-only
+and there is no other legal way.
+
+**Payable balances are unaffected by the fix in any case**, which is the more
+durable point: only the DEBIT side moved. A technician's earnings leg is
+byte-for-byte what it was, so every balance and every payout amount is
+identical before and after. The defect corrupted the platform's revenue
+picture, not what technicians were owed.
+
+### Weaknesses
+
+1. **`ContractBilling` rows are still not written.** `tenant:<id>` now
+   accumulates what each fleet owes, which is the ledger half of monthly
+   invoicing; turning that balance into an invoice for a period is not built.
+2. **`platform:coverage-cost` has no budget or cap.** `CoveredService.capPaise`
+   exists in the schema and nothing reads it, so a covered consumer's cover is
+   currently unlimited.
+3. **The estimate display is still wrong** — the other half of the original
+   gap. A covered consumer is still shown the full total with no
+   covered/payable split, and still asked to approve a number they will not
+   pay. The ledger now tells the truth while the screen does not.
+4. **Commission is booked on covered work**, which is deliberate (it is margin)
+   but means `platform:commission` is not the same thing as cash collected. Any
+   future revenue report has to net it against `platform:coverage-cost`.
+
+### Interview angle
+
+"Your ledger balanced and was still wrong. How?" It booked a customer
+receivable on every settlement path, including customers whose contract covered
+the job and fleets that are invoiced monthly. Every transaction summed to zero,
+so the invariant was satisfied and every test passed — a booking can be
+internally consistent and still describe a debt that does not exist. The fix
+splits the credit side (technician earnings and commission, identical
+everywhere, because margin does not depend on who pays) from the debit side
+(customer, fleet, or the platform's own expense line), and the new test asserts
+which ACCOUNTS receive entries rather than only that the amounts cancel.
+
+### What broke
+
+- **Nothing, and the reason is worth recording.** The typechecker did the whole
+  job: adding a required `settlement` field to `completionLines` failed the
+  build at both call sites — the production one and the test one — so there was
+  no path to a half-applied change. That is the same property the exhaustive
+  `JobStatus` switch gave Phase 15 when `AWAITING_APPROVAL` was added.
+
+- **A stray non-ASCII character got into a comment** while scripting the test
+  edit, and was caught by grepping for it before the file was run rather than by
+  review. Worth noting only because it would have been invisible in a diff.
+
+### Verification
+
+Full suite: **38 files, 561 tests, green** (up 8), run twice. Lint and
+typecheck clean.
+
+Two jobs booked on the dev database, one per contracted path, against the same
+technician:
+
+```
+completion:verify-covered  platform:commission       +46800
+                           platform:coverage-cost   -234000
+                           technician:tech-01       +187200
+
+completion:verify-fleet    platform:commission       +46800
+                           tenant:tenant-metrocab   -234000
+                           technician:tech-01       +187200
+```
+
+Resulting balances — note `customer:receivable` is untouched at 0, which under
+the old booking would have read −468000:
+
+```
+customer:receivable           0     <- the fix
+payouts:payable          409200
+platform:commission       93600     <- 2 x 46800, identical on both paths
+platform:coverage-cost  -234000
+tenant:tenant-metrocab  -234000
+technician:tech-01            0     <- earnings accrued into a payout
+```
+
+And the payout accrual still nets correctly on top of the corrected booking:
+the technician earned 2 x 187200 = 374400, a batch accrued exactly that, and
+their balance went to zero.
+
+```
+payouts   374400  PENDING
+unbalanced ledger transactions: 0
+```
