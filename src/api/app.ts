@@ -11,6 +11,8 @@ import { authRouter } from './auth.js';
 import { jobsRouter } from './jobs.js';
 import { intakeRouter } from './intake.js';
 import { solveRouter } from './solve.js';
+import { diagnosisRouter } from './diagnosis.js';
+import { actionsRouter } from './actions.js';
 import { authenticate, requirePermission } from './middleware/authenticate.js';
 import { createQueueAdminRouter, BULL_BOARD_PATH } from '../queues/board.js';
 import { errorHandler } from './middleware/errors.js';
@@ -69,9 +71,8 @@ export function createApp(): Express {
   app.use(jobsRouter);
   app.use(intakeRouter);
   app.use(solveRouter);
-  // NOT MOUNTED YET: ./diagnosis.js and ./actions.js exist and compile, but
-  // neither has a test. Phase 13 Stage 2 exposes them once it does — a route
-  // that is live before it is tested is a route whose first test is a user.
+  app.use(diagnosisRouter);
+  app.use(actionsRouter);
 
   // Bull Board — dispatcher-only. Mounted with explicit `authenticate` +
   // `requirePermission`, the same pattern jobs.ts and intake.ts use, and for

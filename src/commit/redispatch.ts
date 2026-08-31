@@ -7,7 +7,7 @@
 //   4. Is the answer the same as what we already have? Then do nothing —
 //      a re-solve producing the same assignment is a NO-OP, not a churn event.
 //   5. Otherwise raise a RECOMMEND action carrying the impact, for a
-//      dispatcher to take. Turning that into a real reservation is Stage 2.
+//      dispatcher to take. Executing it starts Phase 12's saga.
 //
 // STEP 4 IS THE ONE PEOPLE MISS. Without it every trigger looks like churn in
 // the metrics, and a system that re-solves ten times and changes nothing is
@@ -32,6 +32,8 @@ import { requestAction, hasOpenAction } from './actionRequests.js';
 import { buildDispatchSnapshot } from './dispatchSnapshot.js';
 import { persistSolverRun } from './persistSolverRun.js';
 import { solve } from '../engine/solve.js';
+import { startSaga } from './saga.js';
+import { appendJobEvent } from '../intake/events.js';
 
 export type RedispatchOutcome =
   | { outcome: 'ESCALATED'; actionRequestId: string; reason: string }
@@ -89,7 +91,12 @@ export async function handleTrigger(
 
   // 3. RE-SOLVE, for this job only. A whole-zone solve is what the debounced
   // queue job does; a trigger about one job asks about one job.
-  const { jobs, snapshot, jobZone } = await buildDispatchSnapshot(db, { jobIds: [jobId] });
+  // `includeAssigned` because a re-dispatch is about a job that already HAS a
+  // crew — the default snapshot filters exactly those out.
+  const { jobs, snapshot, jobZone } = await buildDispatchSnapshot(db, {
+    jobIds: [jobId],
+    includeAssigned: true,
+  });
   if (jobs.length === 0) {
     return { outcome: 'NO_CHANGE', solverRunId: null, reason: 'job is not in a dispatchable state' };
   }
@@ -138,6 +145,15 @@ export async function handleTrigger(
       to: { unitId: assignment.unitId, technicianId: assignment.technicianId },
       expectedResolutionMinutes: assignment.cost.expectedTimeToResolution.value,
       totalCost: assignment.cost.total,
+      // DOES THE CREW ALREADY ON SITE SURVIVE THE NEW PLAN? Computed here,
+      // where both halves are in hand, and carried on the action so the
+      // dispatcher sees it before deciding and `executeReassignment` does not
+      // have to work it out again from stale rows.
+      technicianRetained: job.assignedTechnicianId === assignment.technicianId,
+      releasedTechnicianId:
+        job.assignedTechnicianId && job.assignedTechnicianId !== assignment.technicianId
+          ? job.assignedTechnicianId
+          : null,
     },
     actor: input.actor,
   });
@@ -150,7 +166,149 @@ export async function handleTrigger(
   };
 }
 
-// EXECUTING an approved reassignment is Stage 2. `handleTrigger` deliberately
-// stops at raising the RECOMMEND: turning one into a real reservation means
-// calling Phase 12's `startSaga`, and that wiring is held back so the trigger
-// system and the tier table can be judged on their own first.
+// ---------------------------------------------------------------------------
+// EXECUTING an approved reassignment — where a plan finally becomes a
+// reservation, and where the technician standing at the roadside finds out
+// whether they are still on this job.
+//
+// THE TECHNICIAN EITHER WAITS OR IS EXPLICITLY RELEASED. Those are the only
+// two outcomes, and the difference is whether the new plan still uses them:
+//   - retained → nothing happens to them. They are already on site and the
+//     new plan wants them there, so the correct action is no action.
+//   - not retained → the old assignment is torn down FIRST: the job is
+//     detached from them, their van returns to AVAILABLE, and a JobEvent says
+//     so. Never left holding a job the system has quietly moved on from.
+//
+// RELEASE HAPPENS ON EXECUTE, NOT ON PROPOSE. While the RECOMMEND is sitting
+// in a dispatcher's queue the old crew is still the assignment — releasing
+// them when the action was merely raised would leave the job with nobody
+// while a human decided.
+//
+// This is also the first caller `startSaga` has had since Phase 12 built it.
+
+export type ExecuteInput = {
+  actionRequestId: string;
+  actor: { role: string; id: string | null };
+};
+
+export type ExecuteOutcome =
+  | {
+      outcome: 'SAGA_STARTED';
+      sagaId: string;
+      technicianRetained: boolean;
+      releasedTechnicianId: string | null;
+    }
+  // The saga was born terminal: its first leg lost the version-checked race,
+  // so the unit moved on between the RECOMMEND being raised and the
+  // dispatcher pressing execute. Reported as its own outcome rather than
+  // folded into SAGA_STARTED — "a saga exists" and "a unit is held" are
+  // different facts, and a caller told the first while the second is false
+  // has been misled.
+  | { outcome: 'SAGA_LOST_RACE'; sagaId: string; reason: string }
+  | { outcome: 'NOT_EXECUTABLE'; reason: string };
+
+type ReassignImpact = {
+  to?: { unitId?: string; technicianId?: string };
+  from?: { unitId?: string | null; technicianId?: string | null };
+  technicianRetained?: boolean;
+  releasedTechnicianId?: string | null;
+};
+
+export async function executeReassignment(
+  db: PrismaClient,
+  input: ExecuteInput,
+): Promise<ExecuteOutcome> {
+  const action = await db.actionRequest.findUnique({
+    where: { id: input.actionRequestId },
+    select: { id: true, jobId: true, status: true, kind: true, computedImpact: true },
+  });
+  if (!action?.jobId) return { outcome: 'NOT_EXECUTABLE', reason: 'action not found' };
+
+  const impact = action.computedImpact as ReassignImpact | null;
+  const unitId = impact?.to?.unitId;
+  const technicianId = impact?.to?.technicianId;
+  if (!unitId || !technicianId) {
+    return { outcome: 'NOT_EXECUTABLE', reason: 'action carries no target assignment' };
+  }
+
+  const retained = impact?.technicianRetained === true;
+  const releasedTechnicianId = impact?.releasedTechnicianId ?? null;
+
+  if (!retained && releasedTechnicianId) {
+    await releaseCurrentCrew(db, {
+      jobId: action.jobId,
+      technicianId: releasedTechnicianId,
+      unitId: impact?.from?.unitId ?? null,
+      actor: input.actor,
+    });
+  }
+
+  // Read the unit's version NOW, not when the action was raised. The saga's
+  // first leg is version-checked, so a unit that moved while the action sat in
+  // a dispatcher's queue loses the race and the saga is born terminal — which
+  // is the correct outcome, not an error.
+  const unit = await db.unit.findUnique({ where: { id: unitId }, select: { version: true } });
+  if (!unit) return { outcome: 'NOT_EXECUTABLE', reason: 'unit no longer exists' };
+
+  const saga = await startSaga(db, {
+    jobId: action.jobId,
+    unitId,
+    technicianId,
+    expectedUnitVersion: unit.version,
+  });
+
+  if (saga.outcome === 'REQUEUED') {
+    return { outcome: 'SAGA_LOST_RACE', sagaId: saga.sagaId, reason: saga.reason };
+  }
+
+  return {
+    outcome: 'SAGA_STARTED',
+    sagaId: saga.sagaId,
+    technicianRetained: retained,
+    releasedTechnicianId,
+  };
+}
+
+// Tearing down an assignment the new plan does not want. Conditional on the
+// unit still being ON_JOB for this job, so a van that has already moved on is
+// not dragged back to AVAILABLE.
+async function releaseCurrentCrew(
+  db: PrismaClient,
+  input: {
+    jobId: string;
+    technicianId: string;
+    unitId: string | null;
+    actor: { role: string; id: string | null };
+  },
+): Promise<void> {
+  await db.$transaction(async (tx) => {
+    await tx.job.updateMany({
+      where: { id: input.jobId, assignedTechnicianId: input.technicianId },
+      data: {
+        assignedUnitId: null,
+        assignedTechnicianId: null,
+        status: 'PLANNED',
+        version: { increment: 1 },
+      },
+    });
+
+    if (input.unitId) {
+      await tx.unit.updateMany({
+        where: { id: input.unitId, status: 'ON_JOB' },
+        data: { status: 'AVAILABLE', version: { increment: 1 } },
+      });
+    }
+
+    await appendJobEvent(tx, {
+      jobId: input.jobId,
+      eventType: 'TECHNICIAN_RELEASED_FROM_JOB',
+      payload: {
+        technicianId: input.technicianId,
+        unitId: input.unitId,
+        reason: 'the re-solve after this trigger does not use this crew',
+      },
+      actorRole: input.actor.role,
+      actorId: input.actor.id,
+    });
+  });
+}

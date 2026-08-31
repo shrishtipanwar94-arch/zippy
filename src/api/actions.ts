@@ -16,6 +16,7 @@ import { z } from 'zod';
 import { prismaBase } from '../infra/prismaBase.js';
 import { authenticate, requirePermission } from './middleware/authenticate.js';
 import { resolveAction } from '../commit/actionRequests.js';
+import { executeReassignment } from '../commit/redispatch.js';
 
 export const actionsRouter = Router();
 
@@ -87,18 +88,21 @@ actionsRouter.post(
       return;
     }
 
-    // STAGE 1 STOPS HERE. Executing a reassignment records the dispatcher's
-    // decision and nothing more; actually acquiring the unit and offering the
-    // job means Phase 12's saga, and that wiring is Stage 2. Until then this
-    // route is honest about what it did rather than implying a dispatch.
-    res.json({
+    if (!REASSIGNMENT_KINDS.includes(action.kind)) {
+      res.json({ actionRequestId: id, executed: true, reserved: false });
+      return;
+    }
+
+    // THE RESERVATION STARTS HERE. Marking the action executed and starting
+    // the saga are ordered deliberately: if the saga's first leg loses its
+    // race it ends REQUEUED, and the action is still correctly recorded as
+    // executed — the dispatcher did press the button, and what happened next
+    // is the saga's story, told in dispatch_offers.
+    const saga = await executeReassignment(prismaBase, {
       actionRequestId: id,
-      executed: true,
-      reserved: false,
-      note: REASSIGNMENT_KINDS.includes(action.kind)
-        ? 'decision recorded; the reservation saga is not wired yet'
-        : undefined,
+      actor: { role: auth.role, id: auth.userId },
     });
+    res.json({ actionRequestId: id, executed: true, reserved: saga.outcome === 'SAGA_STARTED', saga });
   },
 );
 

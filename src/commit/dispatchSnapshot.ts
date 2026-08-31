@@ -32,6 +32,10 @@ import type { FaultDistribution } from '../domain/faults.js';
 // assigned to anyone.
 const PENDING_STATUSES = ['INTAKE', 'PLANNED'] as const;
 
+// A job in one of these is over; re-dispatching it would be dispatching to a
+// vehicle that has already been fixed, towed or given up on.
+const TERMINAL_JOB_STATUSES = ['RESOLVED', 'UNSERVICEABLE', 'CANCELLED'] as const;
+
 export type SnapshotResult = {
   jobs: JobForDispatch[];
   snapshot: DispatchSnapshot;
@@ -57,13 +61,21 @@ export async function buildDispatchSnapshot(
   // be served by a unit parked next door, and filtering the fleet as well
   // would build the zone-partitioning approximation into the snapshot itself,
   // where the solver could not measure or switch it off.
-  options: { jobIds?: string[]; zoneId?: string } = {},
+  //
+  // `includeAssigned` is what re-dispatch needs. The default filters to jobs
+  // nobody is going to yet, which is right for planning — but a re-dispatch is
+  // by definition about a job that ALREADY has a crew, and the whole question
+  // is whether that crew should still be the answer. Without this the
+  // diagnosis-change flow would ask the solver about a job the solver had
+  // already been told to ignore, and get silence back.
+  options: { jobIds?: string[]; zoneId?: string; includeAssigned?: boolean } = {},
 ): Promise<SnapshotResult> {
   const [jobRows, unitRows, technicianRows, shiftRows, zoneRows] = await Promise.all([
     db.job.findMany({
       where: {
-        status: { in: [...PENDING_STATUSES] },
-        assignedUnitId: null,
+        ...(options.includeAssigned
+          ? { status: { notIn: [...TERMINAL_JOB_STATUSES] } }
+          : { status: { in: [...PENDING_STATUSES] }, assignedUnitId: null }),
         ...(options.jobIds ? { id: { in: options.jobIds } } : {}),
         ...(options.zoneId ? { zoneId: options.zoneId } : {}),
       },

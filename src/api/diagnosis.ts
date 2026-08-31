@@ -112,7 +112,14 @@ diagnosisRouter.post(
       actor: { role: auth.role, id: auth.actorId ?? null },
     });
 
-    res.json({ jobId: visible.id, required, reassigned: true, outcome });
+    // WAITS OR IS RELEASED — told to the technician who just filed this
+    // diagnosis, in the response to their own request, rather than left for
+    // them to infer from a status code. The release itself happens when the
+    // dispatcher executes the reassignment (see executeReassignment); until
+    // then they are still the assignment and should stay put.
+    const technicianOutcome = await currentCrewOutcome(prismaBase, outcome);
+
+    res.json({ jobId: visible.id, required, reassigned: true, technicianOutcome, outcome });
   },
 );
 
@@ -143,4 +150,33 @@ async function assignedCrewCanResolve(
   const technicianCodes = new Set(technician.capabilities.map((link) => link.capability.code));
 
   return required.every((code) => unitCodes.has(code) && technicianCodes.has(code));
+}
+
+// What the on-site technician should do next, in one word plus a sentence.
+// Read from the action the re-solve raised rather than recomputed, so the page
+// the technician sees and the action the dispatcher sees cannot disagree.
+async function currentCrewOutcome(
+  db: typeof prismaBase,
+  outcome: Awaited<ReturnType<typeof handleTrigger>>,
+): Promise<{ status: 'WAIT' | 'RELEASE_PENDING'; detail: string }> {
+  if (outcome.outcome !== 'REASSIGNMENT_PROPOSED') {
+    return {
+      status: 'WAIT',
+      detail: 'no better crew was found; stay with this job',
+    };
+  }
+
+  const action = await db.actionRequest.findUnique({
+    where: { id: outcome.actionRequestId },
+    select: { computedImpact: true },
+  });
+  const impact = action?.computedImpact as { technicianRetained?: boolean } | null;
+
+  return impact?.technicianRetained
+    ? { status: 'WAIT', detail: 'the new plan still uses this crew; stay with this job' }
+    : {
+        status: 'RELEASE_PENDING',
+        detail:
+          'a better-equipped crew has been proposed; you will be released when a dispatcher confirms it',
+      };
 }

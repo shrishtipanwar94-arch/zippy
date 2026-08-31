@@ -1113,3 +1113,152 @@ assignment; logging — `persistSolverRun(trigger)`, so
   changes: do not combine a mutating step and a verification step in one Bash
   call, and check disk state after any interrupted Bash call rather than
   trusting the message.
+
+## Phase 13 Stage 2 — the saga gets a caller / 2026-08-31 / PARTIAL
+
+Still not the phase close. Stage 3 owns the SLA design decision, the
+fire-10-triggers script and the checkpoint consolidation.
+
+### Built
+
+`src/commit/redispatch.ts` — `executeReassignment` (restored from Stage 1's
+deliberate omission) and `releaseCurrentCrew`. `handleTrigger` now computes
+`technicianRetained` / `releasedTechnicianId` into the action's impact, and
+re-solves with `includeAssigned: true`.
+
+`src/commit/dispatchSnapshot.ts` — `includeAssigned` option, plus
+`TERMINAL_JOB_STATUSES`.
+
+`src/api/diagnosis.ts` — `currentCrewOutcome`, returning WAIT or
+RELEASE_PENDING with a sentence for the technician who filed the diagnosis.
+
+`src/api/actions.ts` — the execute route now starts the saga.
+
+`src/api/app.ts` — both routers MOUNTED, now that they have tests.
+
+Tests: `tests/redispatch.test.ts` (4, end to end through the real solver into
+a real saga), `tests/redispatchRoutes.test.ts` (11, over HTTP). Suite 289 fast
+across 22 files, 9 concurrency. `tsc --noEmit`, `eslint src evaluation` clean.
+
+### Decisions
+
+- **Decision:** the old crew is released on EXECUTE, not on propose.
+  **Why:** while the RECOMMEND sits in a dispatcher's queue the old crew is
+  still the assignment. Releasing when the action was merely raised would
+  leave the job with nobody while a human decided.
+  **Alternative:** release as soon as the re-solve says they are not in the
+  new plan.
+  **Why not:** it creates a window where the job has no crew and no
+  reservation, for however long the queue takes.
+  **Tradeoff:** the technician is told "you will be released when a dispatcher
+  confirms", which is a less definite answer than they would like.
+
+- **Decision:** `buildDispatchSnapshot` gained `includeAssigned` rather than
+  the diagnosis flow detaching the crew before re-solving.
+  **Why:** the default snapshot filters to jobs nobody is going to yet, which
+  is right for planning and wrong for re-dispatch — a re-dispatch is BY
+  DEFINITION about a job that already has a crew. Detaching first would mean
+  releasing the crew before knowing an alternative exists.
+  **Alternative:** set the job back to PLANNED, then solve.
+  **Why not:** that is the release-on-propose failure above, wearing a
+  different hat.
+  **Tradeoff:** one more flag on a function whose default behaviour is now not
+  the only correct one.
+
+- **Decision:** `executeReassignment` reports `SAGA_LOST_RACE` separately from
+  `SAGA_STARTED`.
+  **Why:** found while debugging. The first version returned SAGA_STARTED
+  whether the saga was live or born terminal, because `startSaga` returns a
+  saga id either way. "A saga exists" and "a unit is held" are different
+  facts, and a caller told the first while the second is false has been
+  misled — it cost a debugging cycle chasing a unit that was never going to be
+  held.
+  **Alternative:** let the caller read the saga row.
+  **Why not:** every caller would have to, and the one that forgets reports a
+  reservation that does not exist.
+  **Tradeoff:** one more outcome for callers to handle.
+
+### Concurrency
+
+- **Scenario:** a unit moves between the RECOMMEND being raised and the
+  dispatcher pressing execute.
+  **What races:** the plan's assumption about the unit against whoever took it
+  in the meantime.
+  **Why dangerous:** an action can sit in a queue for minutes. Acting on the
+  version recorded when it was raised would apply a decision made against a
+  world that has since changed — the ABA case Phase 11 measured.
+  **How handled:** `executeReassignment` re-reads the unit's version at
+  execute time and hands THAT to the saga, whose first leg is
+  version-checked. A unit that moved loses the race and the saga is born
+  terminal.
+  **Assumption relied on:** the re-read and the hold are close enough together
+  that the window is small. It is not zero — this is optimistic concurrency,
+  not a lock, and the version check is what makes losing safe rather than
+  silent.
+
+### Weaknesses introduced
+
+- **`handleTrigger` still has only one production caller** — the diagnosis
+  route. Seven of the eight triggers have nothing that fires them:
+  technician-declined, technician-offline, unit-breakdown,
+  destination-declined, driver-moved, safety-changed and job-cancelled are all
+  enumerated and none is wired to the thing that would notice it.
+- **Releasing the old crew is not transactional with starting the saga.** They
+  are separate transactions, so a crash between them leaves the job detached
+  and no reservation started. Recoverable — the job is PLANNED and
+  re-solvable — but it is a real window and the ordering was chosen to fail
+  that way round deliberately.
+- **The debounced solver worker still has no test.** It compiles and its parts
+  are covered; the burst behaviour is asserted nowhere until Stage 3's
+  fire-10-triggers script.
+- **`currentCrewOutcome` re-reads the action to answer the technician.** One
+  more query on a path that already did a solve, chosen so the page the
+  technician sees and the action the dispatcher sees cannot disagree.
+
+### What broke
+
+- **Both new test files were competing with the seeded fleet, and then with
+  each other.** Three failures, one root cause worth recording in full because
+  the lesson is about the shared test database rather than about this phase.
+
+  First: `buildDispatchSnapshot` reads the WHOLE fleet, not one zone, so all
+  24 seeded units are candidates for every fixture job. The first attempt to
+  isolate the fixture moved it ~1500km away to Kolkata. It did not work — a
+  seeded `unit-02` still won. OSRM snaps a coordinate to the nearest node in
+  its graph, and with a Bengaluru-only extract both the Kolkata job and a
+  Bengaluru van snap into the same city and come back adjacent. Distance
+  cannot isolate anything while the routing graph covers one city.
+
+  Second: isolating by a scarce capability pair was not enough either, because
+  BOTH new files chose the same pair. Enumerating the classifier's payload
+  space against `prisma/seed/technicians.ts` shows exactly one non-tow
+  capability pair that no seeded crew holds — BRAKE_REPAIR +
+  EV_HV_CERTIFICATION — so both files granted it and each happily served the
+  other's jobs. Fixed by making the requirement sets DISJOINT rather than
+  merely rare: this file's jobs now need BRAKE_REPAIR + FLATBED_LOADING on a
+  tow-kind unit, the route file's need BRAKE_REPAIR + EV_HV_CERTIFICATION on a
+  van, and neither crew can serve the other's work.
+
+  Third, and the one most likely to recur: the fixture `crew()` helper upserted
+  capability LINKS additively, and `zippy_test` persists between runs. So a
+  crew kept every capability any previous version of that fixture had granted
+  — the redispatch fixture was still holding EV_HV_CERTIFICATION from the
+  attempt before, which is precisely how it kept winning the route file's
+  jobs. An `update: {}` on a link table is not idempotent in the way it looks;
+  it is append-only. Both fixtures now delete their capability links before
+  granting, so the fixture is authoritative rather than cumulative.
+
+- **A debugging probe read the wrong database, twice.** `prismaBase` resolves
+  `DATABASE_URL` from `.env`, which points at the dev database, while the
+  suite runs against `zippy_test` via vitest's env block. The first probe
+  reported zero units in a zone that demonstrably had two. Same mistake as
+  Phase 9; worth a standing note that any probe script must name the test URL
+  explicitly.
+
+- **The classifier, not the stored hypothesis, decides what a re-diagnosed job
+  requires.** The route replaces the belief with `classifySymptoms(payload)`,
+  so a fixture that pins a hand-picked distribution controls nothing about
+  what happens after the route runs. The symptom payload for the route tests
+  was chosen by enumerating the payload space and reading off which one lands
+  on a capability pair no seeded crew holds, rather than by guessing at a
+  plausible-sounding set of symptoms.
