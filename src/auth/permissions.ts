@@ -31,7 +31,13 @@ export type Resource =
   | 'user'
   | 'auditLog'
   | 'queueAdmin'
-  | 'solverRun';
+  | 'solverRun'
+  // Re-diagnosing a job on site. TECHNICIAN-only and deliberately separate
+  // from `job`: a dispatcher may update a job without being the person
+  // standing at the roadside looking at the engine, and only that person
+  // should be able to overwrite what the fault is.
+  | 'jobDiagnosis'
+  | 'actionRequest';
 
 type PermissionTable = Record<Role, Partial<Record<Resource, Action[]>>>;
 
@@ -44,6 +50,8 @@ const PERMISSIONS: PermissionTable = {
     job: ['read', 'update'],
     unit: ['read'],
     technician: ['read'],
+    // Only the person on site may overwrite what the fault is.
+    jobDiagnosis: ['update'],
   },
   DISPATCHER: {
     job: ['read', 'create', 'update', 'delete'],
@@ -51,6 +59,9 @@ const PERMISSIONS: PermissionTable = {
     // recommendation about the whole fleet, not something one driver or
     // technician has any business triggering.
     solverRun: ['read'],
+    // The RECOMMEND and APPROVE queues. A dispatcher executes a recommended
+    // reassignment and signs off an escalation; nobody else sees either.
+    actionRequest: ['read', 'update'],
     // Bull Board at /admin/queues — reads queue state, can retry or discard a
     // job. An operator surface, so it gets the operator role.
     queueAdmin: ['read'],

@@ -53,7 +53,11 @@ function toDistribution(stored: unknown): FaultDistribution {
 
 export async function buildDispatchSnapshot(
   db: PrismaClient,
-  options: { jobIds?: string[] } = {},
+  // `zoneId` narrows the JOBS, never the units: a zone's work can legitimately
+  // be served by a unit parked next door, and filtering the fleet as well
+  // would build the zone-partitioning approximation into the snapshot itself,
+  // where the solver could not measure or switch it off.
+  options: { jobIds?: string[]; zoneId?: string } = {},
 ): Promise<SnapshotResult> {
   const [jobRows, unitRows, technicianRows, shiftRows, zoneRows] = await Promise.all([
     db.job.findMany({
@@ -61,6 +65,7 @@ export async function buildDispatchSnapshot(
         status: { in: [...PENDING_STATUSES] },
         assignedUnitId: null,
         ...(options.jobIds ? { id: { in: options.jobIds } } : {}),
+        ...(options.zoneId ? { zoneId: options.zoneId } : {}),
       },
       select: {
         id: true,

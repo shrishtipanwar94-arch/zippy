@@ -990,3 +990,126 @@ the legs you own; a staleness heuristic standing in for a lock, named as such.
   interesting than it sounds: they are built almost entirely out of Phase 11's
   conditional updates, and those had already been proved against a real
   container.
+
+## Phase 13 Stage 1 — triggers, thrash control and action tiers / 2026-08-31 / PARTIAL
+
+NOT a phase entry. Phase 13 is being built in stages; this covers the first.
+The phase is not closed and the checkpoint consolidation has not run.
+
+### Built
+
+`src/domain/replanTriggers.ts` — `REPLAN_TRIGGERS` (the eight the build plan
+names), `isReplanTrigger`, `MATERIAL_MOVE_METRES` (250) with `isMaterialMove`,
+`MAX_REASSIGNMENTS_BEFORE_ESCALATION` (3) with `shouldEscalateForThrash`,
+`terminatesJob`, `causesResolve`. Pure — no Prisma, no clock, no queue.
+
+`src/domain/actionTiers.ts` — `ACTION_KINDS`, `tierFor`,
+`executesImmediately`. Nine kinds across AUTO / RECOMMEND / APPROVE, as a
+table rather than scattered if-statements.
+
+`src/commit/actionRequests.ts` — `requestAction`, `resolveAction`,
+`hasOpenAction`. An AUTO action is written already EXECUTED; everything else
+is PENDING. APPROVE resolutions write an `ApprovalRecord` naming the approver.
+
+`src/commit/redispatch.ts` — `handleTrigger`: thrash check, then the
+does-this-even-re-solve check, then a per-job re-solve, then the no-op
+comparison, then a RECOMMEND carrying `from`/`to`/expected-resolution/cost.
+
+`src/workers/solver.ts` — the debounced zone re-plan now does real work
+(snapshot → solve → `persistSolverRun`) and records the trigger that caused it.
+
+`src/commit/dispatchSnapshot.ts` — optional `zoneId`, narrowing jobs only.
+
+`src/auth/permissions.ts` — `jobDiagnosis` (TECHNICIAN) and `actionRequest`
+(DISPATCHER) resources.
+
+Tests: `tests/replanTriggers.test.ts` (14). Suite 274 fast across 20 files, 9
+concurrency. `tsc --noEmit`, `eslint src evaluation` clean.
+
+The four thrash controls the build plan asks for, and where each lives:
+debounce — `enqueueDebounced` keyed by zone (`workers/solver.ts`);
+reassignment cap — `shouldEscalateForThrash`, counted from `dispatch_offers`
+so it survives a restart; no-op detection — `handleTrigger` step 4, which
+returns NO_CHANGE and raises nothing when the re-solve reproduces the current
+assignment; logging — `persistSolverRun(trigger)`, so
+`SELECT trigger, count(*) FROM solver_runs GROUP BY trigger` is the question
+"what is making this system re-plan?" answered from data.
+
+### Deliberately NOT in this stage
+
+- **`startSaga` is still not wired.** `handleTrigger` stops at raising the
+  RECOMMEND. Phase 12's saga has had no caller since it was built, and it
+  still has none — closing that is Stage 2. `POST /actions/:id/execute`
+  records the dispatcher's decision and returns `reserved: false` with a note
+  saying so, rather than implying a dispatch it did not perform.
+- **`src/api/diagnosis.ts` and `src/api/actions.ts` exist but are NOT
+  mounted.** Both compile; neither has a test. A route that is live before it
+  is tested is a route whose first test is a user.
+- **`src/commit/slaEscalation.ts` exists but is NOT called.** See below.
+
+### Decisions
+
+- **Decision:** `SLA_WINDOW_CLOSED_WHILE_QUEUED` is NOT in `REPLAN_TRIGGERS`,
+  and `escalateClosedSlaWindows` is not wired into the cleanup sweep.
+  **Why:** the detection is settled and the RESPONSE is not. Phase 10 measured
+  the problem — once a job passes its promised window, `SLA_UNREACHABLE`
+  rejects every option for it forever and it silently stops appearing in any
+  plan — and Phase 10's own entry proposed an APPROVE-tier escalation. But an
+  APPROVE action BLOCKS pending sign-off, so a job that is already late would
+  then wait longer in an approval queue. That is a real tradeoff and it has
+  not been decided. Adding the list entry would look like having decided it.
+  **Alternative:** ship it as proposed, APPROVE tier, and revisit.
+  **Why not:** the failure mode of getting this wrong is making a late job
+  later, which is the exact harm the trigger exists to reduce. A wrong answer
+  here is worse than no answer, because a wrong answer stops looking like an
+  open question.
+  **Tradeoff:** the silent-stranding gap Phase 10 found is still open and
+  still invisible to an operator. Invariant 8 is still violated for this case.
+  Stage 2 owns the decision: blocking APPROVE, or an AUTO relaxation that
+  dispatches immediately plus a RECOMMEND for the commercial follow-up.
+
+- **Decision:** the SLA sweep was moved out of `src/workers/cleanup.ts` into
+  `src/commit/slaEscalation.ts` rather than left in place uncalled.
+  **Why:** eslint rejected the dead private function, and it was right to —
+  "written but not called" inside a file whose other functions all run is a
+  state that reads as an oversight. As its own exported module the status is
+  explicit, and `cleanup.ts` returns to a zero diff.
+  **Alternative:** prefix it with an underscore to silence the rule.
+  **Why not:** that hides the fact rather than recording it.
+  **Tradeoff:** a file nothing imports, which only makes sense with its header
+  comment read.
+
+### Weaknesses introduced
+
+- **`handleTrigger` has no caller in production.** Nothing fires a trigger:
+  the diagnosis route that would is unmounted, and no other code path calls
+  it. The whole trigger system is exercised by unit tests over its pure parts
+  and by nothing end to end.
+- **The tier table is tested; the tier BEHAVIOUR is not.** `tierFor` is pinned
+  by tests, but no test yet asserts that an APPROVE action actually blocks, or
+  that `resolveAction` writes an ApprovalRecord. Those need the action routes,
+  which are unmounted. Stage 2.
+- **The debounced solver worker now writes `SolverRun` rows and has never been
+  run.** It compiles and the pieces are individually tested; the debounce
+  behaviour under a burst is asserted nowhere yet —
+  `scripts/fire-10-triggers-fast.js` and its SQL check are Stage 2.
+- **`MATERIAL_MOVE_METRES` (250) and `MAX_REASSIGNMENTS_BEFORE_ESCALATION`
+  (3) are unmeasured**, like every other constant in this project. The
+  reassignment cap in particular decides when a human gets involved, and 3 is
+  a guess.
+
+### What broke
+
+- **A rejected tool call had already written its file.** An edit adding the
+  SLA sweep to `cleanup.ts` was interrupted; the harness reported the call
+  rejected, with wording stating the change was not written. It was written —
+  91 insertions, complete and well-formed, mtime matching the interrupt. The
+  mechanism: the call was Bash, not Edit, and compound — a Python heredoc that
+  rewrote the file followed by `npm run typecheck`. Python ran to completion
+  and flushed the file; the interrupt killed the shell during the slower
+  second command. The rejection text is written for the permission-prompt
+  case, where the harness performs the write itself and can decline to; for
+  Bash it cannot unwind a side effect that already reached disk. Two practice
+  changes: do not combine a mutating step and a verification step in one Bash
+  call, and check disk state after any interrupted Bash call rather than
+  trusting the message.
