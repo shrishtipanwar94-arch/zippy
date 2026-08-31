@@ -95,6 +95,8 @@ describe('the shape of a balanced transaction', () => {
       technicianCode: technicianAccountCode(TECH),
       settlement: settlementBookingFor('WALK_IN', null),
       totalPaise: TOTAL,
+      // A walk-in has no cover, so the whole total is payable.
+      coveredPaise: 0,
       commissionPaise: COMMISSION,
     });
 
@@ -309,7 +311,7 @@ describe('who carries the cost of a completed job', () => {
   // "what does this fleet owe" is the question monthly invoicing exists to
   // answer, and a pooled receivable cannot answer it.
   it('bills a fleet against its own account, not the customer receivable', async () => {
-    const accounts = await bookAndReadAccounts('fleet', 'FLEET_TENANT');
+    const accounts = await bookAndReadAccounts('fleet', 'FLEET_TENANT', TOTAL);
     expect(accounts.get(tenantReceivableAccountCode(TENANT))).toBe(-TOTAL);
     expect(accounts.has(CUSTOMER_RECEIVABLE_ACCOUNT)).toBe(false);
   });
@@ -318,7 +320,7 @@ describe('who carries the cost of a completed job', () => {
   // nobody owes anything for this incident — a receivable here is an asset that
   // will never be collected.
   it('absorbs a covered consumer’s job as a platform expense', async () => {
-    const accounts = await bookAndReadAccounts('covered', 'CONTRACT_CONSUMER');
+    const accounts = await bookAndReadAccounts('covered', 'CONTRACT_CONSUMER', TOTAL);
     expect(accounts.get(PLATFORM_COVERAGE_COST_ACCOUNT)).toBe(-TOTAL);
     expect(accounts.has(CUSTOMER_RECEIVABLE_ACCOUNT)).toBe(false);
   });
@@ -327,12 +329,12 @@ describe('who carries the cost of a completed job', () => {
   // makes on the work — and the technician earned what they earned; neither
   // depends on who settles.
   it('pays the technician and takes commission identically on all three paths', async () => {
-    for (const [suffix, path] of [
-      ['walkin', 'WALK_IN'],
-      ['fleet', 'FLEET_TENANT'],
-      ['covered', 'CONTRACT_CONSUMER'],
+    for (const [suffix, path, covered] of [
+      ['walkin', 'WALK_IN', 0],
+      ['fleet', 'FLEET_TENANT', TOTAL],
+      ['covered', 'CONTRACT_CONSUMER', TOTAL],
     ] as const) {
-      const accounts = await bookAndReadAccounts(suffix, path);
+      const accounts = await bookAndReadAccounts(suffix, path, covered);
       expect(accounts.get(technicianAccountCode(`${TECH}-${suffix}`))).toBe(EARNINGS);
       expect(accounts.get(PLATFORM_COMMISSION_ACCOUNT)).toBe(COMMISSION);
     }
@@ -565,10 +567,15 @@ describe('the chart of accounts', () => {
 async function bookAndReadAccounts(
   suffix: string,
   path: 'WALK_IN' | 'FLEET_TENANT' | 'CONTRACT_CONSUMER',
+  coveredPaise = 0,
 ): Promise<Map<string, number>> {
   const jobId = jobIdFor(suffix);
   await prismaBase.job.update({ where: { id: jobId }, data: { settlementPath: path } });
-  await approveEstimate(jobId, TOTAL);
+  // The split is STATED here rather than computed. This file is about which
+  // accounts a booking touches; computing the split from a contract cap is
+  // tests/coverage.test.ts's job, and mixing the two would make a booking
+  // failure look like a coverage failure.
+  await approveEstimate(jobId, TOTAL, coveredPaise);
   const result = await recordJobCompletion(prismaBase, { jobId });
   expect(['RECORDED', 'ALREADY_RECORDED']).toContain(result.outcome);
 
@@ -579,7 +586,11 @@ async function bookAndReadAccounts(
   return new Map(entries.map((entry) => [entry.account.code, entry.amountPaise]));
 }
 
-async function approveEstimate(jobId: string, totalPaise: number): Promise<void> {
+async function approveEstimate(
+  jobId: string,
+  totalPaise: number,
+  coveredPaise = 0,
+): Promise<void> {
   const existing = await prismaBase.estimate.count({ where: { jobId, status: 'APPROVED' } });
   if (existing > 0) return;
   await prismaBase.estimate.create({
@@ -589,6 +600,7 @@ async function approveEstimate(jobId: string, totalPaise: number): Promise<void>
       status: 'APPROVED',
       subtotalPaise: totalPaise,
       totalPaise,
+      coveredPaise,
       lines: {
         create: [
           { kind: 'CALLOUT', description: 'Callout', quantity: 1, unitPricePaise: CALLOUT_PAISE, amountPaise: CALLOUT_PAISE },

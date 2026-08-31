@@ -103,11 +103,19 @@ estimatesRouter.get(
         id: true,
         status: true,
         totalPaise: true,
+        coveredPaise: true,
         createdAt: true,
         lines: {
           select: { kind: true, description: true, quantity: true, amountPaise: true },
         },
-        approval: { select: { approvedByRole: true, approvedAt: true, channel: true } },
+        approval: {
+          select: {
+            approvedByRole: true,
+            approvedAt: true,
+            channel: true,
+            approvedAmountPaise: true,
+          },
+        },
       },
     });
     if (!estimate) {
@@ -122,6 +130,10 @@ estimatesRouter.get(
         status: estimate.status,
         total: formatRupees(estimate.totalPaise),
         totalPaise: estimate.totalPaise,
+        // What the contract absorbs and what is left to pay. The two always
+        // sum to the total.
+        coveredPaise: estimate.coveredPaise,
+        payablePaise: estimate.totalPaise - estimate.coveredPaise,
         issuedAt: estimate.createdAt.toISOString(),
         lines: estimate.lines.map((line) => ({
           kind: line.kind,
@@ -136,6 +148,8 @@ estimatesRouter.get(
               approvedByRole: estimate.approval.approvedByRole,
               approvedAt: estimate.approval.approvedAt.toISOString(),
               channel: estimate.approval.channel,
+              // WHAT WAS AGREED, which for a covered job is not the total.
+              approvedAmountPaise: estimate.approval.approvedAmountPaise,
             }
           : null,
       },

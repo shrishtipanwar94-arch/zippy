@@ -39,6 +39,11 @@ export function sumPaise(amounts: Paise[]): Paise {
 // ₹1,44,000, not ₹144,000 — because `en-IN` groups in lakhs and crores and
 // this product's customers read invoices that way.
 export function formatRupees(paise: Paise): string {
-  const rupees = paise / 100;
-  return `₹${rupees.toLocaleString('en-IN', { maximumFractionDigits: 2 })}`;
+  // THE SIGN GOES BEFORE THE SYMBOL. Formatting the number first and prefixing
+  // ₹ produces "₹-948", which is not how anybody writes a deduction — an
+  // invoice line reads "-₹948". Found when the covered half of an estimate
+  // first had to be shown as a negative.
+  const sign = paise < 0 ? '-' : '';
+  const rupees = Math.abs(paise) / 100;
+  return `${sign}₹${rupees.toLocaleString('en-IN', { maximumFractionDigits: 2 })}`;
 }

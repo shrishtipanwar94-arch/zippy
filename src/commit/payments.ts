@@ -36,7 +36,7 @@ import { cancellationCharge, cancellationStageFor } from '../domain/cancellation
 import type { CancellationOutcome } from '../domain/cancellationPolicy.js';
 import { calloutRate } from '../pricing/rateCard.js';
 import { serviceTypeFor } from './settlement.js';
-import { approvedTotalFor } from './estimates.js';
+import { approvedPayableFor } from './estimates.js';
 import { appendJobEvent } from '../intake/events.js';
 import { runPublishingTransaction } from '../realtime/transaction.js';
 import { paymentProvider } from '../payments/stubProvider.js';
@@ -251,9 +251,15 @@ export async function captureOnCompletion(
   // WHAT THE DRIVER ACTUALLY AGREED TO. Not the latest estimate, not the
   // technician's opinion — the approved total, which is stage 2's record of
   // consent. A job with no approval has nothing to capture.
-  const approvedTotalPaise = await approvedTotalFor(db, job.id);
+  const approvedTotalPaise = await approvedPayableFor(db, job.id);
   if (approvedTotalPaise === null) {
     return { outcome: 'NOTHING_TO_CAPTURE', reason: 'nothing was approved on this job' };
+  }
+  // PAYABLE, not the work's total. A contract that absorbed the whole job
+  // leaves nothing to take, and capturing the pre-coverage figure would charge
+  // a customer for something their cover already paid for.
+  if (approvedTotalPaise === 0) {
+    return { outcome: 'NOTHING_TO_CAPTURE', reason: 'the contract covers this job in full' };
   }
 
   const payment = await db.payment.findFirst({

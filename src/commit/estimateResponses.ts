@@ -25,7 +25,7 @@
 import type { Prisma, PrismaClient, Role } from '@prisma/client';
 import { appendJobEvent } from '../intake/events.js';
 import { runPublishingTransaction } from '../realtime/transaction.js';
-import { approvedTotalFor } from './estimates.js';
+import { approvedPayableFor } from './estimates.js';
 
 export type EstimateDecision = 'APPROVE' | 'DECLINE' | 'CANCEL';
 
@@ -58,13 +58,13 @@ export async function respondToEstimate(
 ): Promise<RespondOutcome> {
   const estimate = await db.estimate.findUnique({
     where: { id: input.estimateId },
-    select: { id: true, jobId: true, status: true, totalPaise: true },
+    select: { id: true, jobId: true, status: true, totalPaise: true, coveredPaise: true },
   });
   if (!estimate) return { outcome: 'NOT_FOUND' };
 
   if (input.decision === 'DECLINE') {
-    const approvedTotalPaise = await approvedTotalFor(db, estimate.jobId);
-    if (approvedTotalPaise === null) return { outcome: 'NOTHING_APPROVED', jobId: estimate.jobId };
+    const approved = await approvedPayableFor(db, estimate.jobId);
+    if (approved === null) return { outcome: 'NOTHING_APPROVED', jobId: estimate.jobId };
   }
 
   return runPublishingTransaction(db, async (tx) => {
@@ -85,12 +85,21 @@ export async function respondToEstimate(
     }
 
     if (input.decision === 'APPROVE') {
-      await recordApproval(tx, estimate.id, input);
+      // WHAT THEY ACTUALLY AGREED TO. A covered driver owes nothing, and an
+      // approval on file for the full cost of the work would misrepresent
+      // their consent — which is exactly the evidence a billing dispute turns
+      // on.
+      await recordApproval(tx, estimate.id, input, estimate.totalPaise - estimate.coveredPaise);
       await resumeWork(tx, estimate.jobId);
       await appendJobEvent(tx, {
         jobId: estimate.jobId,
         eventType: 'ESTIMATE_APPROVED',
-        payload: { estimateId: estimate.id, totalPaise: estimate.totalPaise },
+        payload: {
+          estimateId: estimate.id,
+          totalPaise: estimate.totalPaise,
+          // The number they actually said yes to.
+          approvedAmountPaise: estimate.totalPaise - estimate.coveredPaise,
+        },
         actorRole: input.actor.role,
         actorId: input.actor.id,
       });
@@ -100,7 +109,7 @@ export async function respondToEstimate(
     if (input.decision === 'DECLINE') {
       // The extra work is refused; the agreed work is not. The job resumes at
       // the scope the driver already approved.
-      const approvedTotalPaise = (await approvedTotalFor(tx, estimate.jobId)) ?? 0;
+      const approvedTotalPaise = (await approvedPayableFor(tx, estimate.jobId)) ?? 0;
       await resumeWork(tx, estimate.jobId);
       await appendJobEvent(tx, {
         jobId: estimate.jobId,
@@ -127,6 +136,7 @@ async function recordApproval(
   tx: Prisma.TransactionClient,
   estimateId: string,
   input: RespondInput,
+  approvedAmountPaise: number,
 ): Promise<void> {
   await tx.estimateApproval.create({
     data: {
@@ -134,6 +144,7 @@ async function recordApproval(
       approvedByRole: input.actor.role,
       approvedById: input.actor.id,
       channel: input.channel ?? 'APP',
+      approvedAmountPaise,
     },
   });
 }

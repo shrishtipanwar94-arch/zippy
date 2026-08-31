@@ -3011,3 +3011,232 @@ their balance went to zero.
 payouts   374400  PENDING
 unbalanced ledger transactions: 0
 ```
+
+## Phase 15c — The covered/payable split and the coverage cap / 2026-09-01 / Commit: "phase 15c: apply the coverage cap and show the covered/payable split"
+
+The other half of the gap the settlement-path fix left open. The ledger was
+made to tell the truth about WHO carries a job's cost; this makes it tell the
+truth about HOW MUCH, and makes the driver's screen say the same thing.
+
+The cap and the display were one job, not two: `covered_services.cap_paise` was
+never read, so cover was unbounded AND there was no number to compute a split
+from. You cannot show "covered −₹600 / payable ₹348" without a cap.
+
+### Built
+
+**Migration** `20260901220000_phase15c_coverage_split` — `estimates.covered_paise`
+(NOT NULL DEFAULT 0) and `estimate_approvals.approved_amount_paise` (nullable).
+
+**Domain**
+- `src/domain/coverage.ts` — `CoverageTerms`, `CoverageSplit`, `applyCoverage`,
+  `isFullyCovered`. Pure.
+- `src/domain/ledger.ts` — `completionLines` takes `coveredPaise` and splits the
+  debit side at the cap.
+- `src/domain/money.ts` — `formatRupees` puts the sign before the symbol.
+
+**Commit**
+- `src/commit/settlement.ts` — `coverageTermsFor`, reading the cap off the
+  contract in force at the job's creation instant.
+- `src/commit/estimates.ts` — computes and stores the split;
+  `approvedEstimateFor` / `approvedTotalFor` / `approvedPayableFor`.
+- `src/commit/estimateResponses.ts` — the approval records the PAYABLE.
+- `src/commit/earnings.ts` — books the split from the approved estimate.
+- `src/commit/payments.ts` — captures the payable; nothing to capture at zero.
+
+**API** — the driver view and `GET /jobs/:id/estimate` both carry covered,
+payable and `fullyCovered`.
+
+**Tests** — `tests/coverage.test.ts` (17). Suite: 39 files, 578 tests.
+
+### Decisions
+
+**Decision:** `covered_paise` is STORED on the estimate; payable is derived.
+**Why:** Two reasons pulling the same way. `covered_services` has no
+validFrom/validTo, so a cap edited later would make a recomputed split
+disagree with the document the driver actually approved — and an estimate is a
+financial record, not a view. Payable is not stored because two columns that
+must sum to a third are two chances to disagree.
+
+**Decision:** THE APPROVAL RECORDS THE PAYABLE, not the total.
+**Why:** The requirement states it and the reason is evidentiary: a driver whose
+contract covers a ₹948 job owes ₹0, and an approval on file for ₹948
+misrepresents what they consented to. That record is exactly what a billing
+dispute turns on.
+**Nullable, not zero-defaulted:** approvals taken before this change have no
+captured amount, and defaulting them to 0 would claim those customers agreed to
+pay nothing.
+
+**Decision:** The LEDGER books the TOTAL; only the DEBIT side splits.
+**Why:** The work was worth what it was worth however it is settled — the
+technician is owed their earnings and the platform earns its margin on the whole
+of it. Cover decides who carries the debit, not what the job was worth. So a
+covered job books `technician +E, commission +K, coverage-cost −covered,
+customer −payable`, and the two debit halves always sum to the total.
+
+**Decision:** The ledger takes `coveredPaise` FROM THE APPROVED ESTIMATE rather
+than recomputing it.
+**Why:** The driver was shown a split and consented to the payable half of it.
+Recomputing at completion could produce a different answer — a cap edited in
+between — and the ledger would then disagree with the document the customer
+approved. Reading the estimate makes the two agree by construction rather than
+by both being careful.
+
+**Decision:** The re-approval tolerance compares PAYABLE, not total.
+**Why:** A revision whose extra cost is entirely absorbed by the contract
+changes nothing for the driver, and pausing the job to re-ask about a number
+that did not move would be a stop for the platform's benefit. Same principle as
+the approval record: everything customer-facing is about what they pay.
+
+**Decision:** Zero-value ledger lines are omitted.
+**Why:** It keeps a walk-in's transaction at three entries — and, less
+obviously, it is what stops a walk-in colliding on the `(transaction, account)`
+unique index: a walk-in's settlement account IS `customer:receivable`, so a
+zero "covered" line and the payable line would both name it.
+
+**Decision:** `covered: false` and `capPaise: null` are different answers.
+**Why:** "This contract does not cover this service" and "it covers it without
+limit" are genuinely different contract terms and produce opposite splits.
+Collapsing them into a nullable number would lose that.
+
+**Decision:** A cap of zero covers nothing.
+**Why:** A listed service with a zero cap is a real term — the service is
+in scope for the contract's reporting but nothing is absorbed — and it falls out
+of `min(total, cap)` without a special case.
+
+### Concurrency
+
+**Nothing new.** No new write path; the completion transaction is unchanged in
+shape, count and idempotency. The one ordering fact worth naming is that the
+split is read from the estimate rather than recomputed, which removes a race
+that would otherwise exist between a contract edit and a job completing.
+
+### Weaknesses introduced
+
+1. **A covered consumer's OVERAGE IS OWED AND CANNOT BE COLLECTED.** This is
+   the sharpest one. `usesGateway` is a property of the settlement PATH, not of
+   the amount, so a CONTRACT_CONSUMER who exceeds their cap has a genuine
+   `customer:receivable` on the books and no code path that will ever charge
+   it. The ledger and the screen agree that they owe ₹348; nothing takes it.
+   Making the gateway decision amount-aware rather than path-aware is the fix
+   and it is a design change I did not make unasked.
+2. **`covered_services` is still unversioned.** The cap is read at the job's
+   creation instant, so a contract edited mid-job cannot move an existing
+   estimate — but there is no history, so "what was the cap in March?" is
+   unanswerable. `validFrom`/`validTo` on the row is the real answer, mirroring
+   the price list.
+3. **The cap is per incident, with no period budget.** A customer with a ₹600
+   cap can have twenty covered jobs in a month. Annual or monthly limits are a
+   different shape of term entirely and are not modelled.
+4. **A fleet's overage is booked to `customer:receivable`, i.e. to the
+   DRIVER.** That is what was specified, and it is a real commercial model —
+   the fleet caps what it will cover and the driver pays the rest — but it is
+   worth stating plainly because the alternative (the fleet owes it all) is
+   equally plausible and the code now assumes one of them.
+5. **No frontend for the split.** `driver-view` returns `covered`, `payable`
+   and `fullyCovered`; `public/js/panels/driverStatus.js` still renders only
+   the lines and the total, so a covered driver sees the right data in the API
+   and the old picture on screen.
+6. **Tax is still zero** and would sit between the total and the split when it
+   arrives, which will need a decision about whether cover applies pre- or
+   post-tax.
+
+### Concepts now genuinely in use
+
+- A cap as the thing that makes a split computable — the display gap and the
+  unbounded-absorption gap were one defect wearing two faces.
+- Consent recorded as an AMOUNT, not merely as an act.
+- A downstream consumer (the ledger) reading a stored decision rather than
+  recomputing it, so two representations of one fact cannot drift.
+
+### Interview angle
+
+"A customer's contract covers roadside assistance up to ₹600 and the job comes
+to ₹948. What happens?" The estimate stores covered ₹600 and shows payable
+₹348; the approval records ₹348, not ₹948, because that is what they agreed to;
+and the ledger books ₹600 against the contract and ₹348 against the customer,
+so the books and the screen say the same thing. The split is stored rather than
+recomputed, because the cap is unversioned and a later edit would otherwise make
+the ledger disagree with the document the customer approved.
+
+### What broke
+
+- **A real display bug, surfaced by the first negative number the product ever
+  had to show.** `formatRupees(-94800)` returned `₹-948`. No invoice writes a
+  deduction that way — it reads `-₹948` — and nothing had noticed because every
+  amount formatted until now was positive. Fixed in the formatter rather than
+  in the caller, so it is right everywhere.
+
+- **Two ledger tests failed the moment the booking became split-aware, and they
+  were right to.** They set a settlement path on a job whose estimate had no
+  covered amount, so under the new rule everything is payable and goes to the
+  customer — which is exactly what that estimate says. The expectation was
+  stale, not the code. They now STATE the split they are testing, which also
+  puts the boundary in the right place: `ledger.test.ts` is about which
+  accounts a booking touches, and computing a split from a contract cap is
+  `coverage.test.ts`'s job.
+
+- **A test helper that ran the whole flow per test broke on correct
+  behaviour.** Calling price → approve → complete a second time builds a SECOND
+  estimate, which — being within tolerance of the approval already on file — is
+  auto-approved on arrival and therefore has no approval row of its own, so
+  `findUniqueOrThrow` failed. The system was right; the helper's shape was
+  wrong. Each scenario now runs once in `beforeAll` and every test reads the
+  same outcome.
+
+- **A constant was wrong and the test told me so precisely.** I wrote the
+  expected labour line as ₹200; the duration model says twenty minutes, which
+  at ₹600/hour is ₹198. The assertion failed with `expected 94800 to be 95000`,
+  which is the useful kind of failure — an arithmetic disagreement with a
+  single cause.
+
+- **A fixture dated in the FUTURE is a permanent squatter on a newest-N list.**
+  Adding four jobs per run to `zippy_test` turned two long-green suites red
+  — `ownership` and `tenancy` both assert a dispatcher's list contains their
+  own jobs, `GET /jobs` returns the fifty NEWEST, and the shared database had
+  forty-nine jobs dated 2031-2032 sitting at the top of it forever. The money
+  suites each own a disjoint YEAR so their price lists cannot compete, and two
+  of them had reached for a future one; the coverage fixture was merely the
+  straw. Fixed by moving `estimates` into 2022 and having `pricing` age the
+  throwaway jobs its intake tests leave behind — they cannot be deleted,
+  because `job_events` is append-only. The failure had nothing to do with the
+  code under test, which is the signature of a shared-fixture problem.
+
+### Verification
+
+Full suite: **39 files, 578 tests, green** (up 17), run twice. Typecheck and
+lint clean.
+
+The cap read off a real seeded contract (the GOLD fleet, given a ₹600 cap for
+the demonstration and then restored):
+
+```
+contract terms    {"covered":true,"capPaise":60000}
+
+total     ₹400  covered     -₹400  payable       ₹0  sums true
+total     ₹600  covered     -₹600  payable       ₹0  sums true
+total     ₹948  covered     -₹600  payable     ₹348  sums true
+total   ₹2,340  covered     -₹600  payable   ₹1,740  sums true
+```
+
+And the two sides agreeing, end to end through the real estimate builder,
+approval and completion:
+
+```
+FULLY COVERED (cap ₹2,000, job ₹948)
+  estimate     total ₹948   covered -₹948   payable ₹0   fullyCovered true
+  approval     approved_amount_paise = 0
+  ledger       coverage-cost -94800, technician +75840, commission +18960
+               customer:receivable   ABSENT
+  capture      nothing to capture
+
+OVER THE CAP (cap ₹600, job ₹948)
+  estimate     total ₹948   covered -₹600   payable ₹348
+  approval     approved_amount_paise = 34800
+  ledger       coverage-cost -60000, customer:receivable -34800
+               60000 + 34800 = 94800
+
+FLEET OVER THE CAP
+  ledger       tenant:<id> -60000, customer:receivable -34800
+```
+
+Every transaction balances, and `expectLedgerBalances` runs across all of them.

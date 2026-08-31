@@ -341,6 +341,19 @@ describe('a job pins its prices at creation', () => {
 // ---------------------------------------------------------------------------
 
 async function buildFixture(): Promise<void> {
+  // AGE WHAT EARLIER RUNS LEFT BEHIND. Two tests here create jobs through real
+  // intake at IN_NOW (2031) to prove the list resolution, and those jobs cannot
+  // be deleted — `job_events` is append-only. Future-dated, they would sit in
+  // the newest 50 forever and crowd out the suites that assert a dispatcher's
+  // list contains their own jobs. The assertions read the RETURN VALUE of
+  // intake, not the stored date, so ageing them afterwards costs nothing.
+  //
+  // The fixture job re-upserted below gets its real date back immediately.
+  await prismaBase.job.updateMany({
+    where: { driverId: `${PREFIX}-driver` },
+    data: { createdAt: new Date('2019-06-01T00:00:00.000Z') },
+  });
+
   await buildActors();
 
   // THIS FIXTURE OWNS ITS PRICE LISTS, so it deletes them and rebuilds rather

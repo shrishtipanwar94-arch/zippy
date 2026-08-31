@@ -128,6 +128,17 @@ selection test sharing one solver run made the first test to run the only one
 that could write. Each test that needs to make a decision now creates its own
 run.
 
+**A future-dated fixture squats permanently on a "newest N" list.** `GET /jobs`
+returns the fifty newest, and `ownership` and `tenancy` each assert a
+dispatcher's list contains their own jobs, created at `now()`. A fixture dated
+in 2032 outranks `now()` in every run that will ever happen, so it holds one of
+those fifty slots forever. Phase 15c had forty-nine such jobs — two money suites
+had picked future years for their price-list windows, and one of them created
+jobs through real intake that could not be cleaned up afterwards because
+`job_events` is append-only. Adding four more jobs per run tipped two unrelated
+suites red. Date every fixture in the PAST, and if a test must create jobs it
+cannot delete, age them at the start of the next run.
+
 **A rejected Bash tool call may still have run.** The rejection text is written
 for the Edit/Write case, where the harness performs the write and can decline
 to. A Bash command that was already executing cannot be unwound: check the disk

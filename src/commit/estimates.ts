@@ -30,6 +30,8 @@ import { resolveMinutes } from '../engine/durations.js';
 import { priceCallout, priceLabour, priceParts, priceTow, totalOf } from '../domain/pricing.js';
 import type { PricedLine } from '../domain/pricing.js';
 import { reapprovalDecision } from '../domain/estimateApproval.js';
+import { applyCoverage } from '../domain/coverage.js';
+import { coverageTermsFor } from './settlement.js';
 import { calloutRate, labourRate, partRate, towRate } from '../pricing/rateCard.js';
 import { appendJobEvent } from '../intake/events.js';
 import { runPublishingTransaction } from '../realtime/transaction.js';
@@ -48,7 +50,11 @@ export type BuildEstimateOutcome =
   | {
       outcome: 'ISSUED';
       estimateId: string;
+      // What the WORK costs, and how it splits. The ledger books the total;
+      // the driver is asked for the payable.
       totalPaise: number;
+      coveredPaise: number;
+      payablePaise: number;
       // What this revision means for the driver: the first ask, a pause for a
       // fresh answer, or something the existing approval already covers.
       approval: 'NEEDS_FIRST_APPROVAL' | 'NEEDS_REAPPROVAL' | 'COVERED';
@@ -73,6 +79,8 @@ export async function buildEstimate(
       priceListId: true,
       createdAt: true,
       onHighway: true,
+      tenantId: true,
+      settlementPath: true,
       faultHypotheses: {
         orderBy: { createdAt: 'desc' },
         take: 1,
@@ -112,10 +120,28 @@ export async function buildEstimate(
   }
 
   const totalPaise = totalOf(lines);
-  const approvedTotalPaise = await approvedTotalFor(db, job.id);
+
+  // WHAT THE CONTRACT ABSORBS. Read at the job's creation instant, the same one
+  // the settlement path was pinned at, so a contract edited mid-job cannot move
+  // what a driver was quoted. A WALK_IN job has no cover and splits to
+  // "nothing covered, all payable", which is why this needs no branch.
+  const coverage = applyCoverage(
+    totalPaise,
+    await coverageTermsFor(db, {
+      tenantId: job.tenantId,
+      onHighway: job.onHighway,
+      at: job.createdAt,
+    }),
+  );
+
+  // THE TOLERANCE COMPARES WHAT THE DRIVER PAYS, not what the work costs. A
+  // revision whose extra cost is entirely absorbed by the contract changes
+  // nothing for them, and stopping the job to re-ask about a number that did
+  // not move would be a pause for the platform's benefit.
+  const approvedPayablePaise = await approvedPayableFor(db, job.id);
   const decision = reapprovalDecision({
-    approvedTotalPaise,
-    revisedTotalPaise: totalPaise,
+    approvedTotalPaise: approvedPayablePaise,
+    revisedTotalPaise: coverage.payablePaise,
     toleranceBps: config.ESTIMATE_REAPPROVAL_TOLERANCE_BPS,
   });
 
@@ -138,6 +164,10 @@ export async function buildEstimate(
         // headroom in the phase brief and is not built.
         taxPaise: 0,
         totalPaise,
+        // Stored, not derived: `covered_services` has no version columns, so
+        // recomputing this later could produce a different answer than the one
+        // the driver was shown. An estimate is a financial document.
+        coveredPaise: coverage.coveredPaise,
         lines: {
           create: lines.map((line) => ({
             kind: line.kind,
@@ -160,7 +190,9 @@ export async function buildEstimate(
       payload: {
         estimateId: estimate.id,
         totalPaise,
-        approvedTotalPaise,
+        coveredPaise: coverage.coveredPaise,
+        payablePaise: coverage.payablePaise,
+        approvedPayablePaise,
         approval: decision.outcome,
         paused,
         ...(decision.outcome === 'NEEDS_REAPPROVAL'
@@ -174,7 +206,15 @@ export async function buildEstimate(
     return estimate.id;
   });
 
-  return { outcome: 'ISSUED', estimateId, totalPaise, approval: decision.outcome, paused };
+  return {
+    outcome: 'ISSUED',
+    estimateId,
+    totalPaise,
+    coveredPaise: coverage.coveredPaise,
+    payablePaise: coverage.payablePaise,
+    approval: decision.outcome,
+    paused,
+  };
 }
 
 // WORK STOPS HERE. Conditional on the job being somewhere work could be
@@ -201,15 +241,47 @@ async function pauseForApproval(tx: Prisma.TransactionClient, jobId: string): Pr
 // estimate builder asks before opening a transaction, and the response path
 // asks inside one. A `PrismaClient` satisfies that type, so there is no second
 // copy differing only in its parameter.
+// THE APPROVED ESTIMATE ITSELF, not just its total — because two different
+// consumers now need two different numbers off it:
+//
+//   the LEDGER books the TOTAL, because that is what the work was worth
+//   however it is settled, and then splits the debit side;
+//   everything CUSTOMER-FACING uses the PAYABLE — what to capture, what to
+//   record as approved, and what a revision is compared against.
+//
+// The one with the highest TOTAL rather than the latest: the driver consented
+// to a ceiling, and a cheaper revision that was approved does not lower it.
+export async function approvedEstimateFor(
+  tx: Prisma.TransactionClient,
+  jobId: string,
+): Promise<{ totalPaise: number; coveredPaise: number } | null> {
+  const approved = await tx.estimate.findFirst({
+    where: { jobId, status: 'APPROVED' },
+    orderBy: { totalPaise: 'desc' },
+    select: { totalPaise: true, coveredPaise: true },
+  });
+  return approved ?? null;
+}
+
+// What the WORK was worth. The ledger's number.
 export async function approvedTotalFor(
   tx: Prisma.TransactionClient,
   jobId: string,
 ): Promise<number | null> {
-  const approved = await tx.estimate.aggregate({
-    where: { jobId, status: 'APPROVED' },
-    _max: { totalPaise: true },
-  });
-  return approved._max.totalPaise ?? null;
+  const approved = await approvedEstimateFor(tx, jobId);
+  return approved?.totalPaise ?? null;
+}
+
+// What the CUSTOMER agreed to pay. Everything customer-facing uses this, and a
+// fully covered job's is zero — which is a real answer, not "nothing
+// approved".
+export async function approvedPayableFor(
+  tx: Prisma.TransactionClient,
+  jobId: string,
+): Promise<number | null> {
+  const approved = await approvedEstimateFor(tx, jobId);
+  if (!approved) return null;
+  return approved.totalPaise - approved.coveredPaise;
 }
 
 // ---------------------------------------------------------------------------

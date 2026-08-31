@@ -46,7 +46,7 @@ const PRICE_LIST = `${PREFIX}-list`;
 // so two fixtures whose public lists overlap in time can each pin the other's
 // list, and the next fixture to rebuild nulls a job it did not create. Every
 // money-domain suite now owns a disjoint year: cancellation 2018, money 2020,
-// ledger 2021, pricing 2030-31, estimates 2032.
+// ledger 2021, estimates 2022, coverage 2024, pricing 2030-31.
 const CREATED_AT = new Date('2018-06-01T00:00:00.000Z');
 const LIST_FROM = new Date('2018-01-01T00:00:00.000Z');
 const LIST_TO = new Date('2019-01-01T00:00:00.000Z');

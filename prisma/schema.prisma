@@ -1306,6 +1306,10 @@ model Estimate {
   subtotalPaise Int            @default(0) @map("subtotal_paise")
   taxPaise      Int            @default(0) @map("tax_paise")
   totalPaise    Int            @default(0) @map("total_paise")
+  // What a contract absorbs, after its per-incident cap. Payable is
+  // total - covered and is deliberately NOT a column: two figures that must
+  // sum to a third are two chances to disagree.
+  coveredPaise  Int            @default(0) @map("covered_paise")
   createdAt     DateTime       @default(now()) @map("created_at")
   updatedAt     DateTime       @updatedAt @map("updated_at")
 
@@ -1335,12 +1339,17 @@ model EstimateLine {
 }
 
 model EstimateApproval {
-  id             String   @id @default(cuid())
-  estimateId     String   @unique @map("estimate_id")
-  approvedByRole String   @map("approved_by_role")
-  approvedById   String?  @map("approved_by_id")
-  channel        String?
-  approvedAt     DateTime @default(now()) @map("approved_at")
+  id                  String   @id @default(cuid())
+  estimateId          String   @unique @map("estimate_id")
+  approvedByRole      String   @map("approved_by_role")
+  approvedById        String?  @map("approved_by_id")
+  // WHAT WAS ACTUALLY AGREED — the payable amount, not the pre-coverage total.
+  // A covered driver owes nothing, and an approval on file for the full cost
+  // would misrepresent their consent. Null for approvals recorded before this
+  // was captured; zero would claim they agreed to pay nothing.
+  approvedAmountPaise Int?     @map("approved_amount_paise")
+  channel             String?
+  approvedAt          DateTime @default(now()) @map("approved_at")
 
   estimate Estimate @relation(fields: [estimateId], references: [id], onDelete: Cascade)
 

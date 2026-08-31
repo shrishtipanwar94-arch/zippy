@@ -31,7 +31,13 @@ const app = createApp();
 const PREFIX = 'estim';
 const TENANT = `${PREFIX}-tenant`;
 const PRICE_LIST = `${PREFIX}-list`;
-const CREATED_AT = new Date('2032-03-01T00:00:00.000Z');
+// PAST-DATED, and this is not cosmetic. `GET /jobs` returns the 50 NEWEST
+// jobs, and two older suites assert a dispatcher's list contains theirs — so a
+// fixture dated in the FUTURE occupies those slots permanently, for every run
+// that ever happens. Fifteen jobs here plus a few elsewhere was enough to push
+// them off the end. 2022 is this suite's own window; every money suite owns a
+// different year so their price lists cannot compete either.
+const CREATED_AT = new Date('2022-03-01T00:00:00.000Z');
 
 function driverToken(): string {
   return issueAccessToken({
@@ -620,7 +626,7 @@ async function buildFixture(): Promise<void> {
       active: true,
       // After the seeded catalogue, so this fixture wins on validFrom without
       // touching a row it does not own.
-      validFrom: new Date('2032-01-01T00:00:00.000Z'),
+      validFrom: new Date('2022-01-01T00:00:00.000Z'),
     },
   });
 
@@ -663,15 +669,15 @@ async function buildFixture(): Promise<void> {
         priceListId: PRICE_LIST,
         partId,
         unitPricePaise: part.pricePaise,
-        validFrom: new Date('2032-01-01T00:00:00.000Z'),
+        validFrom: new Date('2022-01-01T00:00:00.000Z'),
       },
     });
   }
 
   await prismaBase.labourRate.createMany({
     data: [
-      { priceListId: PRICE_LIST, code: 'STANDARD', ratePerHourPaise: 60000, validFrom: new Date('2032-01-01T00:00:00.000Z') },
-      { priceListId: PRICE_LIST, code: 'SPECIALIST', ratePerHourPaise: 120000, validFrom: new Date('2032-01-01T00:00:00.000Z') },
+      { priceListId: PRICE_LIST, code: 'STANDARD', ratePerHourPaise: 60000, validFrom: new Date('2022-01-01T00:00:00.000Z') },
+      { priceListId: PRICE_LIST, code: 'SPECIALIST', ratePerHourPaise: 120000, validFrom: new Date('2022-01-01T00:00:00.000Z') },
     ],
   });
   await prismaBase.towTariff.create({
@@ -680,13 +686,13 @@ async function buildFixture(): Promise<void> {
       towType: 'FLATBED',
       perKmPaise: 4000,
       minChargePaise: 50000,
-      validFrom: new Date('2032-01-01T00:00:00.000Z'),
+      validFrom: new Date('2022-01-01T00:00:00.000Z'),
     },
   });
   await prismaBase.calloutFee.createMany({
     data: [
-      { priceListId: PRICE_LIST, serviceType: 'STANDARD', feePaise: 30000, validFrom: new Date('2032-01-01T00:00:00.000Z') },
-      { priceListId: PRICE_LIST, serviceType: 'HIGHWAY', feePaise: 50000, validFrom: new Date('2032-01-01T00:00:00.000Z') },
+      { priceListId: PRICE_LIST, serviceType: 'STANDARD', feePaise: 30000, validFrom: new Date('2022-01-01T00:00:00.000Z') },
+      { priceListId: PRICE_LIST, serviceType: 'HIGHWAY', feePaise: 50000, validFrom: new Date('2022-01-01T00:00:00.000Z') },
     ],
   });
 }

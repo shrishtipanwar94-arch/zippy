@@ -15,6 +15,7 @@
 import type { Prisma } from '@prisma/client';
 import type { SettlementPath } from '@prisma/client';
 import { resolveSettlementPath } from '../domain/settlementPath.js';
+import type { CoverageTerms } from '../domain/coverage.js';
 
 // The service type a contract's coverage is looked up by. One derivation, used
 // by both the callout fee and the coverage check.
@@ -27,6 +28,41 @@ export type SettlementQuery = {
   onHighway: boolean | null;
   at: Date;
 };
+
+// THE CAP, read from the contract in force at the SAME INSTANT the settlement
+// path was resolved — the job's creation time. Using `now` instead would let a
+// contract edited mid-job change what a driver was already quoted, which is the
+// rule the pinned price list exists to prevent, applied to cover.
+//
+// `covered: false` and `capPaise: null` are different answers and both are
+// real: the first is "this contract does not cover this service", the second is
+// "it does, without limit".
+export async function coverageTermsFor(
+  tx: Prisma.TransactionClient,
+  query: SettlementQuery,
+): Promise<CoverageTerms> {
+  if (!query.tenantId) return { covered: false, capPaise: null };
+
+  const contract = await tx.contract.findFirst({
+    where: {
+      tenantId: query.tenantId,
+      active: true,
+      startsAt: { lte: query.at },
+      OR: [{ endsAt: null }, { endsAt: { gt: query.at } }],
+    },
+    orderBy: { startsAt: 'desc' },
+    select: {
+      coveredServices: {
+        where: { serviceType: serviceTypeFor(query.onHighway) },
+        select: { covered: true, capPaise: true },
+      },
+    },
+  });
+
+  const service = contract?.coveredServices[0];
+  if (!service?.covered) return { covered: false, capPaise: null };
+  return { covered: true, capPaise: service.capPaise };
+}
 
 export async function settlementPathFor(
   tx: Prisma.TransactionClient,

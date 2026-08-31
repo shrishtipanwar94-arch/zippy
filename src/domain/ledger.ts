@@ -174,26 +174,58 @@ export function settlementBookingFor(
 // A JOB IS COMPLETED. Somebody owes the total; of that, the technician is owed
 // their earnings and the platform has earned its commission. WHO owes it is
 // `settlementBookingFor`'s answer, above.
+// THE DEBIT SIDE SPLITS AT THE CAP.
+//
+// A contract absorbs up to its per-incident limit and no further, so a covered
+// job that runs past the cap has TWO debtors: the contract for what it covers,
+// and the customer for the overage — which they genuinely owe. Booking the
+// whole thing to the contract would be the unbounded absorption the cap exists
+// to prevent; booking the whole thing to the customer is the bug this replaced.
+//
+// The two halves always sum to the total, so the transaction balances whatever
+// the cap is, and the ledger says exactly what the driver's estimate says.
 export function completionLines(input: {
   technicianCode: string;
   settlement: SettlementBooking;
   totalPaise: Paise;
+  coveredPaise: Paise;
   commissionPaise: Paise;
 }): LedgerLine[] {
   const earningsPaise = input.totalPaise - input.commissionPaise;
-  return [
+  const payablePaise = input.totalPaise - input.coveredPaise;
+
+  const lines: LedgerLine[] = [
     { accountCode: input.technicianCode, amountPaise: earningsPaise, memo: 'job earnings' },
     {
       accountCode: PLATFORM_COMMISSION_ACCOUNT,
       amountPaise: input.commissionPaise,
       memo: 'platform commission',
     },
-    {
-      accountCode: input.settlement.accountCode,
-      amountPaise: -input.totalPaise,
-      memo: input.settlement.memo,
-    },
   ];
+
+  // Zero-value lines are omitted rather than written. It keeps a walk-in's
+  // transaction to three entries — and it is what stops a walk-in, whose
+  // settlement account IS the customer receivable, colliding with the payable
+  // line on the (transaction, account) unique index.
+  if (input.coveredPaise > 0) {
+    lines.push({
+      accountCode: input.settlement.accountCode,
+      amountPaise: -input.coveredPaise,
+      memo: input.settlement.memo,
+    });
+  }
+  if (payablePaise > 0) {
+    lines.push({
+      accountCode: CUSTOMER_RECEIVABLE_ACCOUNT,
+      amountPaise: -payablePaise,
+      memo:
+        input.coveredPaise > 0
+          ? 'customer owes the part above the contract cap'
+          : 'customer owes the job total',
+    });
+  }
+
+  return lines;
 }
 
 // THE DRIVER PAID THE TECHNICIAN IN CASH — most of the volume in India, and

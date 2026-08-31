@@ -98,6 +98,7 @@ driverRouter.get(
           id: true,
           status: true,
           totalPaise: true,
+          coveredPaise: true,
           lines: { select: { description: true, amountPaise: true } },
         },
       }),
@@ -201,12 +202,19 @@ function estimateView(
     id: string;
     status: string;
     totalPaise: number;
+    coveredPaise: number;
     lines: { description: string; amountPaise: number }[];
   } | null,
 ): {
   estimateId: string;
   lines: { description: string; amount: string }[];
   total: string;
+  // THE HALF A COVERED CUSTOMER ACTUALLY CARES ABOUT. `covered` is null when
+  // nothing is absorbed, so a walk-in's card stays a single total rather than
+  // growing a "covered ₹0" line that means nothing to them.
+  covered: string | null;
+  payable: string;
+  fullyCovered: boolean;
   awaitingAnswer: boolean;
   // Declining means "finish at the scope I already agreed", so it is only
   // offered when there IS a prior approval. Computed by the caller, which is
@@ -214,6 +222,7 @@ function estimateView(
   mayDecline: boolean;
 } | null {
   if (!estimate) return null;
+  const payablePaise = estimate.totalPaise - estimate.coveredPaise;
   return {
     estimateId: estimate.id,
     lines: estimate.lines.map((line) => ({
@@ -221,6 +230,9 @@ function estimateView(
       amount: formatRupees(line.amountPaise),
     })),
     total: formatRupees(estimate.totalPaise),
+    covered: estimate.coveredPaise > 0 ? formatRupees(-estimate.coveredPaise) : null,
+    payable: formatRupees(payablePaise),
+    fullyCovered: payablePaise === 0,
     awaitingAnswer: estimate.status === 'SENT',
     mayDecline: false,
   };

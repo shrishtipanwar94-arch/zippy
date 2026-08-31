@@ -30,7 +30,7 @@ import {
 import { usesGateway } from '../domain/settlementPath.js';
 import { postTransaction, technicianBalance } from './ledger.js';
 import type { PostResult } from './ledger.js';
-import { approvedTotalFor } from './estimates.js';
+import { approvedEstimateFor } from './estimates.js';
 import { calloutRate } from '../pricing/rateCard.js';
 import { serviceTypeFor } from './settlement.js';
 import { appendJobEvent } from '../intake/events.js';
@@ -63,10 +63,14 @@ export async function recordJobCompletion(
   // WHAT THE CUSTOMER AGREED TO, not what anybody thinks the job was worth.
   // The approved estimate is stage 2's record of consent and is the only
   // number the ledger has any business booking.
-  const totalPaise = await approvedTotalFor(db, job.id);
-  if (totalPaise === null || totalPaise === 0) {
+  const approved = await approvedEstimateFor(db, job.id);
+  if (!approved || approved.totalPaise === 0) {
     return { outcome: 'NOTHING_TO_RECORD', reason: 'nothing was approved on this job' };
   }
+  // THE LEDGER BOOKS THE TOTAL, because that is what the work was worth
+  // however it is settled — the technician is owed and the platform earns on
+  // the whole of it. The COVERED figure decides only who carries the debit.
+  const totalPaise = approved.totalPaise;
 
   const commission = commissionPaise(totalPaise, config.PLATFORM_COMMISSION_BPS);
   const earningsPaise = totalPaise - commission;
@@ -83,6 +87,10 @@ export async function recordJobCompletion(
       technicianCode: technicianAccountCode(job.assignedTechnicianId),
       settlement,
       totalPaise,
+      // Taken from the APPROVED ESTIMATE, not recomputed. The driver was shown
+      // this split and consented to the payable half of it; recomputing here
+      // could disagree with the document they approved.
+      coveredPaise: approved.coveredPaise,
       commissionPaise: commission,
     }),
   });
@@ -114,6 +122,8 @@ export async function recordJobCompletion(
         // Which account carried it, so "who was billed for this job?" is
         // answerable from the incident timeline and not only from the ledger.
         settlementAccount: settlement.accountCode,
+        coveredPaise: approved.coveredPaise,
+        payablePaise: totalPaise - approved.coveredPaise,
       },
     });
   });
