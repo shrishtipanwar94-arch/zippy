@@ -170,6 +170,31 @@ export class FailingStubProvider implements PaymentProvider {
 // THE ONE THE APPLICATION USES. A module-level instance rather than a factory
 // because there is exactly one provider per process and threading it through
 // every call site would be dependency injection for its own sake — which the
-// readability contract rules out. Tests pass their own provider explicitly to
-// the functions that take one.
+// readability contract rules out.
 export const stubProvider = new StubProvider();
+
+// THE SEAM A ROUTE CANNOT REACH ANY OTHER WAY.
+//
+// Functions in src/commit/payments.ts take an optional provider, which is
+// enough for a test that calls them directly. It is NOT enough for the claim
+// invariant 8 actually makes — "the job dispatches even when the provider is
+// down" — because that is a claim about the DISPATCH ROUTE, and the route
+// calls `authoriseCalloutQuietly` with no provider to pass.
+//
+// So the active provider is swappable at the module level, the same shape
+// `realtime/publish.ts` uses for its Socket.IO server. Production never calls
+// the setter; a test installs a FailingStubProvider, drives the real route,
+// and asserts the reservation still committed.
+let active: PaymentProvider = stubProvider;
+
+export function paymentProvider(): PaymentProvider {
+  return active;
+}
+
+export function setPaymentProvider(provider: PaymentProvider): void {
+  active = provider;
+}
+
+export function resetPaymentProvider(): void {
+  active = stubProvider;
+}

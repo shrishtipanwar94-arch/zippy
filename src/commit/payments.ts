@@ -39,12 +39,13 @@ import { serviceTypeFor } from './settlement.js';
 import { approvedTotalFor } from './estimates.js';
 import { appendJobEvent } from '../intake/events.js';
 import { runPublishingTransaction } from '../realtime/transaction.js';
-import { stubProvider } from '../payments/stubProvider.js';
+import { paymentProvider } from '../payments/stubProvider.js';
 import type { PaymentProvider } from '../payments/provider.js';
 
 // Injected so a test can hand in a FailingStubProvider without touching the
 // environment — the same seam candidates.ts uses for travel time. Defaults to
-// the one instance the application runs with.
+// whatever `setPaymentProvider` has installed, which in production is the stub
+// and in an invariant-8 test is a provider that never answers.
 type WithProvider = { provider?: PaymentProvider };
 
 // ---------------------------------------------------------------------------
@@ -64,7 +65,7 @@ export async function authoriseCallout(
   db: PrismaClient,
   input: { jobId: string } & WithProvider,
 ): Promise<AuthoriseOutcome> {
-  const provider = input.provider ?? stubProvider;
+  const provider = input.provider ?? paymentProvider();
 
   const job = await db.job.findUnique({
     where: { id: input.jobId },
@@ -233,7 +234,7 @@ export async function captureOnCompletion(
   db: PrismaClient,
   input: { jobId: string } & WithProvider,
 ): Promise<CaptureOutcome> {
-  const provider = input.provider ?? stubProvider;
+  const provider = input.provider ?? paymentProvider();
 
   const job = await db.job.findUnique({
     where: { id: input.jobId },
@@ -463,7 +464,7 @@ export async function settleCancellation(
     partsConsumedPaise?: number;
   } & WithProvider,
 ): Promise<CancellationSettlement> {
-  const provider = input.provider ?? stubProvider;
+  const provider = input.provider ?? paymentProvider();
 
   const stage = cancellationStageFor(input.statusAtCancellation);
   if (!stage) {

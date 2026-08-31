@@ -2549,3 +2549,245 @@ EMP-03     after     -46800     <- debt carried, nothing sent
 One payout, PENDING, nothing sent — and zero unbalanced transactions in the
 whole ledger after a payout run, which is the property this phase exists to be
 able to prove.
+
+## Phase 15c Stage 6 — Invariant 8, full verification, and close / 2026-09-01 / Commit: "phase 15c: money domain"
+
+The closing stage. It proves the dispatch-never-blocked invariant through the
+REAL route rather than by calling a payment function, fills the two gaps the
+earlier stages left in the spec's test list, and reorganises the money suites so
+the phase brief's own command selects something.
+
+Phase 15c is now complete: sections 1-6 of the brief are built. What is
+deliberately absent is named in Weaknesses.
+
+### Built
+
+- `src/payments/stubProvider.ts` — `setPaymentProvider` / `paymentProvider` /
+  `resetPaymentProvider`, a module-level seam so a test can install a broken
+  provider under a route.
+- `tests/invariant8.test.ts` (7) — the dispatch-never-blocked proof, driven
+  through `POST /technician/offers/:id/respond`.
+- `tests/cancellation.test.ts` (12) — the cancellation policy and its
+  settlement, split out of the payments suite.
+- `tests/money.test.ts` (23) — the former `payments.test.ts`, renamed, plus the
+  missing partial-capture test.
+- Fixture windows made disjoint across every money suite.
+
+Suite: 38 files, 553 tests.
+
+### Decisions
+
+**Decision:** Invariant 8 is proved through the REAL ACCEPT ROUTE, not by
+calling `authoriseCallout` with a failing provider.
+**Why:** This is the whole point of the stage. Stage 3's test showed a payment
+ending up flagged — and showed nothing about dispatch, because nothing
+dispatched. The invariant is a claim about the DISPATCH PATH: that a
+reservation still commits with the gateway on fire. The only way to prove that
+is to build a real saga, hand a technician a real offer, and have them accept
+it through the endpoint their phone actually calls, with the provider broken.
+**Alternative:** Assert that `authoriseCalloutQuietly` swallows errors.
+**Why not:** That proves the wrapper works, not that the wrapper is what the
+dispatch path uses, and not that the commit happens before it. The route test
+proves all three at once.
+
+**Decision:** A module-level provider seam, rather than threading a provider
+through the route.
+**Why:** The route calls `authoriseCalloutQuietly` and has nothing to pass —
+adding a provider parameter to a route handler so a test can reach it is test
+infrastructure leaking into production signatures. `realtime/publish.ts`
+already uses exactly this shape for its Socket.IO server.
+**Tradeoff:** Module-level mutable state. Contained by `resetPaymentProvider`
+in `afterEach` AND `afterAll`, so a broken provider can never leak into another
+suite.
+
+**Decision:** The invariant is tested against a provider that THROWS as well as
+one that returns a failure.
+**Why:** A returned failure is the designed path. An exception is the
+undesigned one — a gateway process dying mid-request, a JSON parse blowing up,
+an SDK bug — and a dispatch that survives only the failures somebody
+anticipated is not an invariant, it is a happy path with extra steps.
+
+**Decision:** Cancellation split into its own test file.
+**Why:** Two reasons, and the second is the honest one. It is genuinely its own
+concept — the policy is the rule a CUSTOMER argues with and should be findable
+without reading a file about payment gateways. And it makes the brief's own
+command, `npm run test:fast -- money ledger cancellation`, select something:
+before this stage that command matched only `ledger.test.ts`, because no file
+was named money or cancellation.
+**Tradeoff:** `money.test.ts` is a vaguer name than `payments.test.ts`. The
+brief chose the vocabulary and the file does cover settlement, the provider and
+capture, which is the money domain more than it is payments.
+
+**Decision:** Fixtures pin their price list EXPLICITLY rather than relying on
+date resolution.
+**Why:** See What broke. Intake resolves whichever public list is in force at a
+job's creation instant, so two suites whose list windows overlap each pin the
+other's list — and the next fixture to rebuild nulls a job it did not create.
+Suites that are not ABOUT list resolution should not depend on it.
+**Tradeoff:** One extra update per fixture job. `pricing.test.ts` still
+exercises the real resolution, because that is what it is for.
+
+### Concurrency
+
+**Nothing new.** This stage adds one module-level variable and no new write
+path. The provider seam is process-local and reset after every test, and the
+suites that use it do not run concurrently with themselves.
+
+The invariant-8 test does exercise a real concurrency-sensitive path — the
+saga's commit — but only to observe it, and the guarantees there are Phase 12's
+and unchanged.
+
+### Weaknesses introduced
+
+1. **`setPaymentProvider` is global mutable state.** Reset in `afterEach` and
+   `afterAll`, and vitest runs files in separate workers, so a leak between
+   suites is not possible today. It would become possible the moment two tests
+   in ONE file ran concurrently.
+2. **The invariant-8 suite builds a saga by calling `startSaga` directly**
+   rather than going through the dispatcher's action queue. That is one layer
+   short of a truly end-to-end dispatch, and it is the layer Phase 13 already
+   tests.
+3. **`money.test.ts` is a weaker name than the file deserves.** It covers
+   settlement resolution, the provider contract and capture; a reader looking
+   for "how does capture work" would not guess it.
+4. **Every money fixture now depends on owning a disjoint YEAR.** That is
+   documented in two files and enforced by nothing. A sixth suite picking 2020
+   would reintroduce the collision silently.
+
+### What remains unbuilt in Phase 15c
+
+Named here rather than left to be discovered:
+
+- **Contract coverage is resolved but never applied to an estimate.** A
+  CONTRACT_CONSUMER job takes the no-gateway path correctly, but the driver
+  still sees the full cost with no "covered / payable" split — so a covered
+  customer sees a number they will not pay. The single largest gap.
+- **No cash-collection surface.** `recordCashCollection` is complete and
+  tested; nothing on the technician's page calls it.
+- **No remittance**, so `cash-in-transit` has no writer and a technician in
+  cash debt can only clear it by earning.
+- **No `ContractBilling` rows.** FLEET_TENANT jobs are "invoiced monthly" only
+  in the sense that no gateway is called.
+- **A capture failure has no retry sweep**, unlike a failed authorisation.
+- **A cancellation and a completion are not serialised** against each other on
+  one payment.
+- **`partsConsumedPaise` is a parameter nobody supplies**, so an on-scene
+  cancellation charges the callout fee alone.
+- **No money surface for a dispatcher** — no batch view, no flagged-payments
+  list, no estimate on the console.
+- **GST, TCS, technician KYC, disputes and chargebacks**, as the brief's own
+  deliberate headroom.
+
+### Concepts now genuinely in use
+
+- A seam that exists so an INVARIANT can be tested at the layer it is claimed
+  at, rather than at the layer that is convenient to reach.
+- Testing a resilience property against an undesigned failure (a throw) and not
+  only the designed one (a returned error).
+- Test-fixture isolation by TIME as well as by id, once a lookup resolves by
+  date.
+
+### Interview angle
+
+"You say payment never blocks dispatch. How do you know?" A test installs a
+provider that never answers, then accepts a real technician offer through the
+real route, and asserts the saga committed and the job is COMMITTED with a
+technician assigned. A second one uses a provider that THROWS, because
+surviving only the failures you anticipated is not resilience. The payment ends
+up PENDING_AUTHORISATION, the flag reaches the dispatcher's incident timeline,
+and a sweep recovers it — with the same derived idempotency key, so the retry
+cannot place a second hold.
+
+### What broke
+
+- **A cross-file fixture collision that only appeared in one command.** The new
+  partial-capture test passed alone and failed under
+  `test:fast -- money ledger cancellation`. The cause was a variant of the
+  CLAUDE.md shared-fixture gotcha this project had not hit before: not two
+  fixtures colliding on a unique KEY, but two fixtures colliding on a
+  RESOLVED-BY-DATE lookup. Intake pins whichever public price list is in force
+  at a job's creation instant, and three money suites had all chosen a
+  2020-2021 window — so a `money.test.ts` job could pin `inv8-list`, and
+  `invariant8.test.ts`'s fixture would later null it. The highway callout then
+  had no price and the capture could not run.
+  Fixed twice over: every money suite now owns a disjoint year (cancellation
+  2018, money 2020, ledger 2021, pricing 2030-31, estimates 2032), AND the
+  suites that are not about resolution pin their list explicitly so they no
+  longer care what else is in the database.
+
+- **The fix appeared to work for the wrong reason, briefly.** After making the
+  windows disjoint the filtered command still failed, then passed once the full
+  suite had run. The reason is worth recording: the stale `inv8-list` row still
+  held its OLD 2020 window, and only running `invariant8.test.ts` rebuilds it —
+  which the filtered command does not do. A test that passes only after some
+  other command has run is not passing. That is what prompted the explicit
+  pinning, which removes the ordering dependency entirely.
+
+- **A documented behaviour with no test behind it.** Stage 3's log claimed
+  "partial capture — remainder voided in captureAgainstPayment", and the code
+  did implement it — but no test exercised it, because the ordinary flows never
+  produce a capture smaller than the hold (an estimate always includes the
+  callout fee the hold was for). It is now driven directly: a ₹500 highway hold
+  against a ₹400 approved total, asserting one capture of ₹400 and that the
+  PROVIDER shows the hold voided. A line in a log is not a test.
+
+### The phase check, performed
+
+```
+$ npm run test:fast -- money ledger cancellation
+
+ RUN  v4.1.11 C:/dev/zippy
+
+ Test Files  3 passed (3)
+      Tests  64 passed (64)
+   Duration  2.24s
+```
+
+The run prints several `prisma:error` lines to stdout. They are not failures:
+they are Postgres refusing exactly what those tests assert it must refuse —
+
+```
+ledger transaction ldg-...-raw-unbalanced does not balance: entries sum to 500 paise
+append-only table ledger_entries: UPDATE is not permitted
+append-only table ledger_entries: DELETE is not permitted
+Unique constraint failed on the fields: (`transaction_id`,`account_id`)
+```
+
+Full suite: **38 files, 553 tests, green**, run twice.
+
+Every item on the brief's test list, mapped to a real test:
+
+```
+ledger balances after every operation             PASS  (17 tests)
+three settlement paths resolve from contract      PASS  (15)
+capture > authorisation -> second authorisation   PASS   (1)
+partial capture -> remainder voided               PASS   (1)   <- added this stage
+cancel at each of the four stages                 PASS   (7)
+cash collection -> negative -> payout nets        PASS   (8)
+provider unreachable -> dispatches, PENDING       PASS   (4)   <- route-level this stage
+operator sees it flagged                          PASS   (3)   <- added this stage
+retry worker attempts it later                    PASS   (3)
+double capture, same key -> captured once         PASS   (3)
+revised estimate over tolerance -> pause          PASS   (3)
+price list expiring mid-job                       PASS   (1)
+GOLD fleet never calls the provider               PASS   (2)
+```
+
+And the brief's four ✅ criteria:
+
+- **The balance assertion runs after every money test and never fails.**
+  `expectBalanced` follows every money operation in `ledger.test.ts` and
+  `payouts.test.ts`, asserting both the transaction under test and every
+  transaction in the database.
+- **Cash collection drives a technician balance negative; the payout nets it.**
+  −₹468 after taking ₹2,340 in hand on ₹1,872 of earnings; `payoutDecision`
+  returns CARRY_DEBT; the next job's earnings net it and only the remainder is
+  paid.
+- **Kill the stub provider mid-dispatch → the job still dispatches, payment
+  PENDING_AUTHORISATION, operator sees the flag.** Proved through the real
+  accept route, against a provider that returns failures and against one that
+  throws.
+- **A GOLD fleet job never calls the provider at all.** Asserted on a recording
+  provider — `provider.calls` is empty — rather than on the absence of our own
+  rows, which would pass even if we had called a gateway and discarded the
+  answer.
