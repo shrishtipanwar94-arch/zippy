@@ -1210,3 +1210,242 @@ action_requests    REASSIGN_AFTER_TRIGGER | RECOMMEND
 
 One sentence raised two proposals for two different people, which is the
 routing rule working rather than noise. Neither page logs a console error.
+
+## Phase 15c Stage 1 — Pricing / 2026-08-31 / PARTIAL
+
+Stage 1 of Phase 15c only: the price book, and the rule that a job prices
+against the list in force at creation. Estimates and approval (section 2),
+payment and the three settlement paths (3), the ledger (4), payouts (5) and
+the not-on-the-critical-path guarantee (6) are the later stages and none of
+them is started.
+
+### Built
+
+No migration. `price_lists`, `part_prices`, `labour_rates`, `tow_tariffs` and
+`callout_fees` were created in Phase 1 and seeded in `prisma/seed/pricing.ts`;
+`jobs.price_list_id` existed and was never written. This stage is what writes
+it.
+
+- `src/domain/money.ts` — `Paise`, `roundToPaise`, `sumPaise`, `formatRupees`.
+  The one place rounding happens and the one place paise become words.
+- `src/domain/pricing.ts` — pure. `priceParts`, `priceLabour`, `priceTow`,
+  `priceCallout`, `totalOf`, returning `PricedLine` with the quantity and unit
+  price still on it.
+- `src/pricing/priceList.ts` — `priceListInForce(tx, { tenantId, at })`.
+- `src/pricing/rateCard.ts` — `partRate`, `labourRate`, `towRate`,
+  `calloutRate`, each taking `{ priceListId, …, at }`.
+- `src/intake/createJob.ts` — `resolvePriceListId`, the pin on the job row, the
+  id on the `JOB_CREATED` payload, and `priceListId` on `IntakeResult`.
+- `src/api/driver.ts` — its private `rupees()` deleted in favour of
+  `formatRupees`, so the driver's screen and an invoice cannot format money
+  differently.
+- `tests/pricing.test.ts` (24). Suite: 32 files, 444 tests.
+
+### Decisions
+
+**Decision:** Money is integer paise everywhere, and `roundToPaise` is the only
+place a fraction becomes an integer.
+**Why:** The ledger's central invariant at stage 4 is that every transaction
+sums to exactly zero, and that cannot be built on a type which cannot
+represent a tenth. The schema has said `Int` since Phase 1; what was missing
+was a named home for the rule and a single rounding point. Only two operations
+in the whole domain can produce a fraction — hours times an hourly rate, and
+kilometres times a per-km tariff — and both go through one function.
+**Alternative:** A decimal library.
+**Why not:** A dependency to express what an integer already expresses, on a
+currency whose smallest unit is the one being counted.
+**Tradeoff:** Every read site must remember to divide by 100. One formatter
+means one place that does.
+
+**Decision:** Half-up rounding, not banker's.
+**Why:** Half-to-even is the usual accounting answer because it does not bias a
+large population of roundings upward. Every amount this project rounds is a
+single line on a single invoice a human reads, and "we rounded your half paise
+down because the preceding digit was even" is not an explanation anybody wants.
+**Tradeoff:** A bias of at most half a paise per line. Stated in the file.
+
+**Decision:** The price list is resolved once, at job creation, and pinned to
+`jobs.price_list_id`.
+**Why:** The customer agreed to one set of numbers at one moment. A job that
+re-resolves "the current list" at estimate time or capture time gets a
+different answer on a different day, and its final invoice does not match what
+anybody was told. Same rule as contract terms at Phase 20, same reason.
+**Alternative:** Resolve the current list whenever a number is needed.
+**Why not:** It makes "a price list expiring mid-job" a live bug rather than a
+non-event, and there is no way to test the guarantee because there is no
+guarantee.
+**Tradeoff:** A job created against a list that later turns out to be wrong
+keeps the wrong prices until somebody re-pins it deliberately. That is the
+correct direction — a deliberate act with an audit trail beats a silent drift.
+
+**Decision:** The instant travels DOWN past the list, to the rate rows.
+**Why:** Every row inside a list is versioned too. Pinning the list but then
+reading today's rates inside it would re-price the job through the back door,
+and it would look correct. So every `rateCard` function takes `at`, and callers
+pass the job's `createdAt`.
+**Tradeoff:** Four lookups that all need a date threaded through them. A test
+asserts the same list gives two different answers for two instants, which is
+what makes the threading load-bearing rather than decorative.
+
+**Decision:** A tenant's own list beats the public one; a tenant never sees
+another tenant's.
+**Why:** It is the only thing a nullable `tenant_id` on a price list could
+sensibly mean — null is the public list everyone gets, a row with a tenant is
+that fleet's negotiated rates.
+**Tradeoff:** Two rows in force at once for a tenant, resolved by ordering
+rather than by a constraint. A tenant with two overlapping lists of their own
+is a data error the tie-break papers over (most recent `validFrom` wins).
+
+**Decision:** No list in force does not fail intake. The column stays null, and
+it is logged.
+**Why:** Section 6 of this phase is emphatic — payment is never on the dispatch
+critical path. A stranded driver does not wait for a catalogue somebody forgot
+to activate. It is a degraded state, so it is visible (invariant 8) rather than
+swallowed.
+**Tradeoff:** Stage 2's estimate builder must handle a job it cannot price.
+Better there, once, than a failed intake at the roadside.
+
+**Decision:** A missing rate returns null rather than throwing.
+**Why:** "This list does not price that" is a real and ordinary answer — a
+catalogue with a gap in it. A throw would make it indistinguishable from a
+system failure, and the caller that has to decide what to do about an
+unpriceable line is the estimate builder, not the lookup.
+
+**Decision:** Pricing arithmetic is pure and takes a rate, not a Prisma row.
+**Why:** It makes "what would this have cost on last year's list?" answerable,
+and it keeps WHICH prices apply (a question about time and contracts, answered
+once) separate from WHAT THEY COME TO (arithmetic). The two are easy to
+confuse and expensive to entangle.
+
+**Decision:** The tow minimum charge lives in `priceTow`, not at the call site.
+**Why:** It is the one rule here that is not a multiplication, and a
+two-hundred-metre tow still costs a truck and a driver an hour of their day.
+One definition means a short tow cannot be quoted at a price nobody would
+accept the job for. The line also says "(minimum charge)" so the driver can see
+why the number is not distance times rate.
+
+### Concurrency
+
+**This stage introduces no new race, and saying so is more useful than
+inventing one.** The pin is written inside the intake transaction that already
+exists (`runIntakeTransaction`, with its retry and its outbox), so the list
+that was read and the list that was pinned are the same read. Every other
+function here is a pure read or pure arithmetic.
+
+**The one race that is real is not this stage's to fix.** Two price lists
+genuinely in force for the same audience is a data error, and nothing prevents
+it — no exclusion constraint on overlapping windows. The resolver tie-breaks on
+the most recent `validFrom`, which is defensible and deterministic, and a job
+pinned during the overlap keeps whichever it got. A `tstzrange` exclusion
+constraint is the real answer and is not written.
+
+### Weaknesses introduced
+
+1. **Every job created before this stage has `price_list_id` null.** There is
+   no backfill. They are historical and mostly resolved, but the money domain
+   will meet them, and "the column is null" and "no list was in force" are
+   indistinguishable in the data — only the log line separates them.
+2. **Nothing consumes the pricing functions yet.** `priceParts`,
+   `priceLabour`, `priceTow`, `priceCallout` and the whole rate card are
+   exercised only by tests until stage 2 builds the estimate. That is the
+   honest shape of a staged build, but it means the arithmetic is proved and
+   the integration is not.
+3. **No overlap constraint on price list windows.** See Concurrency.
+4. **No API reads the price book.** A dispatcher cannot see what a job will be
+   priced at, and there is no way to inspect a list without psql.
+5. **Currency is a column nobody reads.** Every list is INR and every function
+   assumes it. Multi-currency would need the amount and the currency to travel
+   together everywhere, which is a bigger change than adding a field.
+6. **The `nulls: 'last'` precedence is untested against Postgres directly** —
+   it is asserted through `priceListInForce`, which is the right level, but the
+   behaviour it depends on is a database ordering default that a future Prisma
+   or Postgres version could plausibly change. It is now written explicitly
+   rather than relied on, which is the mitigation.
+7. **GST, TCS, technician KYC, disputes and chargebacks are absent**, named
+   here as the brief requires: deliberate headroom, not oversight. Indian
+   roadside invoices carry GST and a marketplace withholds TCS; both are real
+   and both are out of scope for this build.
+
+### Concepts now genuinely in use
+
+- Integer minor units as the only money representation, with one rounding site.
+- Temporal versioning at two levels — a list has a window, and so does every
+  rate inside it — with the same instant applied to both.
+- Pinning a resolved decision on the row rather than re-deriving it, so a
+  guarantee about the past survives a change to the present.
+- Precedence by nullable tenancy: a specific row beating a general one.
+
+### Interview angle
+
+"Prices change. What stops a job's invoice changing with them?" The list is
+resolved once at creation and its id is pinned to the job, and the job's
+creation instant is passed down to the individual rate lookups too — because a
+list is versioned and so is every row inside it, so pinning only the list
+re-prices the job through the back door.
+
+"Why integer paise?" Because the ledger has to sum to exactly zero and IEEE 754
+cannot represent a tenth. The interesting half is that only two operations can
+produce a fraction — hours by an hourly rate, kilometres by a per-km tariff —
+so there is exactly one place that rounds, and the rounding rule is a stated
+choice rather than whatever the first expression happened to do.
+
+### What broke
+
+- **The tenant-precedence ordering was backwards, and a test caught it.**
+  `orderBy: { tenantId: 'desc' }` was written on the belief that Postgres sorts
+  NULLs last on DESC. It does the opposite — NULL is treated as the largest
+  value, so DESC puts it FIRST — which meant a fleet with negotiated rates
+  silently got the public list. Now `{ sort: 'desc', nulls: 'last' }`, stated
+  explicitly rather than relying on a default nobody remembers correctly. This
+  is the one bug in this stage that would have been expensive: it is silent,
+  it is a money error, and it favours the platform over the customer.
+
+- **A broken `where` clause with two `OR` keys.** "Open-ended or not ended yet"
+  and "ours or public" are two different questions and an object holds one
+  `OR`; the first draft had them colliding, with an `OR2: undefined` left in
+  from working it out. Both now sit inside `AND`. Caught by the typechecker,
+  which is the cheap place to catch it.
+
+- **The fixture upserted rows it owned and stranded them.** Renaming the price
+  list ids mid-edit left every rate row still pointing at the old list, because
+  the `upsert`'s `update` named only `ratePerHourPaise` — the field that had
+  not changed. Every rate lookup then answered null. This is the CLAUDE.md
+  gotcha from a new angle: an upsert that means "these are the rows" must
+  delete and rebuild, not add to whatever is there. `buildFixture` now nulls
+  the jobs' foreign keys, deletes every price list with this file's prefix, and
+  creates fresh.
+
+- **The seeded catalogue competed with the fixture.** "Standard 2026" is public
+  and open-ended, so it is in force at every instant from 2026 onward and was a
+  candidate for every assertion here. Rather than delete or edit a row this
+  file does not own, the fixture's lists are dated 2030-2031, so they win on
+  `validFrom` deterministically. Two assertions were also rewritten to claims
+  that survive a shared database: deactivating a tenant list now asserts the
+  FALLBACK to public rather than null, which is both testable and the more
+  useful claim about what a fleet with lapsed rates should get.
+
+### The stage check, performed
+
+`npm run test:fast` — 32 files, 444 tests, green; run twice, so the fixture is
+re-runnable against a shared database rather than passing once on a clean one.
+
+End to end against the seeded catalogue, through the real intake route:
+
+```
+POST /jobs/intake   ->  priceListId "pricelist-standard-2026"
+
+SELECT price_list_id, created_at FROM jobs WHERE id = '<new job>';
+ pricelist-standard-2026 | 2026-08-31 17:25:05.462
+
+SELECT payload FROM job_events WHERE event_type = 'JOB_CREATED';
+ {"zoneId": "zone-kor", "priceListId": "pricelist-standard-2026"}
+```
+
+The pinned list is on the column and on the audit trail, so "it was decided at
+creation" is a record rather than only a value somebody could have written
+later.
+
+And the brief's own test, from `tests/pricing.test.ts`: a list is ended while a
+job is still running, a successor takes over, and the job's pinned id plus its
+creation instant still resolve to exactly the rate it was quoted — because
+neither reads the clock.

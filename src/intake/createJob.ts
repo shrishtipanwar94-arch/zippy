@@ -22,6 +22,8 @@ import type { SafetyReport } from '../domain/safety.js';
 import { locationColumns } from '../domain/location.js';
 import type { LocationInput } from '../domain/location.js';
 import { nearestZone } from '../domain/geo.js';
+import { priceListInForce } from '../pricing/priceList.js';
+import { logger } from '../infra/logger.js';
 import { appendJobEvent } from './events.js';
 import { recordHypothesis } from './hypothesis.js';
 import { runIntakeTransaction } from './transaction.js';
@@ -53,6 +55,9 @@ export type IntakeRequest = {
 export type IntakeResult = {
   jobId: string;
   zoneId: string;
+  // The prices this job will settle at, whatever happens to the catalogue
+  // afterwards. Null when no list was in force — see resolvePriceListId.
+  priceListId: string | null;
   safetyLevel: SafetyLevel;
   safetyReasonCodes: string[];
   entropyBits: number;
@@ -68,6 +73,38 @@ async function resolveZoneId(tx: Prisma.TransactionClient, lat: number, lng: num
     throw new IntakeError('NO_ZONE_CONFIGURED', 'no zones are configured; run the seed');
   }
   return zone.id;
+}
+
+// THE PRICES THIS JOB WILL SETTLE AT, decided here and never again.
+//
+// A job prices against the list in force AT CREATION and is never re-priced,
+// because the customer agreed to one set of numbers (src/pricing/priceList.ts
+// has the full argument). Pinning the id on the row is what makes that true
+// rather than aspirational: every later question reads this column instead of
+// asking the clock.
+//
+// A MISSING LIST DOES NOT FAIL INTAKE. If no list is in force — one lapsed and
+// its successor was never activated — the column stays null and the job is
+// created anyway. This is the same rule the money domain applies throughout:
+// payment is never on the dispatch critical path, and a stranded driver does
+// not wait for a catalogue. It is a degraded state, so it is logged rather
+// than swallowed (invariant 8), and the estimate builder has to handle a job
+// it cannot price.
+async function resolvePriceListId(
+  tx: Prisma.TransactionClient,
+  request: IntakeRequest,
+): Promise<string | null> {
+  const priceListId = await priceListInForce(tx, {
+    tenantId: request.tenantId,
+    at: request.at,
+  });
+  if (!priceListId) {
+    logger.warn(
+      { tenantId: request.tenantId, at: request.at },
+      'no price list in force at job creation; this job will have no pinned prices',
+    );
+  }
+  return priceListId;
 }
 
 export async function createIntakeJob(db: PrismaClient, request: IntakeRequest): Promise<IntakeResult> {
@@ -86,6 +123,7 @@ export async function createIntakeJob(db: PrismaClient, request: IntakeRequest):
 
   return runIntakeTransaction(db, async (tx) => {
     const zoneId = await resolveZoneId(tx, columns.lat, columns.lng);
+    const priceListId = await resolvePriceListId(tx, request);
 
     const job = await tx.job.create({
       data: {
@@ -93,6 +131,7 @@ export async function createIntakeJob(db: PrismaClient, request: IntakeRequest):
         driverId: request.driverId,
         vehicleId: request.vehicleId,
         zoneId,
+        priceListId,
         status: 'INTAKE',
         safetyLevel: triage.level,
         createdAt: request.at,
@@ -129,7 +168,14 @@ export async function createIntakeJob(db: PrismaClient, request: IntakeRequest):
     const actorId = request.actor?.id ?? null;
     const common = { jobId: job.id, actorRole, actorId, at: request.at };
 
-    await appendJobEvent(tx, { ...common, eventType: 'JOB_CREATED', payload: { zoneId } });
+    await appendJobEvent(tx, {
+      ...common,
+      eventType: 'JOB_CREATED',
+      // The pinned price list is on the event as well as the column: the
+      // column is what the job settles at, this is the record that it was
+      // decided at creation and by whom.
+      payload: { zoneId, priceListId },
+    });
     await appendJobEvent(tx, {
       ...common,
       eventType: 'SYMPTOMS_CAPTURED',
@@ -183,6 +229,7 @@ export async function createIntakeJob(db: PrismaClient, request: IntakeRequest):
     return {
       jobId: job.id,
       zoneId,
+      priceListId,
       safetyLevel: triage.level,
       safetyReasonCodes: triage.reasonCodes,
       entropyBits: hypothesis.entropy,

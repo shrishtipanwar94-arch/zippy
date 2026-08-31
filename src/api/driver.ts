@@ -31,6 +31,10 @@ import {
 } from '../domain/driverNarrative.js';
 import { driverUpdatesFor } from '../domain/driverUpdates.js';
 import { guidanceFor } from '../domain/safetyGuidance.js';
+// Money is integer paise everywhere; src/domain/money.ts is the one place it
+// becomes words, so the driver's screen and an invoice cannot format it
+// differently.
+import { formatRupees } from '../domain/money.js';
 import { contendingFaults } from '../domain/capabilitySet.js';
 import { isFaultCode } from '../domain/faults.js';
 import type { FaultCode, FaultDistribution } from '../domain/faults.js';
@@ -191,9 +195,9 @@ function estimateView(
   return {
     lines: estimate.lines.map((line) => ({
       description: line.description,
-      amount: rupees(line.amountPaise),
+      amount: formatRupees(line.amountPaise),
     })),
-    total: rupees(estimate.totalPaise),
+    total: formatRupees(estimate.totalPaise),
   };
 }
 
@@ -209,8 +213,3 @@ function completionCodeView(
   };
 }
 
-// Money is integer paise everywhere in this codebase. This is the only place a
-// driver sees it, so it is the only place it becomes rupees.
-function rupees(paise: number): string {
-  return `₹${(paise / 100).toLocaleString('en-IN', { maximumFractionDigits: 2 })}`;
-}
