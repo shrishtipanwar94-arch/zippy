@@ -77,6 +77,34 @@ const state = {
   nextQuestion: null, // { code, prompt, answers } | null
   intakeDone: null, // stop reason string | null
 
+  // THE DRIVER'S REQUEST FLOW — symptoms, then safety, then location. Held
+  // here rather than read out of the form at submit time, so a re-render
+  // triggered by an unrelated socket event cannot lose what has been answered.
+  request: {
+    step: 'symptoms', // symptoms | safety | location | sent
+    vehicleId: '',
+    complaint: null,
+    safety: {},
+    location: { lat: null, lng: null, roadPosition: null, landmark: '' },
+    locating: false,
+  },
+
+  // WHAT THE DRIVER SEES, AS THE SERVER WORDED IT. The whole panel is one
+  // server response (GET /jobs/:id/driver-view) rather than a status the
+  // browser translates, which is what makes "no enum ever reaches a driver" a
+  // property the test suite can check instead of a habit.
+  driverView: null,
+
+  // The technician's board: open offers and the job in hand.
+  work: { offers: [], jobs: [] },
+  // Re-read every second so an offer countdown ticks. The countdown is derived
+  // from `expiresAt` and this, never decremented — a decremented counter
+  // drifts whenever the tab is backgrounded.
+  now: Date.now(),
+  // What the offline queue is holding, mirrored into state so panels render it
+  // like everything else.
+  outbox: { pending: [], results: [], online: true },
+
   error: null,
 };
 
@@ -229,6 +257,42 @@ export function setInspectorDecision(decision) {
 
 export function setActiveJob(jobId) {
   state.activeJobId = jobId;
+}
+
+export function setRequestField(patch) {
+  state.request = { ...state.request, ...patch };
+}
+
+export function setDriverView(view) {
+  state.driverView = view;
+}
+
+export function setWork(work) {
+  state.work = work;
+}
+
+export function tickClock() {
+  state.now = Date.now();
+}
+
+export function setOutbox(outbox) {
+  state.outbox = outbox;
+}
+
+// A PAGE ASKING TO BE TOLD. The socket writes state and calls render(), which
+// is enough when everything a panel needs is already in state. The driver's
+// panel is not: its sentences live on the server, so an event means "re-read
+// the driver view", which is a fetch rather than a state write. Rather than
+// let a render function quietly do I/O, a page registers here and the socket
+// calls it after applying an event.
+const jobEventListeners = [];
+
+export function onJobEvent(listener) {
+  jobEventListeners.push(listener);
+}
+
+export function notifyJobEvent(jobId) {
+  for (const listener of jobEventListeners) listener(jobId);
 }
 
 export function setNextQuestion(next) {

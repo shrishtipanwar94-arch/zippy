@@ -131,3 +131,117 @@ body.console {
 .chosen-row {
   border-left: 3px solid var(--ok);
 }
+
+/* ---------------------------------------------------------------------------
+ * PHASE 15 — the two field surfaces.
+ *
+ * Same tokens, opposite briefs. The dispatcher's console is dense because an
+ * operator is reading many jobs at once; these two are the reverse. A driver is
+ * stressed and reading one sentence, a technician is one-handed in daylight
+ * holding a cracked phone, and both want large type, generous targets and one
+ * obvious thing to press.
+ *
+ * Both share the console's dark ground. That is a deliberate choice for a
+ * product used at night on a roadside — a white screen at 2am destroys the
+ * night vision of the person who has to watch traffic.
+ */
+
+body.driver,
+body.technician {
+  background: var(--surface);
+  color: var(--text);
+  font-size: 1rem;
+  max-width: 34rem;
+  margin: 0 auto;
+}
+
+.driver .card,
+.technician .card,
+.driver .form-control,
+.technician .form-control,
+.driver .form-select,
+.technician .form-select {
+  background: var(--surface-alt);
+  color: var(--text);
+  border-color: var(--border);
+}
+
+.driver .text-muted,
+.technician .text-muted {
+  color: var(--text-muted) !important;
+}
+
+.driver .list-group-item,
+.technician .list-group-item {
+  background: var(--surface-alt);
+  color: var(--text);
+  border-color: var(--border);
+}
+
+/* Tap targets. 3rem is the smallest a gloved thumb finds reliably, and every
+ * primary action on both surfaces clears it. */
+.driver .btn-lg,
+.technician .btn-lg {
+  min-height: 3rem;
+  font-size: 1.0625rem;
+}
+
+/* A checkbox row that is a whole tappable card rather than a 1rem square —
+ * the safety questions are answered at the roadside, not at a desk. */
+.driver .card-check {
+  background: var(--surface-alt);
+  border: 1px solid var(--border);
+  border-radius: 0.5rem;
+  padding: 0.75rem 0.75rem 0.75rem 2.25rem;
+}
+
+/* THE DRIVER'S HEADLINE. The largest thing on the screen, because the two
+ * facts that reduce anxiety most are who is coming and when (docs/UI.md). */
+.driver .status-card {
+  border-left: 4px solid var(--accent);
+}
+
+.driver .arrival {
+  font-size: 1.25rem;
+  color: var(--accent);
+}
+
+/* The while-you-wait card is green-bordered rather than red: it is guidance,
+ * not an alarm, and red is reserved for HIGH_RISK and failures. */
+.driver .guidance-card {
+  border-left: 4px solid var(--ok);
+}
+
+.driver .code-card {
+  border: 1px solid var(--accent);
+}
+
+.driver .code-card .display-6 {
+  font-family: var(--mono);
+  letter-spacing: 0.15em;
+  color: var(--accent);
+}
+
+/* THE TECHNICIAN'S COUNTDOWN. Amber while there is time, red under fifteen
+ * seconds — and always paired with the words "seconds left", because colour is
+ * never the only signal. */
+.technician .countdown {
+  font-size: 1.125rem;
+  color: var(--accent);
+}
+
+.technician .offer-card {
+  border-left: 4px solid var(--accent);
+}
+
+.technician .offer-urgent {
+  border-left-color: var(--danger);
+}
+
+.technician .offer-urgent .countdown {
+  color: var(--danger);
+}
+
+.technician .job-card {
+  border-left: 4px solid var(--ok);
+}

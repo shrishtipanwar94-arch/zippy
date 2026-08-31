@@ -79,3 +79,41 @@ export function nextQuestion(jobId) {
 export function answerQuestion(jobId, questionCode, answer) {
   return request('POST', `/jobs/${jobId}/answers`, { questionCode, answer });
 }
+
+// --- the driver's live page ------------------------------------------------
+
+// One request for the whole panel, already in English. See src/api/driver.ts
+// for why the translation is the server's job and not this file's.
+export function getDriverView(jobId) {
+  return request('GET', `/jobs/${jobId}/driver-view`);
+}
+
+// --- the technician's field surface ----------------------------------------
+
+export function getTechnicianWork() {
+  return request('GET', '/technician/work');
+}
+
+export function respondToOffer(offerId, decision) {
+  return request('POST', `/technician/offers/${offerId}/respond`, { decision });
+}
+
+// One rung of the status ladder. Called ONLY by the offline queue's drain —
+// never straight from a button — so every action takes the same path whether
+// the phone has signal or not.
+export function sendTechnicianAction(action) {
+  return request('POST', `/jobs/${action.jobId}/actions`, {
+    idempotencyKey: action.idempotencyKey,
+    step: action.step,
+    clientSequence: action.clientSequence,
+    eventTime: action.eventTime,
+    ...(action.completionCode ? { completionCode: action.completionCode } : {}),
+  });
+}
+
+export function submitDiagnosis(jobId, primaryComplaint, note) {
+  return request('POST', `/jobs/${jobId}/diagnosis`, {
+    symptoms: { primaryComplaint },
+    ...(note ? { note } : {}),
+  });
+}

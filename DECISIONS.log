@@ -534,3 +534,340 @@ Carried forward from Stages 1-3 and explicitly not fixed in this phase:
   the check specifies. But "scroll holds, no flicker" is a claim about pixels,
   and no browser has run this page. The code is written for it and the
   discipline is now guarded by tests; whether it actually holds is unverified.
+
+## Phase 15 — Driver and technician surfaces / 2026-08-31 / (pending)
+
+### Built
+
+**Domain — pure, no I/O**
+- `src/domain/jobLadder.ts` — the five-rung technician ladder (EN_ROUTE,
+  ARRIVED, DIAGNOSING, WORKING, COMPLETE), each mapped to a JobStatus and given
+  a RANK. `ladderMove(current, step)` returns ADVANCE (with the list of
+  statuses it may advance from), ALREADY_PAST, or OFF_LADDER. `nextStepFor`.
+- `src/domain/driverNarrative.ts` — THE TRANSLATION MAP. `headlineFor` covers
+  every JobStatus plus the two facts that are not statuses (`replanning`,
+  `intakeComplete`); `whatWeThinkItIs` turns the contending faults into the
+  brief's own sentence; `labelForFault`, `labelForUnit`, `formatIstClock`.
+- `src/domain/driverUpdates.ts` — job event type -> plain sentence, as a
+  WHITELIST. An unworded event produces nothing.
+- `src/domain/safetyGuidance.ts` — `guidanceFor(level)`. One parameter.
+- `src/domain/answerLabels.ts` — intake answer code -> the words on the button.
+
+**Commit**
+- `src/commit/technicianActions.ts` — `applyTechnicianAction`. The record
+  (unique `(job_id, idempotency_key)`) and the guard (conditional UPDATE on the
+  statuses below the rung) in one transaction.
+- `src/commit/completionCode.ts` — `ensureCompletionCode` (idempotent, six
+  digits, issued on ARRIVED), `verifyCompletionCode`.
+- `src/commit/arrivalEstimate.ts` — `recordArrivalEstimate` writes an
+  `eta_estimates` row plus an `ETA_UPDATED` event; the `…Quietly` wrapper
+  swallows failures so a routing outage can never fail a technician's tap.
+
+**API**
+- `GET /jobs/:id/driver-view` (`src/api/driver.ts`) — the whole driver panel,
+  already worded.
+- `GET /technician/work`, `POST /technician/offers/:id/respond`,
+  `POST /jobs/:id/actions` (`src/api/technician.ts`).
+- `technicianAction` added to the permission table: TECHNICIAN read + update.
+
+**Table** — `technician_actions` (migration
+`20260831190000_phase15_technician_actions`): job, technician,
+idempotency_key, kind, client_sequence, outcome, detail, event_time,
+received_at. Unique `(job_id, idempotency_key)`; index
+`(job_id, client_sequence)`.
+
+**Frontend** — `public/driver.html` rebuilt as a three-step flow plus a live
+panel; `public/technician.html` rebuilt around offers, the ladder and the
+outbox; `js/offlineQueue.js`; panels `driverRequest`, `driverStatus`,
+`technicianOffer`, `technicianLadder`; `state.js` gained the request, driver
+view, work, clock and outbox slices plus `onJobEvent`; driver and technician
+skins in `tokens.css`.
+
+**Tests** — `tests/driverSurface.test.ts` (24), `tests/technicianActions.test.ts`
+(11), `tests/offlineQueue.test.ts` (7). Suite: 28 files, 388 tests.
+
+### Decisions
+
+**Decision:** The driver's status sentences are produced on the SERVER and
+returned by one endpoint, not mapped in the browser.
+**Why:** The phase check is "any SCREAMING_CASE word is a bug", which is a
+claim about a rendered page and therefore untestable. Moving the translation
+behind an API makes it a property of a JSON body, and
+`tests/driverSurface.test.ts` walks the whole payload at every depth and fails
+naming the offending field.
+**Alternative:** Translate in `driverStatus.js`.
+**Why not:** The rule would then live in template code nothing can check, and
+it would be a second translation map alongside the one the notification worker
+will eventually need.
+**Tradeoff:** A round trip per update where the browser already holds the
+event. Accepted: the driver's page changes a handful of times per job.
+
+**Decision:** Two idempotency mechanisms for a technician action, not one — the
+unique key AND a conditional UPDATE, in the same transaction.
+**Why:** They answer different questions. The key answers "have I seen this tap
+before", which is what lets a replay be given the ORIGINAL outcome instead of
+being re-decided. The conditional UPDATE answers "is this transition still
+valid", which is what makes a replay harmless when the key is missed entirely —
+a second device, a reinstalled app, cleared storage.
+**Alternative:** Either alone.
+**Why not:** The key alone trusts a client-generated string to be unique
+forever. The guard alone cannot distinguish a replay from a genuine second
+attempt, so it cannot report what the first one decided.
+**Tradeoff:** Two things to explain instead of one. That is the point.
+
+**Decision:** The ladder advances MONOTONICALLY by rank, and skipping forward
+is legal.
+**Why:** It handles both queue failures with no special case. A duplicate
+targets a rank already passed and changes nothing; a lost middle action is
+closed by the next one that does arrive, because any lower status is a legal
+starting point.
+**Alternative:** An expected-predecessor table.
+**Why not:** A lost "on my way" would then jam "arrived" forever, and the
+technician standing at the car cannot fix it.
+**Tradeoff:** A genuinely out-of-order arrival is silently absorbed rather than
+flagged. Recorded below.
+
+**Decision:** `guidanceFor` takes a SafetyLevel and nothing else.
+**Why:** The brief says the guidance must be generic and conservative, never
+diagnostic. A single parameter makes that structural — with no fault,
+hypothesis or vehicle in scope, no later change can start tailoring advice to
+what the system merely believes is wrong. Zippy's belief is a distribution that
+is frequently wrong; that is the premise of the whole Phase 13 machinery.
+**Alternative:** Pass the job and select per fault.
+**Why not:** Advice derived from a guess is delivered with far more confidence
+than the guess deserves, to somebody who cannot judge it, where being wrong is
+dangerous. `expect(guidanceFor.length).toBe(1)` is a test.
+**Tradeoff:** The advice is generic. That is the requirement, not a limitation.
+
+**Decision:** Offer accept/decline is ONLINE ONLY and does not go through the
+offline queue.
+**Why:** An offer has a forty-five-second TTL. Answering one from a queue that
+drains ten minutes later would accept a job somebody else was long since sent
+to, and the offer's transition already owns a conditional update in `offers.ts`
+— wrapping it here would be a second copy of that SQL.
+**Alternative:** Queue everything uniformly.
+**Why not:** Uniformity that produces a wrong dispatch is not a virtue.
+**Tradeoff:** Two shapes of technician action. The offer card says why when it
+is offline instead of swallowing the tap.
+
+**Decision:** Every ladder action is queued, even online.
+**Why:** The online case is the queue draining immediately, so the offline path
+runs on every single tap rather than only when the signal drops. A code path
+exercised only during an outage is a code path that has never been run.
+**Tradeoff:** A tap is answered a beat later than a direct call.
+
+**Decision:** The completion code is issued on ARRIVED, not on WORKING.
+**Why:** The code exists to be evidence from the driver's side. One that
+appears at the same moment it is asked for confirms nothing; issuing it on
+arrival means it has been on the driver's phone throughout the repair.
+**Tradeoff:** A technician who never marks themselves on scene cannot complete.
+Refused explicitly rather than waved through.
+
+**Decision:** Every outcome of `POST /jobs/:id/actions` is HTTP 200, including
+REJECTED.
+**Why:** A queued action is replayed until the server answers. A 4xx would make
+the phone either retry a rejection forever or drop actions it should not. The
+status code says "your queue item was processed"; the body says what it meant.
+**Tradeoff:** Unusual for an API. Documented at the route.
+
+**Decision:** A rejected action CLAIMS its idempotency key.
+**Why:** A key identifies one attempt, so replaying that attempt reproduces its
+answer. The technician's retype is a new tap and carries a new key, so this
+does not lock them out — and the wrong-code attempt stays in the audit trail.
+
+### Concurrency
+
+**Scenario:** A technician's phone replays four queued actions while a
+dispatcher reassigns the job, or while the technician's second device sends the
+same rung.
+**What races:** Two writers on `jobs.status`, and two inserts on
+`technician_actions`.
+**Why dangerous:** A double transition puts the job at a rung nobody reached
+and writes a second JobEvent, so the driver's feed says the technician arrived
+twice. Worse, a replay landing after a reassignment would move a job that is
+now somebody else's.
+**How handled:** The insert and the effect are ONE transaction. A duplicate key
+raises P2002 and rolls the whole thing back, so the effect cannot happen twice;
+the caller then reads the original row and answers with what it decided. A
+different key for the same rung gets past the index and is stopped by
+`UPDATE … WHERE status IN (<every status below this rung>)`, which affects zero
+rows. A replay after reassignment is refused outright by the
+`assignedTechnicianId` check, with a sentence saying so.
+**Assumption relied on:** The phone mints the key at the tap and never
+regenerates it on retry. That is the client-side half, and it is tested for
+real in `tests/offlineQueue.test.ts` by failing the first send and asserting
+the second carries the same key.
+
+**Scenario:** A technician accepts an offer as the expiry worker fires.
+**How handled:** Unchanged from Phase 11 — the route delegates to
+`recordTechnicianDecision`, whose conditional update on `status = 'PROPOSED'`
+arbitrates. The route adds only the ETA record, after the saga returns
+COMMITTED.
+**Assumption relied on:** That the ETA is not part of the reservation. If the
+process dies between the offer committing and `recordArrivalEstimateQuietly`
+running, no ETA is written and the driver sees "on the way" with no time.
+Degraded, not wrong, and the next EN_ROUTE writes one.
+
+### Weaknesses introduced
+
+1. **Nothing generates an estimate, so the itemised cost is null on every real
+   job.** The READ path is built, ordered above the completion code, and
+   covered by a test that inserts one by hand — but generating estimates is the
+   money domain (Phase 15c). Today the card never appears. This is the one item
+   of the phase brief delivered as a surface rather than a feature, and it is
+   called out at `estimateView` in `src/api/driver.ts` as well as here.
+2. **No rate limit on completion-code attempts.** Six digits is one in a
+   million per guess, and nothing stops a million guesses. Every attempt is
+   recorded, so it is detectable, not preventable.
+3. **A genuinely out-of-order replay is absorbed silently.** If ARRIVED somehow
+   reaches the server before EN_ROUTE, the job lands at ON_SITE and the later
+   EN_ROUTE records NO_CHANGE. Correct, and the client sequence numbers in
+   `technician_actions` are the only evidence it happened — nothing alerts.
+4. **Diagnosis is online-only and the page says so.** Filing a new diagnosis
+   triggers a re-solve; replaying it from a queue would raise a second
+   reassignment recommendation for a decision a dispatcher may already have
+   taken. Making it queueable means threading an idempotency key through the
+   Phase 13 path, which this phase did not do.
+5. **The ETA is recomputed at exactly two moments** — offer accepted and
+   EN_ROUTE tapped. There is no position stream, so a technician stuck in
+   traffic for twenty minutes shows a clock time that is quietly wrong. The
+   live tracking is honest about the technician's STATE and stale about their
+   POSITION.
+6. **The technician's event trail is still the raw Phase 4 list**, JSON
+   payloads and event types. Correct for an operator and not remotely
+   "glanceable on a cracked screen in daylight", which is what docs/UI.md asks
+   of this surface.
+7. **The driver page refetches the whole view on every job event.** Fine at one
+   event every few minutes per job; it is a request per event, and a re-plan
+   firing six events in ninety seconds makes six. Phase 15b's coalescing is the
+   fix and is already scheduled.
+8. **The markup and panel guards are narrower than the API scan.** The
+   SCREAMING_CASE test covers the response body, `driver.html`'s text and one
+   panel assertion. A new panel could still render an enum, and only a browser
+   would catch it — as three of this phase's four leaks prove.
+9. **`nextQuestionView.question.answers` changed shape** from `string[]` to
+   `{ value, label }[]`. The simulator and the likelihood maths were untouched
+   because they read the domain catalogue rather than the view — but any
+   external caller of `GET /jobs/:id/next-question` would break.
+
+### Concepts now genuinely in use
+
+- Client-generated idempotency keys, minted at the interaction and replayed
+  unchanged — as distinct from the server-side keys `queues/idempotent.ts` uses.
+- A monotonic ranked state ladder as a replay-safety mechanism.
+- Translation-at-the-boundary as a TESTABLE property rather than a convention.
+- A whitelist-with-no-fallback as leak prevention (`driverUpdates`), contrasted
+  with a whitelist-that-must-be-total (`answerLabels`), and why the two differ:
+  dropping an unworded event is harmless, dropping an unworded answer leaves a
+  question a driver cannot answer.
+- Deriving a countdown from an absolute deadline plus a ticking clock, rather
+  than decrementing a counter that drifts when a tab is backgrounded.
+
+### Interview angle
+
+"A technician's phone loses signal for ten minutes and then replays four
+actions at once — how do you make that safe?" Two mechanisms doing different
+jobs: a unique `(job_id, idempotency_key)` inserted in the same transaction as
+the effect, which is what lets a replay be answered with the ORIGINAL outcome,
+and a conditional `UPDATE … WHERE status IN (…)` that makes the transition a
+no-op even when the key is missed entirely.
+
+"How do you stop internal vocabulary leaking onto a customer-facing screen?"
+By moving the translation to the server so it becomes a property of a JSON body
+a test can scan — and then by actually opening the page, which found four leaks
+the API test could not see.
+
+### What broke
+
+- **The API scan caught the first leak on its very first run.** `helper.vehicle`
+  was the unit CODE (`DSF-VAN-1`), a fleet asset identifier on a driver's
+  screen. Replaced with a plain description of what is coming — "a service
+  van", "a flatbed tow truck" — via `labelForUnit`. Better product, not just a
+  passing test: a driver watching traffic wants to know what shape of vehicle
+  to look for, not which asset it is.
+
+- **Opening the page in a browser found three more the suite could not.** The
+  API body was clean and the page was not, because the page has other sources:
+  1. The shared header rendered `DRIVER · user-driver-metrocab-1`. Useful to an
+     operator; an enum plus an internal id to a driver. Removed from
+     `driver.html` — `session.js` skips the field when it is absent.
+  2. The intake panel rendered `Intake complete: ENTROPY_BELOW_THRESHOLD` — the
+     stop condition, echoed verbatim. Replaced with a sentence; the code is not
+     lost, it is in the `INTAKE_COMPLETED` payload the console's timeline shows.
+  3. The answer buttons read `CLICKING`, `GRINDING`, `SILENCE`, `OTHER`. The
+     likelihood tables in `questions.ts` are keyed on those codes, so the codes
+     stay in the domain and now stop at the view: `answerLabels.ts` supplies the
+     words, `NextQuestionView` carries both, and a test walks every answer of
+     every question so an unworded one fails the build.
+  Each is now guarded, but the honest lesson is that three of the four leaks
+  came from files this phase barely touched, and only running the thing in a
+  browser found them.
+
+- **A fourth finding was not a leak but a lie.** The headline said "We are
+  taking down the details of your breakdown" while the feed two lines below
+  already said "We have everything we need to send help" — a job sits at INTAKE
+  from the last answer until the solver plans it. `intakeComplete` is now read
+  from the `INTAKE_COMPLETED` event the route already fetches, still zero new
+  backend, and the headline becomes "Finding someone equipped for this."
+
+- **A driver got HTTP 200 on `/technician/work`.** It was gated on
+  `read`+`job`, which a DRIVER holds — it is how they see their own incident.
+  The body was empty, so nothing leaked, but a 200 on somebody else's surface
+  is the wrong answer. `technicianAction` gained a `read` action and the board
+  is gated on that.
+
+- **The replay test asserted a count it could not own.** `job_events` is
+  append-only and the trigger rejects DELETE, so `resetJob` cannot clear the
+  trail and the second run of the suite saw two `TECHNICIAN_ARRIVED` rows —
+  both legitimate first applications. Fixed by taking a baseline before the
+  replay and asserting it did not move, which is the claim actually being made.
+  Same lesson as the CLAUDE.md gotcha from a new direction: an absolute count
+  is a claim about history, and only a delta is a claim about the code under
+  test.
+
+- **A browser click landed on the wrong button and briefly looked like a bug.**
+  The driver page reported a flat tyre after "It will not start" was clicked.
+  The database settled it — `FLAT_TYRE` really was submitted, so the wizard was
+  wiring state correctly and the click had simply missed between two
+  differently-scaled screenshots. Worth recording as the reason the rest of the
+  walk-through was driven through the page's own handlers rather than by
+  coordinates.
+
+- **Heredocs kept eating backslashes** while writing the test files, turning
+  `\n` inside a JS regex into a real newline and producing an unterminated
+  literal twice. Fixed by rewriting the assertion to need no escapes at all
+  (`html.match(new RegExp(SCREAMING_CASE.source, 'g'))`), which is also the
+  clearer assertion — it names the offending WORDS rather than the lines.
+
+### The phase check, performed
+
+Driver view read as a stranger in Chrome: the rendered page text scanned for
+SCREAMING_CASE returns `[]`, and neither page logs a console error.
+
+DevTools offline -> four technician actions -> online, driven through the
+page's own queue with `navigator.onLine` overridden and the `offline`/`online`
+events fired:
+
+```
+SELECT COUNT(*), COUNT(DISTINCT idempotency_key)
+  FROM technician_actions WHERE job_id='cmth9v32z0001oqosacfkjaff';
+ count | count
+     4 |     4
+
+kind       | client_sequence | outcome | event_time  | received_at
+EN_ROUTE   | 1               | APPLIED | 13:29:58.71 | 13:30:10.863
+ARRIVED    | 2               | APPLIED | 13:29:59.69 | 13:30:11.007
+DIAGNOSING | 3               | APPLIED | 13:30:00.69 | 13:30:11.041
+WORKING    | 4               | APPLIED | 13:30:01.69 | 13:30:11.065
+```
+
+Both 4, applied in original order, and the eleven-second gap between
+`event_time` and `received_at` is the outage. The completion code was then
+entered wrong (REJECTED, job stayed at WORKING) and right (APPLIED, job
+RESOLVED).
+
+The job used for the browser walk-through was assigned to `tech01` by hand
+rather than by a real dispatch — the full offer chain runs through the
+dispatcher's action queue, and the technician-facing half is what this phase
+built. The HTTP-level suite exercises the same endpoints against the real
+table.

@@ -37,6 +37,11 @@ export type Resource =
   // standing at the roadside looking at the engine, and only that person
   // should be able to overwrite what the fault is.
   | 'jobDiagnosis'
+  // A technician's own field actions: answering an offer, and climbing the
+  // status ladder. Separate from `job` because a DISPATCHER may update a job
+  // without being the person standing next to it — only the technician who was
+  // sent may say they have arrived.
+  | 'technicianAction'
   | 'actionRequest'
   // Taking one of the solver's competing plans. Its own resource because it is
   // the one console action that WRITES — everything else the console does is a
@@ -57,6 +62,10 @@ const PERMISSIONS: PermissionTable = {
     technician: ['read'],
     // Only the person on site may overwrite what the fault is.
     jobDiagnosis: ['update'],
+    // Read their own board (open offers and the job in hand); accept or
+    // decline an offer; climb the status ladder; enter the driver's
+    // completion code.
+    technicianAction: ['read', 'update'],
   },
   DISPATCHER: {
     job: ['read', 'create', 'update', 'delete'],

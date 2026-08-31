@@ -17,8 +17,14 @@ export function render(state) {
   const question = state.nextQuestion;
 
   panel.hidden = !state.activeJobId;
+  // THE STOP REASON IS NOT SHOWN. `state.intakeDone` carries the stop condition
+  // that ended the questions — ENTROPY_BELOW_THRESHOLD and friends — which is
+  // diagnostic detail for a dispatcher and an enum on a driver's screen. The
+  // browser walk-through caught it rendered as "Intake complete:
+  // ENTROPY_BELOW_THRESHOLD". The code is not lost: it is in the
+  // INTAKE_COMPLETED event payload, where the console's timeline shows it.
   if (done) {
-    done.textContent = state.intakeDone ? `Intake complete: ${state.intakeDone}` : '';
+    done.textContent = state.intakeDone ? 'Thank you — we have everything we need.' : '';
     done.hidden = !state.intakeDone;
   }
 
@@ -35,7 +41,7 @@ export function render(state) {
   // Rebuild only when the answer set actually changed — otherwise a re-render
   // triggered by an unrelated job event would replace the buttons the driver
   // is in the middle of clicking.
-  const wanted = question.answers.join('|');
+  const wanted = question.answers.map((answer) => answer.value).join('|');
   if (answers.dataset.answers === wanted) return;
 
   answers.dataset.answers = wanted;
@@ -43,10 +49,14 @@ export function render(state) {
   for (const answer of question.answers) {
     const button = document.createElement('button');
     button.type = 'button';
-    button.className = 'btn btn-outline-primary me-2 mb-2';
-    button.dataset.answer = answer;
+    button.className = 'btn btn-outline-light btn-lg text-start';
+    // THE VALUE GOES IN A DATA ATTRIBUTE, THE LABEL ON THE BUTTON. The API
+    // takes the answer code, and the driver reads words — the browser
+    // walk-through found this rendering CLICKING and GRINDING before the
+    // server started sending both.
+    button.dataset.answer = answer.value;
     button.dataset.questionCode = question.code;
-    button.textContent = answer;
+    button.textContent = answer.label;
     answers.appendChild(button);
   }
 }

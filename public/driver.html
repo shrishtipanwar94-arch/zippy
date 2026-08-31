@@ -3,82 +3,227 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>Zippy — Driver</title>
+    <title>Zippy — Help with your vehicle</title>
     <link
       href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css"
       rel="stylesheet"
     />
+    <link href="/css/tokens.css" rel="stylesheet" />
   </head>
-  <body class="p-3">
+  <!--
+    THE DRIVER'S PAGE. Mobile-first, one thing per screen, large type.
+
+    THERE IS NOT A SINGLE STATUS ENUM IN THIS FILE, and there cannot be one:
+    every sentence on the live panel arrives already worded from
+    GET /jobs/:id/driver-view (see src/api/driver.ts). This page renders
+    strings; it never maps a status to words, because a second translation map
+    in the browser is a second place for SCREAMING_CASE to leak out.
+
+    The complaint buttons DO carry enum values, in data attributes, because the
+    intake API takes them — but what the driver reads is the label, and the
+    value is never displayed.
+  -->
+  <body class="p-3 driver">
     <div class="d-flex align-items-center gap-2 mb-3">
-      <h1 class="h4 mb-0">Driver</h1>
+      <h1 class="h4 mb-0">Zippy</h1>
+      <!-- NO SESSION LINE HERE. The dispatcher's and technician's headers show
+           `ROLE · user-id`, which is useful to an operator and is an enum and
+           an internal id on a driver's screen — the browser walk-through caught
+           it reading "DRIVER · user-driver-metrocab-1" above the sentences this
+           phase spent its effort wording. session.js skips the field when it is
+           absent, so removing it is the whole fix. -->
       <span data-field="connection" class="badge bg-secondary">disconnected</span>
-      <span data-field="session" class="text-muted small">signed out</span>
       <a href="/" class="ms-auto small">index</a>
     </div>
 
     <div data-field="error" class="alert alert-danger" hidden></div>
 
     <form data-panel="login" class="row g-2 mb-3" onsubmit="return false">
-      <div class="col-auto">
+      <div class="col-12 col-sm-auto">
         <input id="email" class="form-control" value="driver-metrocab-1@zippy.internal" />
       </div>
-      <div class="col-auto">
+      <div class="col-12 col-sm-auto">
         <input id="password" type="password" class="form-control" value="password-dev-only" />
       </div>
-      <div class="col-auto">
-        <button data-action="login" class="btn btn-primary">Sign in</button>
+      <div class="col-12 col-sm-auto">
+        <button data-action="login" class="btn btn-primary w-100">Sign in</button>
       </div>
     </form>
 
     <div data-panel="workspace" hidden>
-      <h2 class="h6">Report a breakdown</h2>
-      <form class="row g-2 mb-3" onsubmit="return false">
-        <div class="col-auto">
-          <input id="vehicleId" class="form-control" value="vehicle-metrocab-1" />
-        </div>
-        <div class="col-auto">
-          <select id="complaint" class="form-select">
-            <option>WONT_START</option>
-            <option>FLAT_TYRE</option>
-            <option>LOCKED_OUT</option>
-            <option>WARNING_LIGHT</option>
-            <option>NOISE_OR_SMELL</option>
-            <option>STUCK_OR_DAMAGED</option>
-            <option>UNKNOWN</option>
-          </select>
-        </div>
-        <div class="col-auto"><input id="lat" class="form-control" value="12.9352" /></div>
-        <div class="col-auto"><input id="lng" class="form-control" value="77.6245" /></div>
-        <div class="col-auto">
-          <!-- SHOULDER and LANE are the highway positions; the server derives
-               the safety level from this and there is no separate checkbox to
-               disagree with it. -->
-          <select id="roadPosition" class="form-select">
-            <option>SERVICE_ROAD</option>
-            <option>SHOULDER</option>
-            <option>LANE</option>
-            <option>PARKING</option>
-          </select>
-        </div>
-        <div class="col-auto form-check mt-2">
-          <input id="driverAlone" type="checkbox" class="form-check-input" checked />
-          <label class="form-check-label" for="driverAlone">alone</label>
-        </div>
-        <div class="col-auto">
-          <button data-action="report" class="btn btn-danger">Report</button>
-        </div>
-      </form>
+      <!-- ================= THE REQUEST FLOW — three steps ================= -->
+      <div data-panel="request">
+        <!-- STEP 1 — what is happening. -->
+        <section data-step="symptoms" class="mb-3" hidden>
+          <h2 class="h5">What has happened to your vehicle?</h2>
+          <p class="text-muted">Pick whichever is closest. We can ask more in a moment.</p>
+          <div class="d-grid gap-2" data-field="complaints">
+            <button class="btn btn-outline-light btn-lg text-start" data-complaint="WONT_START">
+              It will not start
+            </button>
+            <button class="btn btn-outline-light btn-lg text-start" data-complaint="FLAT_TYRE">
+              I have a flat tyre
+            </button>
+            <button class="btn btn-outline-light btn-lg text-start" data-complaint="LOCKED_OUT">
+              I am locked out of the car
+            </button>
+            <button class="btn btn-outline-light btn-lg text-start" data-complaint="WARNING_LIGHT">
+              A warning light has come on
+            </button>
+            <button class="btn btn-outline-light btn-lg text-start" data-complaint="NOISE_OR_SMELL">
+              There is an odd noise or smell
+            </button>
+            <button class="btn btn-outline-light btn-lg text-start" data-complaint="STUCK_OR_DAMAGED">
+              The car is stuck or damaged
+            </button>
+            <button class="btn btn-outline-light btn-lg text-start" data-complaint="UNKNOWN">
+              I am not sure
+            </button>
+          </div>
+          <div class="mt-3">
+            <label class="form-label small text-muted" for="vehicleId">Which vehicle?</label>
+            <input id="vehicleId" class="form-control" value="vehicle-metrocab-1" />
+          </div>
+        </section>
 
+        <!-- STEP 2 — safety triage. Only the driver can answer any of this,
+             which is exactly why it is asked here and not inferred. -->
+        <section data-step="safety" class="mb-3" hidden>
+          <h2 class="h5">Are you safe where you are?</h2>
+          <p class="text-muted">This changes how quickly we come and who we send.</p>
+          <div class="d-grid gap-2">
+            <label class="form-check card-check">
+              <input class="form-check-input" type="checkbox" id="blockingLiveLane" />
+              <span class="form-check-label">My car is blocking moving traffic</span>
+            </label>
+            <label class="form-check card-check">
+              <input class="form-check-input" type="checkbox" id="smokeOrBurningSmell" />
+              <span class="form-check-label">I can see smoke or smell burning</span>
+            </label>
+            <label class="form-check card-check">
+              <input class="form-check-input" type="checkbox" id="fuelSmell" />
+              <span class="form-check-label">I can smell fuel</span>
+            </label>
+            <label class="form-check card-check">
+              <input class="form-check-input" type="checkbox" id="overheating" />
+              <span class="form-check-label">The engine is overheating</span>
+            </label>
+            <label class="form-check card-check">
+              <input class="form-check-input" type="checkbox" id="driverAlone" checked />
+              <span class="form-check-label">I am on my own</span>
+            </label>
+            <label class="form-check card-check">
+              <input class="form-check-input" type="checkbox" id="vulnerablePassengers" />
+              <span class="form-check-label">There are children or elderly passengers with me</span>
+            </label>
+          </div>
+          <div class="d-flex gap-2 mt-3">
+            <button class="btn btn-outline-light" data-action="back">Back</button>
+            <button class="btn btn-primary flex-grow-1" data-action="to-location">Continue</button>
+          </div>
+        </section>
+
+        <!-- STEP 3 — location refinement. Coordinates alone are not enough:
+             which side of a divided road you are on changes a 200m drive into
+             a 20km one, so the position is asked as well as measured. -->
+        <section data-step="location" class="mb-3" hidden>
+          <h2 class="h5">Where are you?</h2>
+          <p class="text-muted">
+            The more precise this is, the sooner someone reaches you.
+          </p>
+          <button class="btn btn-outline-light mb-2" data-action="locate">
+            Use my current location
+          </button>
+          <div class="row g-2 mb-2">
+            <div class="col-6">
+              <label class="form-label small text-muted" for="lat">Latitude</label>
+              <input id="lat" class="form-control" value="12.9352" />
+            </div>
+            <div class="col-6">
+              <label class="form-label small text-muted" for="lng">Longitude</label>
+              <input id="lng" class="form-control" value="77.6245" />
+            </div>
+          </div>
+          <p class="mb-1">Which best describes where the car is standing?</p>
+          <div class="d-grid gap-2" data-field="positions">
+            <button class="btn btn-outline-light text-start" data-position="LANE">
+              In a lane of moving traffic
+            </button>
+            <button class="btn btn-outline-light text-start" data-position="SHOULDER">
+              On the hard shoulder of a highway
+            </button>
+            <button class="btn btn-outline-light text-start" data-position="SERVICE_ROAD">
+              On a service road or side street
+            </button>
+            <button class="btn btn-outline-light text-start" data-position="PARKING">
+              In a car park or driveway
+            </button>
+          </div>
+          <div class="mt-2">
+            <label class="form-label small text-muted" for="landmark">
+              Anything nearby that would help us find you?
+            </label>
+            <input id="landmark" class="form-control" placeholder="Petrol pump, flyover, gate number" />
+          </div>
+          <div class="d-flex gap-2 mt-3">
+            <button class="btn btn-outline-light" data-action="back">Back</button>
+            <button class="btn btn-danger flex-grow-1 btn-lg" data-action="report">
+              Send for help
+            </button>
+          </div>
+        </section>
+      </div>
+
+      <!-- The follow-up questions intake asks. How many there are depends on
+           how uncertain the first guess was — a stated flat tyre gets none. -->
       <div data-panel="intake-question" class="mb-3" hidden>
-        <h2 class="h6">Intake</h2>
-        <p data-field="question-prompt" class="mb-2"></p>
-        <div data-field="question-answers"></div>
+        <h2 class="h5" data-field="question-prompt"></h2>
+        <div class="d-grid gap-2" data-field="question-answers"></div>
         <div data-field="intake-done" class="alert alert-success mt-2" hidden></div>
       </div>
 
-      <h2 class="h6">Job <code data-field="active-job">none</code></h2>
-      <ul class="list-group" data-panel="job-events"></ul>
+      <!-- ================= THE LIVE PANEL ================= -->
+      <!-- Every string in here is set from the server's already-worded
+           response. The markup carries no status vocabulary at all. -->
+      <div data-panel="driver-status" hidden>
+        <div class="card status-card mb-3">
+          <div class="card-body">
+            <p class="h4 mb-2" data-field="headline"></p>
+            <p class="mb-2" data-field="detail"></p>
+            <p class="arrival mb-0" data-field="arrival" hidden></p>
+            <p class="small text-muted mb-0" data-field="helper" hidden></p>
+          </div>
+        </div>
+
+        <div class="card guidance-card mb-3">
+          <div class="card-body">
+            <h2 class="h6" data-field="guidance-headline"></h2>
+            <ul class="mb-2" data-field="guidance-points"></ul>
+            <p class="small text-muted mb-0" data-field="guidance-note"></p>
+          </div>
+        </div>
+
+        <!-- The cost, itemised, ABOVE the code. The driver knows what the work
+             comes to before they confirm it was done. -->
+        <div class="card mb-3" data-field="estimate-card" hidden>
+          <div class="card-body">
+            <h2 class="h6">What this comes to</h2>
+            <ul class="list-unstyled mb-2" data-field="estimate-lines"></ul>
+            <p class="h5 mb-0">Total <span data-field="estimate-total"></span></p>
+          </div>
+        </div>
+
+        <div class="card code-card mb-3" data-field="code-card" hidden>
+          <div class="card-body text-center">
+            <h2 class="h6">Your completion code</h2>
+            <p class="display-6 mb-1" data-field="code"></p>
+            <p class="small text-muted mb-0" data-field="code-explain"></p>
+          </div>
+        </div>
+
+        <h2 class="h6">What has happened so far</h2>
+        <ul class="list-group" data-panel="driver-updates"></ul>
+      </div>
     </div>
 
     <script src="https://cdn.jsdelivr.net/npm/morphdom@2.7.4/dist/morphdom-umd.min.js"></script>

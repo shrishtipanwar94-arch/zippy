@@ -427,6 +427,7 @@ model Technician {
   commissions     Commission[]
   payouts         Payout[]
   cashCollections CashCollection[]
+  actions         TechnicianAction[]
 
   @@map("technicians")
 }
@@ -597,6 +598,7 @@ model Job {
   slaEvents              SlaEvent[]
   stockConfirmations     StockConfirmation[]
   aiExtractions          AiExtraction[]
+  technicianActions      TechnicianAction[]
 
   @@index([status, createdAt])
   @@index([zoneId, status])
@@ -896,6 +898,47 @@ model TechnicianOffer {
 // The "why this technician?" record: the selected option with its cost
 // breakdown term by term, and every rejected alternative with its feasibility
 // reason code. The data already exists from Phases 7 and 8; this persists it.
+// WHAT A TECHNICIAN DID, AND WHICH TAP IT WAS.
+//
+// Phase 15's offline queue. A technician's phone loses signal in a basement
+// car park, they tap four buttons, and all four arrive at once when it
+// reconnects. Each carries an idempotency key the PHONE generated at the
+// moment of the tap, plus `client_sequence` — the phone's own counter — so the
+// order the taps happened in survives a network that reorders them.
+//
+// The unique index on (job_id, idempotency_key) is the arbiter. The row is
+// inserted in the SAME transaction as the effect it describes, so a replay
+// hits the constraint, the whole transaction rolls back, and the effect cannot
+// happen twice. Same shape as job_processing_log, for the same reason.
+//
+// `outcome` records what the first application actually decided — APPLIED,
+// NO_CHANGE (the job had already moved past that rung) or REJECTED (a wrong
+// completion code). A replay returns the recorded outcome rather than deciding
+// again, so the same tap always gets the same answer.
+//
+// Originates on a phone, so both times are kept: `event_time` is when the
+// technician tapped, `received_at` is when we heard about it. The gap between
+// them IS the offline period.
+model TechnicianAction {
+  id             String   @id @default(cuid())
+  jobId          String   @map("job_id")
+  technicianId   String   @map("technician_id")
+  idempotencyKey String   @map("idempotency_key")
+  kind           String
+  clientSequence Int      @map("client_sequence")
+  outcome        String
+  detail         String?
+  eventTime      DateTime @map("event_time")
+  receivedAt     DateTime @default(now()) @map("received_at")
+
+  job        Job        @relation(fields: [jobId], references: [id], onDelete: Cascade)
+  technician Technician @relation(fields: [technicianId], references: [id])
+
+  @@unique([jobId, idempotencyKey])
+  @@index([jobId, clientSequence])
+  @@map("technician_actions")
+}
+
 model DecisionRecord {
   id                      String   @id @default(cuid())
   jobId                   String   @map("job_id")

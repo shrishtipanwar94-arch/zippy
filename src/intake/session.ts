@@ -8,6 +8,8 @@
 import type { Prisma } from '@prisma/client';
 import { decideNextQuestion } from '../domain/questionSelection.js';
 import type { NextQuestionResult } from '../domain/questionSelection.js';
+import { answerOptions } from '../domain/answerLabels.js';
+import type { AnswerOption } from '../domain/answerLabels.js';
 import { latestHypothesis } from './hypothesis.js';
 import type { StoredHypothesis } from './hypothesis.js';
 import { IntakeError } from './errors.js';
@@ -51,7 +53,11 @@ export function nextStepFor(session: IntakeSession): NextQuestionResult {
 export type NextQuestionView =
   | {
       done: false;
-      question: { code: string; prompt: string; answers: string[] };
+      // ANSWERS CARRY THEIR WORDS. The domain keeps answer CODES, because
+      // the likelihood tables are keyed on them; the view adds the label a
+      // driver reads, so no client ever has to map one to the other. See
+      // src/domain/answerLabels.ts for why that translation is here.
+      question: { code: string; prompt: string; answers: AnswerOption[] };
       expectedGainBits: number;
       questionsAsked: number;
       entropyBits: number;
@@ -77,7 +83,7 @@ export function nextQuestionView(session: IntakeSession): NextQuestionView {
     question: {
       code: step.choice.question.code,
       prompt: step.choice.question.prompt,
-      answers: step.choice.question.answers,
+      answers: answerOptions(step.choice.question.answers),
     },
     expectedGainBits: step.choice.expectedGainBits,
     questionsAsked,

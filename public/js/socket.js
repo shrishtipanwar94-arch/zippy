@@ -14,6 +14,7 @@ import {
   applyJobEvent,
   cursorFor,
   getState,
+  notifyJobEvent,
   pushTimelineEvent,
   render,
   resetJobHistory,
@@ -58,6 +59,10 @@ export function connect() {
     // anything, because `||` would short-circuit and skip the second.
     const jobChanged = applyJobEvent(event);
     const timelineChanged = pushTimelineEvent(event);
+    // A THIRD CONSUMER, and the only one that is not a state write. The
+    // driver's panel is worded by the server, so an event means "re-read the
+    // driver view" rather than "patch this object". See state.onJobEvent.
+    notifyJobEvent(event.jobId);
     if (jobChanged || timelineChanged) render();
   });
 
@@ -81,6 +86,7 @@ export function connect() {
       if (applyJobEvent(event)) changed = true;
       if (pushTimelineEvent(event)) changed = true;
     }
+    if (replay.events.length > 0) notifyJobEvent(replay.jobId);
     if (changed) render();
   });
 }
