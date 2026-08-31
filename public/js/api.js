@@ -39,6 +39,19 @@ export function solveJobs() {
   return request('POST', '/solve');
 }
 
+export function listEvents(filters) {
+  const query = new URLSearchParams();
+  for (const [key, value] of Object.entries(filters)) {
+    if (value) query.set(key, value);
+  }
+  const suffix = query.toString();
+  return request('GET', `/events${suffix ? `?${suffix}` : ''}`);
+}
+
+export function getDecision(jobId) {
+  return request('GET', `/jobs/${jobId}/decision`);
+}
+
 export function createIntake(payload) {
   return request('POST', '/jobs/intake', payload);
 }

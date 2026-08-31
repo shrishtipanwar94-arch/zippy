@@ -1,0 +1,133 @@
+/* THE PALETTE, defined once.
+ *
+ * docs/UI.md has specified this file since Phase 0 — "defined once as CSS
+ * custom properties in /public/css/tokens.css and referenced everywhere, no
+ * hardcoded hex in panel code". The file itself was never created, because
+ * the Phase 4 pages were deliberately unstyled Bootstrap defaults and nothing
+ * needed a colour. Phase 14 is the first surface that does, so it exists now,
+ * with exactly the tokens the brief named and nothing else.
+ *
+ * Hazard amber accent against a neutral slate base. The dispatcher console is
+ * dense and dark on purpose: it is a control room, not a consumer app.
+ *
+ * NEVER USE COLOUR AS THE ONLY SIGNAL — docs/UI.md is explicit, and it is an
+ * accessibility rule rather than a stylistic one. Every coloured thing in the
+ * panels pairs the colour with a word: a HIGH_RISK row says HIGH_RISK, a
+ * rejection reason shows its code, a feasible option is labelled chosen.
+ */
+
+:root {
+  --surface: #0f172a;
+  --surface-alt: #1e293b;
+  --text: #e2e8f0;
+  --text-muted: #94a3b8;
+  --border: #334155;
+
+  --accent: #f59e0b; /* amber — primary actions and live status */
+  --danger: #ef4444; /* red — HIGH_RISK and failures, nothing else */
+  --ok: #22c55e; /* green — confirmed / resolved only */
+
+  --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}
+
+/* ---------------------------------------------------------------------------
+ * The console shell. Bootstrap supplies layout and spacing; these rules only
+ * re-skin it onto the tokens above. Deliberately small — the brief says
+ * information density, not a design system.
+ */
+
+body.console {
+  background: var(--surface);
+  color: var(--text);
+  font-size: 0.875rem;
+}
+
+.console .card,
+.console .table,
+.console .form-control,
+.console .form-select {
+  background: var(--surface-alt);
+  color: var(--text);
+  border-color: var(--border);
+}
+
+.console .table > :not(caption) > * > * {
+  background: transparent;
+  color: var(--text);
+  border-color: var(--border);
+}
+
+.console .text-muted {
+  color: var(--text-muted) !important;
+}
+
+.console .card-header {
+  background: var(--surface);
+  border-color: var(--border);
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  font-size: 0.75rem;
+}
+
+/* ---------------------------------------------------------------------------
+ * Console-specific pieces.
+ */
+
+/* The timeline is a long scrolling region that must NOT move under the
+ * operator while events arrive — see the panels for how that is achieved. */
+.timeline-scroll {
+  max-height: 26rem;
+  overflow-y: auto;
+}
+
+.timeline-row {
+  border-bottom: 1px solid var(--border);
+  padding: 0.25rem 0;
+  font-size: 0.8125rem;
+}
+
+.timeline-row.is-selected {
+  background: rgba(245, 158, 11, 0.12);
+}
+
+.event-type {
+  font-family: var(--mono);
+  font-size: 0.75rem;
+  color: var(--accent);
+}
+
+.mono {
+  font-family: var(--mono);
+  font-size: 0.75rem;
+}
+
+.safety-HIGH_RISK {
+  color: var(--danger);
+  font-weight: 600;
+}
+
+.safety-ELEVATED {
+  color: var(--accent);
+}
+
+.term-bar {
+  height: 0.5rem;
+  background: var(--accent);
+  border-radius: 2px;
+}
+
+/* A rejected option's reason code. Bordered rather than filled so a long list
+ * of them does not read as a wall of alarm — most rejections are ordinary. */
+.reason-code {
+  font-family: var(--mono);
+  font-size: 0.6875rem;
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  padding: 0 0.25rem;
+  color: var(--text-muted);
+}
+
+.chosen-row {
+  border-left: 3px solid var(--ok);
+}

@@ -8,8 +8,11 @@
       href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css"
       rel="stylesheet"
     />
+    <!-- The palette docs/UI.md has specified since Phase 0. Loaded after
+         Bootstrap so the tokens re-skin it rather than fight it. -->
+    <link href="/css/tokens.css" rel="stylesheet" />
   </head>
-  <body class="p-3">
+  <body class="p-3 console">
     <div class="d-flex align-items-center gap-2 mb-3">
       <h1 class="h4 mb-0">Dispatcher</h1>
       <span data-field="connection" class="badge bg-secondary">disconnected</span>
@@ -44,6 +47,59 @@
            between units one job at a time. Nothing here reserves anything —
            holds are Phase 11. -->
       <div class="row g-2 mb-3" data-panel="plans"></div>
+
+      <!-- THE CONSOLE. Two panels side by side: what happened, and why the
+           system decided what it did about it. Phase 14 Stage 1 builds only
+           these two — the scarcity panel, competing plans, the priority queue
+           and the map are later stages. -->
+      <div class="row g-3 mb-3">
+        <div class="col-lg-7">
+          <div class="card h-100">
+            <div class="card-header d-flex gap-2 align-items-center">
+              <span>Live incident timeline</span>
+              <span data-field="timeline-summary" class="ms-auto text-muted"></span>
+            </div>
+            <div class="card-body p-2" data-panel="timeline">
+              <div class="row g-1 mb-2">
+                <div class="col">
+                  <input
+                    class="form-control form-control-sm"
+                    data-filter="jobId"
+                    placeholder="job id"
+                  />
+                </div>
+                <div class="col">
+                  <select class="form-select form-select-sm" data-filter="zoneId" data-field="filter-zone"></select>
+                </div>
+                <div class="col">
+                  <select
+                    class="form-select form-select-sm"
+                    data-filter="eventType"
+                    data-field="filter-event-type"
+                  ></select>
+                </div>
+                <div class="col-auto">
+                  <button data-action="refresh-timeline" class="btn btn-sm btn-outline-secondary">
+                    Refresh
+                  </button>
+                </div>
+              </div>
+              <!-- Rows are patched by data-event-id and scroll is corrected on
+                   prepend; the list is never rebuilt. -->
+              <div class="timeline-scroll">
+                <div data-field="timeline-rows"></div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div class="col-lg-5">
+          <div class="card h-100">
+            <div class="card-header">Why this technician?</div>
+            <div class="card-body p-2" data-panel="inspector"></div>
+          </div>
+        </div>
+      </div>
 
       <table class="table table-sm" data-panel="jobs-table">
         <thead>

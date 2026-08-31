@@ -28,6 +28,22 @@ const state = {
   // Null until a dispatcher presses Solve.
   solve: null,
 
+  // THE INCIDENT TIMELINE. Held here rather than in the panel because the
+  // filters and the rows are one piece of state — changing a filter refetches,
+  // and the panel must never hold a copy that can disagree with this one.
+  timeline: {
+    events: [],
+    eventTypes: [],
+    zones: [],
+    filters: { jobId: '', zoneId: '', eventType: '' },
+    limit: 200,
+  },
+
+  // WHY THIS TECHNICIAN. `jobId` is what the operator selected; `decision` is
+  // what the server said about it. Kept apart so a slow response cannot make
+  // the timeline highlight one job while the inspector shows another.
+  inspector: { jobId: null, decision: null },
+
   // jobId -> events, in sequence order
   events: {},
   // jobId -> highest sequence already applied. The idempotency cursor.
@@ -96,6 +112,30 @@ export function setJobs(jobs) {
 
 export function setSolve(result) {
   state.solve = result;
+}
+
+export function setTimeline(result) {
+  state.timeline.events = result.events;
+  state.timeline.eventTypes = result.eventTypes;
+  state.timeline.zones = result.zones;
+  state.timeline.limit = result.limit;
+}
+
+export function setTimelineFilter(name, value) {
+  state.timeline.filters[name] = value;
+}
+
+export function setInspectorJob(jobId) {
+  state.inspector.jobId = jobId;
+  // Cleared immediately: showing the previous job's reasoning under a new
+  // job's heading is worse than showing nothing for a moment.
+  state.inspector.decision = null;
+}
+
+export function setInspectorDecision(decision) {
+  // Ignore a response that arrived after the operator moved on.
+  if (decision && decision.job.id !== state.inspector.jobId) return;
+  state.inspector.decision = decision;
 }
 
 export function setActiveJob(jobId) {

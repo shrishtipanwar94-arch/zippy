@@ -5,16 +5,32 @@
 // for jobs it never subscribed to — that is the zone fan-out doing its job, and
 // it is why this page needs no per-job subscription to stay current.
 
-import { registerPanel, render, setError, setJobs, setSession, setSolve } from '../state.js';
+import {
+  registerPanel,
+  render,
+  setError,
+  setJobs,
+  setSession,
+  setSolve,
+  setTimeline,
+  setTimelineFilter,
+  setInspectorJob,
+  setInspectorDecision,
+  getState,
+} from '../state.js';
 import * as api from '../api.js';
 import { connect } from '../socket.js';
 import { render as renderSession } from '../panels/session.js';
 import { render as renderJobsTable } from '../panels/jobsTable.js';
 import { render as renderPlans } from '../panels/plans.js';
+import { render as renderTimeline } from '../panels/timeline.js';
+import { render as renderInspector } from '../panels/inspector.js';
 
 registerPanel(renderSession);
 registerPanel(renderJobsTable);
 registerPanel(renderPlans);
+registerPanel(renderTimeline);
+registerPanel(renderInspector);
 
 function value(selector) {
   return document.querySelector(selector).value.trim();
@@ -30,6 +46,7 @@ document.querySelector('[data-action="login"]').addEventListener('click', async 
     // polling is the Phase 17 fallback, not the mechanism.
     const jobs = await api.listJobs();
     setJobs(jobs.jobs);
+    await refreshTimeline();
     connect();
   } catch (error) {
     setError(error.message);
@@ -52,3 +69,46 @@ document.querySelector('[data-action="solve"]').addEventListener('click', async 
 });
 
 render();
+
+// ---------------------------------------------------------------------------
+// THE CONSOLE'S TWO PANELS.
+
+async function refreshTimeline() {
+  try {
+    setTimeline(await api.listEvents(getState().timeline.filters));
+    setError(null);
+  } catch (error) {
+    setError(error.message);
+  }
+}
+
+// Delegated, because the filter controls and every timeline row live inside a
+// panel that re-renders. Binding per row would leak a listener on every event.
+document.querySelector('[data-panel="timeline"]').addEventListener('change', async (changed) => {
+  const control = changed.target.closest('[data-filter]');
+  if (!control) return;
+  setTimelineFilter(control.dataset.filter, control.value.trim());
+  await refreshTimeline();
+  render();
+});
+
+document.querySelector('[data-panel="timeline"]').addEventListener('click', async (clicked) => {
+  const button = clicked.target.closest('[data-action="inspect"]');
+  if (!button) return;
+
+  setInspectorJob(button.dataset.jobId);
+  render(); // paint the selection immediately; the decision arrives after
+
+  try {
+    setInspectorDecision(await api.getDecision(button.dataset.jobId));
+    setError(null);
+  } catch (error) {
+    setError(error.message);
+  }
+  render();
+});
+
+document.querySelector('[data-action="refresh-timeline"]').addEventListener('click', async () => {
+  await refreshTimeline();
+  render();
+});

@@ -23,3 +23,150 @@ including the Phase 9 zone-partitioning addendum, the carried-forward list of
 INTERVIEW.md claims those phases falsified, and all four stages of Phase 13 —
 are now consolidated into INTERVIEW.md. `git log` and each entry's own commit
 remain the record of what was decided when. Phase 14 appends below.*
+
+## Phase 14 Stage 1 — timeline and the "why this technician?" inspector / 2026-08-31 / PARTIAL
+
+Items 1 and 2 of six. The scarcity panel, competing plans, the priority queue
+and the map are later stages; the phase is not closed.
+
+### Built
+
+`public/css/tokens.css` — the palette docs/UI.md has specified since Phase 0
+and which had never been created. Hazard amber accent on a neutral slate base,
+as custom properties, plus the small amount of console re-skinning Bootstrap
+needs.
+
+`src/api/console.ts` — two pure reads:
+- `GET /events` — job_events, filterable by `jobId`, `zoneId` and `eventType`,
+  newest first, capped at 500. Also returns the event types and zones that
+  actually exist, so the filter selects are derived from the data rather than
+  from a hardcoded list that drifts as phases add event types.
+- `GET /jobs/:id/decision` — the last solve that considered a job: the run's
+  metadata, the current hypothesis, the chosen option with its full cost
+  breakdown, and every rejected option with its reason code.
+
+`public/js/panels/timeline.js` — rows patched by `data-event-id`, never
+rebuilt, with an explicit scroll correction on prepend.
+
+`public/js/panels/inspector.js` — the cost breakdown term by term with each
+term's own unit and its share of the total, and the rejected alternatives
+grouped by reason code.
+
+`public/js/state.js` — `timeline` and `inspector` slices, with
+`setInspectorDecision` dropping a response whose job is no longer selected.
+
+`public/dispatcher.html`, `js/api.js`, `js/pages/dispatcher.js` — the markup,
+two API calls, delegated listeners.
+
+Tests: `tests/consoleRoutes.test.ts` (14). Suite 307 fast across 23 files, 9
+concurrency. `tsc --noEmit`, `eslint src evaluation`, `npm run build` clean.
+Smoke-tested against the compiled build: all four static assets 200, `/events`
+returns real rows with working filters, and `/jobs/:id/decision` on a genuinely
+solved job returns three chosen options with five cost terms each and 17
+rejections grouped under NO_TECHNICIAN_ON_SHIFT.
+
+### Decisions
+
+- **Decision:** the inspector renders `dispatch_options`, and says in its own
+  response that there is no `DecisionRecord` behind it.
+  **Why:** the phase says "render the DecisionRecord", and `decision_records`
+  has existed since Phase 1 with NO WRITER — it is empty. Everything the record
+  would hold exists one level down in `dispatch_options`, which carries every
+  option with its cost breakdown or its rejection code, keyed to the
+  `solver_run` that produced it. So the screen is real and the data is real.
+  **Alternative:** write DecisionRecord rows now, at saga commit, and render
+  those.
+  **Why not:** that is a write, in a stage scoped to two read panels, and the
+  interesting field on that table is `overrideReasonCode` — which only means
+  something once a dispatcher can override a plan, and that is item 4 of this
+  phase.
+  **Tradeoff, and it is a real one:** without a DecisionRecord there is no
+  record of a HUMAN overriding the solver. The screen answers "why did the
+  system choose this?" and cannot answer "why did the operator choose
+  something else?". The response carries `decisionRecord: null` and a note
+  saying so, and a test asserts both, so nobody can mistake one question for
+  the other.
+
+- **Decision:** the timeline patches rows by key and corrects scroll on
+  prepend; the inspector rebuilds wholesale.
+  **Why:** they have opposite requirements. The timeline is a long list that
+  grows under a reader every few seconds, so rebuilding it would throw away
+  scroll position, selection, and the row being read — the failure the phase's
+  own check is designed to catch. The inspector shows ONE job's decision and
+  changes only when the operator deliberately selects a different job; there is
+  no scroll position worth preserving across that.
+  **Alternative:** one strategy for both.
+  **Why not:** patching the inspector would be machinery protecting nothing;
+  rebuilding the timeline is the bug.
+  **Tradeoff:** two idioms in one console, which has to be explained — hence
+  the header comment in each panel.
+
+- **Decision:** rows are only ever added or removed, never updated.
+  **Why:** `job_events` is append-only, enforced by a database trigger, so an
+  event's content cannot change once written. "Leave an existing row alone" is
+  therefore not an optimisation with a correctness caveat; it is a property of
+  the table.
+  **Alternative:** diff each row's content on every render.
+  **Why not:** it would be dead code, and dead code that looks load-bearing.
+  **Tradeoff:** if a future phase ever mutated a job event, this panel would
+  silently show stale rows. The trigger makes that impossible, which is why the
+  comment names the trigger rather than just asserting immutability.
+
+- **Decision:** rejected alternatives are grouped by reason code.
+  **Why:** twenty `CAPABILITY_MISSING` and one `SLA_UNREACHABLE` is a
+  different story from the reverse, and an ungrouped list of twenty-one rows
+  tells neither. The shape of the rejection is the information.
+  **Alternative:** a flat list, one row per option.
+  **Why not:** on a real run this is 17-3000 rows.
+  **Tradeoff:** an individual unit's specific detail string is only shown for
+  the first of its group.
+
+- **Decision:** zone filtering happens server-side through the job relation.
+  **Why:** zone is a property of the JOB, not the event. Fetching every event
+  and filtering in the browser is how a console becomes unusable at exactly the
+  moment it matters.
+  **Alternative:** denormalise `zoneId` onto `job_events`.
+  **Why not:** a write-side change to an append-only table for a read-side
+  convenience.
+  **Tradeoff:** the query traverses a relation, so it is the filter most likely
+  to be quietly wrong — it has its own test asserting it excludes the other
+  zone's job rather than merely including its own.
+
+### Weaknesses introduced
+
+- **The timeline does not update live.** It is fetched on sign-in and on
+  demand, and the socket does not push new events into it — so a console left
+  open goes stale until someone presses Refresh. The socket already carries
+  job events (Phase 4), so this is wiring, not architecture, and it is the
+  first thing to fix in Stage 2. As it stands the panel is called "live" in the
+  build plan and is not.
+- **`decision_records` is still empty**, so operator overrides are unrecorded
+  anywhere. See the decision above.
+- **The inspector shows the LAST solve that considered a job**, not the solve
+  that produced the assignment the job actually has. Those are usually the same
+  and can differ: a later zone re-plan touches a job without changing its
+  assignment. Correcting it needs the DecisionRecord that does not exist yet.
+- **No test asserts the scroll behaviour.** The patching is written for it and
+  the reasoning is in the file, but the property — "scroll holds while events
+  arrive" — is checked by the phase's manual browser check, which has never
+  been run. jsdom would let a test assert rows are reused rather than
+  recreated; that is not the same claim.
+- **`escapeHtml` in the inspector guards `innerHTML`.** Every value comes from
+  the database and most from the engine, but a rejection detail is a built
+  string and a unit id is user-adjacent enough to be worth escaping. The
+  timeline avoids the question entirely by building nodes; the inspector does
+  not, and that inconsistency is a real smell.
+- **Nothing paginates.** The timeline caps at 500 and offers no way to see the
+  501st event.
+
+### What broke
+
+- **`dispatch_options.unit_id` and `.technician_id` are real foreign keys**,
+  and the first fixture invented ids for the three options it wrote. Caught
+  immediately by a constraint violation at fixture build, not by a passing test
+  — which is the right way round. Fixed by creating three real crews.
+- **`/public/css/tokens.css` did not exist**, despite docs/UI.md and Phase 0
+  both specifying it by exact path and naming its tokens. Nothing had needed a
+  colour before: the Phase 4 pages are deliberately unstyled Bootstrap
+  defaults. Created now to the documented spec rather than invented, which is
+  the difference between "the palette exists" and "a palette exists".
