@@ -30,6 +30,7 @@ import { appendJobEvent } from '../intake/events.js';
 import { requestAction } from '../commit/actionRequests.js';
 import { handleTrigger } from '../commit/redispatch.js';
 import { symptomPayloadSchema } from '../domain/symptoms.js';
+import { runPublishingTransaction } from '../realtime/transaction.js';
 
 export const diagnosisRouter = Router();
 
@@ -76,7 +77,7 @@ diagnosisRouter.post(
     const distribution = classifySymptoms(body.symptoms);
     const required = requiredCapabilities(distribution);
 
-    await prismaBase.$transaction(async (tx) => {
+    await runPublishingTransaction(prismaBase, async (tx) => {
       await recordHypothesis(tx, visible.id, distribution);
       await appendJobEvent(tx, {
         jobId: visible.id,

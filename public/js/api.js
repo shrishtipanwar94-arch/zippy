@@ -117,3 +117,24 @@ export function submitDiagnosis(jobId, primaryComplaint, note) {
     ...(note ? { note } : {}),
   });
 }
+
+// --- chat, and the promotions it raises -------------------------------------
+
+export function listMessages(jobId) {
+  return request('GET', `/jobs/${jobId}/messages`);
+}
+
+export function sendMessage(jobId, payload) {
+  return request('POST', `/jobs/${jobId}/messages`, payload);
+}
+
+export function listPromotions(jobId) {
+  return request('GET', `/jobs/${jobId}/promotions`);
+}
+
+// A person answering the question a flagged message raised. This is the only
+// call in the whole client that can turn a message into a dispatch change, and
+// it exists precisely so that nothing else can.
+export function confirmPromotion(promotionId, decision) {
+  return request('POST', `/promotions/${promotionId}/confirm`, { decision });
+}

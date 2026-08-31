@@ -60,6 +60,23 @@
       <!-- ================= THE JOB IN HAND ================= -->
       <div data-panel="ladder" class="mb-4"></div>
 
+      <!-- Location and access corrections a driver's message proposed. The
+           technician is better placed than the driver to judge a claim about
+           the road they are driving; safety is the other way round and never
+           appears here. -->
+      <div data-panel="promotions"></div>
+
+      <h2 class="h6">Messages</h2>
+      <div class="card mb-4" data-panel="chat">
+        <div class="card-body">
+          <div class="chat-thread" data-field="chat-messages"></div>
+          <div class="d-flex gap-2 mt-2">
+            <input id="chat-input" class="form-control" placeholder="Message the driver" />
+            <button class="btn btn-primary" data-action="send-message">Send</button>
+          </div>
+        </div>
+      </div>
+
       <h2 class="h6">Event trail</h2>
       <ul class="list-group" data-panel="job-events"></ul>
     </div>

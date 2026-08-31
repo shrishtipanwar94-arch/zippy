@@ -34,6 +34,7 @@ import type { Prisma, PrismaClient, SagaState } from '@prisma/client';
 import { appendJobEvent } from '../intake/events.js';
 import { createHold, releaseHold, consumeHold } from './holds.js';
 import { proposeOffer, respondToOffer } from './offers.js';
+import { runPublishingTransaction } from '../realtime/transaction.js';
 
 export const TERMINAL_STATES: SagaState[] = ['COMMITTED', 'REQUEUED'];
 
@@ -226,7 +227,7 @@ export async function commitSaga(db: PrismaClient, sagaId: string): Promise<Saga
     return 'REQUEUED';
   }
 
-  await db.$transaction(async (tx) => {
+  await runPublishingTransaction(db, async (tx) => {
     await tx.job.update({
       where: { id: saga.jobId },
       data: {
@@ -297,7 +298,7 @@ export async function compensateSaga(
       where: { id: offer.id, status: { in: ['PROPOSED', 'ACCEPTED'] } },
       data: { status: 'WITHDRAWN', respondedAt: new Date() },
     });
-    await db.$transaction(async (tx) => {
+    await runPublishingTransaction(db, async (tx) => {
       await appendJobEvent(tx, {
         jobId: saga.jobId,
         eventType: wasAccepted ? 'TECHNICIAN_RELEASED_AFTER_ACCEPT' : 'TECHNICIAN_OFFER_WITHDRAWN',
@@ -326,7 +327,7 @@ async function finishAsRequeued(
   jobId: string,
   reason: string,
 ): Promise<void> {
-  await db.$transaction(async (tx) => {
+  await runPublishingTransaction(db, async (tx) => {
     await tx.dispatchOffer.update({
       where: { id: sagaId },
       data: { state: 'REQUEUED', decidedAt: new Date() },

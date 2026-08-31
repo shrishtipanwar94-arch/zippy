@@ -245,3 +245,53 @@ body.technician {
 .technician .job-card {
   border-left: 4px solid var(--ok);
 }
+
+/* ---------------------------------------------------------------------------
+ * PHASE 15b — chat, and the card that asks a human.
+ *
+ * The confirmation card is deliberately the loudest thing on either screen. It
+ * is the one place in the product where a person is being asked to turn a
+ * sentence into a dispatch change, and a card people skim past defeats the
+ * entire design — the machinery underneath is built so that nothing happens
+ * until somebody answers it.
+ */
+
+.chat-thread {
+  max-height: 16rem;
+  overflow-y: auto;
+}
+
+.chat-bubble {
+  border-radius: 0.5rem;
+  padding: 0.5rem 0.75rem;
+  margin-bottom: 0.5rem;
+  max-width: 85%;
+}
+
+/* Sides, not colours alone: the sender is also named on every bubble, because
+ * colour is never the only signal (docs/UI.md). */
+.chat-mine {
+  background: var(--surface);
+  border: 1px solid var(--accent);
+  margin-left: auto;
+}
+
+.chat-theirs {
+  background: var(--surface-alt);
+  border: 1px solid var(--border);
+}
+
+.chat-photo {
+  display: block;
+  max-width: 100%;
+  border-radius: 0.375rem;
+  margin: 0.25rem 0;
+}
+
+/* Amber, not red. This is a question, not a failure — red is reserved for
+ * HIGH_RISK and for things that have gone wrong. The card asks; only the
+ * driver's answer makes the job high risk. */
+.promotion-card {
+  border: 2px solid var(--accent);
+  background: var(--surface-alt);
+}

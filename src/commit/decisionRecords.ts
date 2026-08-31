@@ -21,6 +21,7 @@
 import type { Prisma, PrismaClient } from '@prisma/client';
 import { appendJobEvent } from '../intake/events.js';
 import { isUniqueViolation } from '../infra/prismaErrors.js';
+import { runPublishingTransaction } from '../realtime/transaction.js';
 
 // The plan the solver puts forward when nobody says otherwise. Fixed here
 // rather than chosen per run, and it matches the vector the Phase 10 harness
@@ -109,7 +110,7 @@ export async function selectPlan(
   // leave the loser's first few jobs written before it discovered it had lost.
   // Rolling the lot back means the winner's plan is the only one on the record.
   try {
-    await db.$transaction(async (tx) => {
+    await runPublishingTransaction(db, async (tx) => {
       for (const assignment of assignments) {
         const forJob = optionsByJob.get(assignment.jobId) ?? [];
         const selected = forJob.find(

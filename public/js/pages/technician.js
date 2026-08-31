@@ -30,12 +30,15 @@ import { render as renderSession } from '../panels/session.js';
 import { render as renderOffers } from '../panels/technicianOffer.js';
 import { render as renderLadder, renderOutbox } from '../panels/technicianLadder.js';
 import { render as renderJobDetail } from '../panels/jobDetail.js';
+import { loadChat, registerChatPanels, wireChatActions } from '../chatActions.js';
 
 registerPanel(renderSession);
 registerPanel(renderOutbox);
 registerPanel(renderOffers);
 registerPanel(renderLadder);
 registerPanel(renderJobDetail);
+registerChatPanels();
+wireChatActions();
 
 function value(selector) {
   return document.querySelector(selector)?.value.trim() ?? '';
@@ -69,7 +72,10 @@ async function refreshWork() {
     setJobs(work.jobs.map((job) => ({ id: job.jobId, status: job.status, safetyLevel: job.safetyLevel })));
     for (const job of work.jobs) subscribeToJob(job.jobId);
     for (const offer of work.offers) subscribeToJob(offer.jobId);
-    if (!getState().activeJobId && work.jobs.length > 0) setActiveJob(work.jobs[0].jobId);
+    if (!getState().activeJobId && work.jobs.length > 0) {
+      setActiveJob(work.jobs[0].jobId);
+      await loadChat(work.jobs[0].jobId);
+    }
     setError(null);
   } catch (error) {
     setError(error.message);

@@ -28,6 +28,7 @@ import type { PrismaClient } from '@prisma/client';
 import { travelTime } from '../infra/routing.js';
 import { appendJobEvent } from '../intake/events.js';
 import { logger } from '../infra/logger.js';
+import { runPublishingTransaction } from '../realtime/transaction.js';
 
 export type ArrivalEstimate = {
   etaSeconds: number;
@@ -65,7 +66,7 @@ export async function recordArrivalEstimate(
   const etaSeconds = Math.round(estimate.minutes * 60);
   const arrivingAt = new Date(Date.now() + etaSeconds * 1000);
 
-  await db.$transaction(async (tx) => {
+  await runPublishingTransaction(db, async (tx) => {
     await tx.etaEstimate.create({
       data: {
         jobId: job.id,

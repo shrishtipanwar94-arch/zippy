@@ -23,6 +23,7 @@ import type { PrismaClient } from '@prisma/client';
 import type { OfferStatus } from '@prisma/client';
 import { appendJobEvent } from '../intake/events.js';
 import { scheduleOfferExpiry } from '../workers/offerExpiry.js';
+import { runPublishingTransaction } from '../realtime/transaction.js';
 
 // How long a technician has to answer before the offer times out and the job
 // goes back to the solver. Short: a roadside job that sits waiting on an
@@ -49,7 +50,7 @@ export async function proposeOffer(
   const ttlMs = input.ttlMs ?? DEFAULT_OFFER_TTL_MS;
   const expiresAt = new Date(Date.now() + ttlMs);
 
-  const offer = await db.$transaction(async (tx) => {
+  const offer = await runPublishingTransaction(db, async (tx) => {
     const created = await tx.technicianOffer.create({
       data: {
         jobId: input.jobId,
@@ -129,7 +130,7 @@ async function transitionOffer(
   db: PrismaClient,
   input: { offerId: string; to: OfferStatus; at: Date; onlyIfExpired: boolean },
 ): Promise<OfferOutcome> {
-  return db.$transaction(async (tx) => {
+  return runPublishingTransaction(db, async (tx) => {
     const offer = await tx.technicianOffer.findUnique({
       where: { id: input.offerId },
       select: { id: true, jobId: true, technicianId: true, status: true, sentAt: true, expiresAt: true },

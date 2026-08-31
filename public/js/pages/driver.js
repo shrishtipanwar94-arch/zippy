@@ -29,11 +29,14 @@ import { render as renderSession } from '../panels/session.js';
 import { render as renderRequest, readSafetyAnswers } from '../panels/driverRequest.js';
 import { render as renderIntake } from '../panels/intake.js';
 import { render as renderStatus } from '../panels/driverStatus.js';
+import { loadChat, registerChatPanels, wireChatActions } from '../chatActions.js';
 
 registerPanel(renderSession);
 registerPanel(renderRequest);
 registerPanel(renderIntake);
 registerPanel(renderStatus);
+registerChatPanels();
+wireChatActions();
 
 function value(selector) {
   return document.querySelector(selector).value.trim();
@@ -159,6 +162,7 @@ document.querySelector('[data-action="report"]').addEventListener('click', async
     subscribeToJob(created.jobId);
     setError(null);
     await refreshDriverView();
+    await loadChat(created.jobId);
   } catch (error) {
     setError(error.message);
   }

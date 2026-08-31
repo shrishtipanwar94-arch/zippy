@@ -42,6 +42,16 @@ export type Resource =
   // without being the person standing next to it — only the technician who was
   // sent may say they have arrived.
   | 'technicianAction'
+  // Chat on a job, and the flagged messages waiting on a human. Two resources
+  // rather than one: reading a conversation and turning part of it into a
+  // dispatch change are different acts, and only the second writes to the job.
+  // WHICH promotions a given role may confirm is a further question, and
+  // deliberately not answered here — it depends on the promotion's KIND, not
+  // only on the role (a dispatcher may confirm a location correction and may
+  // not confirm a safety change, because they cannot see the traffic). That
+  // rule lives in src/domain/promotionPolicy.ts.
+  | 'chatMessage'
+  | 'eventPromotion'
   | 'actionRequest'
   // Taking one of the solver's competing plans. Its own resource because it is
   // the one console action that WRITES — everything else the console does is a
@@ -55,6 +65,10 @@ const PERMISSIONS: PermissionTable = {
   DRIVER: {
     job: ['read', 'create'],
     driver: ['read'],
+    chatMessage: ['read', 'create'],
+    // A driver confirms exactly one KIND of promotion — a safety change — and
+    // that narrowing is promotionPolicy's, not this table's.
+    eventPromotion: ['read', 'update'],
   },
   TECHNICIAN: {
     job: ['read', 'update'],
@@ -66,6 +80,8 @@ const PERMISSIONS: PermissionTable = {
     // decline an offer; climb the status ladder; enter the driver's
     // completion code.
     technicianAction: ['read', 'update'],
+    chatMessage: ['read', 'create'],
+    eventPromotion: ['read', 'update'],
   },
   DISPATCHER: {
     job: ['read', 'create', 'update', 'delete'],
@@ -77,6 +93,8 @@ const PERMISSIONS: PermissionTable = {
     // reassignment and signs off an escalation; nobody else sees either.
     actionRequest: ['read', 'update'],
     planSelection: ['update'],
+    chatMessage: ['read', 'create'],
+    eventPromotion: ['read', 'update'],
     // Bull Board at /admin/queues — reads queue state, can retry or discard a
     // job. An operator surface, so it gets the operator role.
     queueAdmin: ['read'],

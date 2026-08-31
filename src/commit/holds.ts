@@ -29,6 +29,7 @@
 import { Prisma } from '@prisma/client';
 import type { PrismaClient } from '@prisma/client';
 import { appendJobEvent } from '../intake/events.js';
+import { runPublishingTransaction } from '../realtime/transaction.js';
 
 // How long a hold survives without being consumed or released. Long enough
 // for a technician to answer their phone, short enough that a unit is not
@@ -58,7 +59,7 @@ export async function createHold(
 ): Promise<HoldOutcome> {
   const ttlMs = input.ttlMs ?? DEFAULT_HOLD_TTL_MS;
 
-  return db.$transaction(async (tx) => {
+  return runPublishingTransaction(db, async (tx) => {
     // THE CONDITIONAL UPDATE. Zero rows affected means we lost the race.
     const claimed = await tx.$executeRaw`
       UPDATE units
@@ -135,7 +136,7 @@ export async function releaseHold(
   db: PrismaClient,
   input: ReleaseHoldInput,
 ): Promise<ReleaseOutcome> {
-  return db.$transaction(async (tx) => {
+  return runPublishingTransaction(db, async (tx) => {
     const hold = await tx.unitHold.findUnique({
       where: { id: input.holdId },
       select: { id: true, unitId: true, jobId: true, status: true, version: true },
@@ -202,7 +203,7 @@ export async function consumeHold(
 ): Promise<ConsumeOutcome> {
   const at = input.at ?? new Date();
 
-  return db.$transaction(async (tx) => {
+  return runPublishingTransaction(db, async (tx) => {
     const consumed = await tx.$executeRaw`
       UPDATE unit_holds
          SET status = 'CONSUMED', version = version + 1

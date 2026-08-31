@@ -15,6 +15,7 @@ import { diagnosisRouter } from './diagnosis.js';
 import { actionsRouter } from './actions.js';
 import { technicianRouter } from './technician.js';
 import { driverRouter } from './driver.js';
+import { chatRouter } from './chat.js';
 import { consoleRouter } from './console.js';
 import { authenticate, requirePermission } from './middleware/authenticate.js';
 import { createQueueAdminRouter, BULL_BOARD_PATH } from '../queues/board.js';
@@ -78,6 +79,7 @@ export function createApp(): Express {
   app.use(actionsRouter);
   app.use(technicianRouter);
   app.use(driverRouter);
+  app.use(chatRouter);
   app.use(consoleRouter);
 
   // Bull Board — dispatcher-only. Mounted with explicit `authenticate` +

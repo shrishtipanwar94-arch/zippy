@@ -95,6 +95,19 @@ const state = {
   // property the test suite can check instead of a habit.
   driverView: null,
 
+  // CHAT AND THE FLAGGED MESSAGES WAITING ON A HUMAN.
+  //
+  // `promotions` holds only what is still FLAGGED. A confirmed or dismissed one
+  // is removed rather than marked, because a card whose buttons no longer do
+  // anything is worse than no card — and the server is the record of what was
+  // decided, not this array.
+  chat: { messages: [], draft: '' },
+  promotions: [],
+  // The last coalesced update the server sent. One at a time: a re-plan
+  // produces exactly one of these (workers/notification.ts), so a list would
+  // only ever hold one thing.
+  notification: null,
+
   // The technician's board: open offers and the job in hand.
   work: { offers: [], jobs: [] },
   // Re-read every second so an offer countdown ticks. The countdown is derived
@@ -261,6 +274,43 @@ export function setActiveJob(jobId) {
 
 export function setRequestField(patch) {
   state.request = { ...state.request, ...patch };
+}
+
+export function setChatMessages(messages) {
+  state.chat.messages = messages;
+}
+
+// One message, from the socket. Keyed on the message id because the fan-out is
+// best-effort and a refetch can overlap a push — the same de-duplication rule
+// the timeline uses, for the same reason.
+export function pushChatMessage(message) {
+  if (state.chat.messages.some((existing) => existing.messageId === message.messageId)) return false;
+  state.chat.messages.push(message);
+  return true;
+}
+
+export function setChatDraft(text) {
+  state.chat.draft = text;
+}
+
+export function setPromotions(promotions) {
+  state.promotions = promotions;
+}
+
+export function pushPromotion(promotion) {
+  if (state.promotions.some((existing) => existing.promotionId === promotion.promotionId)) return false;
+  state.promotions.push(promotion);
+  return true;
+}
+
+export function removePromotion(promotionId) {
+  state.promotions = state.promotions.filter(
+    (promotion) => promotion.promotionId !== promotionId,
+  );
+}
+
+export function setNotification(notification) {
+  state.notification = notification;
 }
 
 export function setDriverView(view) {

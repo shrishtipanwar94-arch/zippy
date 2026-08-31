@@ -43,6 +43,7 @@ import type { LadderStep } from '../domain/jobLadder.js';
 import { appendJobEvent } from '../intake/events.js';
 import { isUniqueViolation } from '../infra/prismaErrors.js';
 import { ensureCompletionCode, verifyCompletionCode } from './completionCode.js';
+import { runPublishingTransaction } from '../realtime/transaction.js';
 
 export type TechnicianActionInput = {
   jobId: string;
@@ -76,7 +77,7 @@ export async function applyTechnicianAction(
   input: TechnicianActionInput,
 ): Promise<TechnicianActionOutcome> {
   try {
-    return await db.$transaction((tx) => applyInsideTransaction(tx, input));
+    return await runPublishingTransaction(db, (tx) => applyInsideTransaction(tx, input));
   } catch (error) {
     if (!isUniqueViolation(error)) throw error;
     // The key has been seen. Everything the transaction did has rolled back,

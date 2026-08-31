@@ -53,10 +53,23 @@ export function render(state) {
     helper.hidden = !view.helper;
   }
 
+  renderNotification(state.notification);
   renderGuidance(panel, view.guidance);
   renderEstimate(panel, view.estimate);
   renderCode(panel, view.completionCode);
   renderUpdates(view.updates);
+}
+
+// ONE COALESCED UPDATE, never a feed. A re-plan fires six events in ninety
+// seconds and the driver gets a single message about where things ended up
+// (src/workers/notification.ts) — so this is one banner holding the latest,
+// not a list that would defeat the coalescing it renders.
+function renderNotification(notification) {
+  const banner = document.querySelector('[data-field="notification"]');
+  if (!banner) return;
+  const text = notification ? notification.body : '';
+  if (banner.textContent !== text) banner.textContent = text;
+  banner.hidden = !notification;
 }
 
 // The while-you-wait card. The server picks it from the safety level and

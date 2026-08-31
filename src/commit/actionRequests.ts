@@ -17,6 +17,7 @@ import type { ActionStatus, Prisma, PrismaClient } from '@prisma/client';
 import { tierFor, executesImmediately } from '../domain/actionTiers.js';
 import type { ActionKind } from '../domain/actionTiers.js';
 import { appendJobEvent } from '../intake/events.js';
+import { runPublishingTransaction } from '../realtime/transaction.js';
 
 export type RequestActionInput = {
   jobId: string;
@@ -42,7 +43,7 @@ export async function requestAction(
   const tier = tierFor(input.kind);
   const auto = executesImmediately(input.kind);
 
-  return db.$transaction(async (tx) => {
+  return runPublishingTransaction(db, async (tx) => {
     const action = await tx.actionRequest.create({
       data: {
         jobId: input.jobId,
@@ -101,7 +102,7 @@ export async function resolveAction(
   db: PrismaClient,
   input: ResolveInput,
 ): Promise<ResolveOutcome> {
-  return db.$transaction(async (tx) => {
+  return runPublishingTransaction(db, async (tx) => {
     const action = await tx.actionRequest.findUnique({
       where: { id: input.actionRequestId },
       select: { id: true, jobId: true, tier: true, kind: true, status: true },

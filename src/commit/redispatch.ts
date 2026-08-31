@@ -34,6 +34,8 @@ import { persistSolverRun } from './persistSolverRun.js';
 import { solve } from '../engine/solve.js';
 import { startSaga } from './saga.js';
 import { appendJobEvent } from '../intake/events.js';
+import { notifyDriverOfReplan } from '../workers/notification.js';
+import { runPublishingTransaction } from '../realtime/transaction.js';
 
 export type RedispatchOutcome =
   | { outcome: 'ESCALATED'; actionRequestId: string; reason: string }
@@ -110,17 +112,35 @@ export async function handleTrigger(
   });
   const solverRunId = await persistSolverRun(db, { outcome, trigger, jobId });
 
-  const plan = outcome.plans.find((candidate) => candidate.label === 'BALANCED');
+  // Read once, used twice: to pick the objective below, and to decide whether
+  // the answer actually changed.
+  const job = await db.job.findUniqueOrThrow({
+    where: { id: jobId },
+    select: { assignedUnitId: true, assignedTechnicianId: true, safetyLevel: true },
+  });
+
+  // THE OBJECTIVE FLIPS WHEN SAFETY DOES — Phase 15b.
+  //
+  // Every re-solve until now took the BALANCED plan. For a HIGH_RISK job that
+  // is the wrong trade: somebody is standing next to moving traffic, and the
+  // question stops being "who resolves this soonest and cheapest" and becomes
+  // "who gets there soonest". Invariant 4 already puts safety ABOVE cost when
+  // ranking options; this puts it above the choice of which cost function to
+  // rank with, which is the same argument applied one level up.
+  //
+  // FASTEST_RESOLUTION is not literally minimise-arrival — it weights expected
+  // time to RESOLUTION, which includes diagnosis and repair. It is the vector
+  // this codebase has that comes closest, and adding a fourth would change the
+  // plan count the console's competing-plans panel is built around. Recorded
+  // as a weakness rather than papered over.
+  const objective = job.safetyLevel === 'HIGH_RISK' ? 'FASTEST_RESOLUTION' : 'BALANCED';
+  const plan = outcome.plans.find((candidate) => candidate.label === objective);
   const assignment = plan?.assignments.find((candidate) => candidate.jobId === jobId);
   if (!assignment) {
     return { outcome: 'NO_OPTION', solverRunId };
   }
 
   // 4. THE SAME ANSWER IS NOT A CHANGE.
-  const job = await db.job.findUniqueOrThrow({
-    where: { id: jobId },
-    select: { assignedUnitId: true, assignedTechnicianId: true },
-  });
   if (
     job.assignedUnitId === assignment.unitId &&
     job.assignedTechnicianId === assignment.technicianId
@@ -261,6 +281,19 @@ export async function executeReassignment(
     return { outcome: 'SAGA_LOST_RACE', sagaId: saga.sagaId, reason: saga.reason };
   }
 
+  // ONE MESSAGE PER RE-PLAN, and this is the moment a re-plan becomes real.
+  // Not when the RECOMMEND was raised — a recommendation a dispatcher never
+  // takes changes nothing, and telling a driver about it would be telling them
+  // about a thought. Debounced on the job for ninety seconds, so the burst this
+  // is about to produce (release, requeue, hold, offer, accept, commit, ETA)
+  // collapses into one message describing where the job ended up. See
+  // workers/notification.ts.
+  await notifyDriverOfReplan(action.jobId, `reassignment:${action.kind}`).catch((error) => {
+    // A driver missing an update is not a reason to fail a reservation that
+    // has already started.
+    logger.warn({ err: error, jobId: action.jobId }, 'could not enqueue a replan notification');
+  });
+
   return {
     outcome: 'SAGA_STARTED',
     sagaId: saga.sagaId,
@@ -281,7 +314,7 @@ async function releaseCurrentCrew(
     actor: { role: string; id: string | null };
   },
 ): Promise<void> {
-  await db.$transaction(async (tx) => {
+  await runPublishingTransaction(db, async (tx) => {
     await tx.job.updateMany({
       where: { id: input.jobId, assignedTechnicianId: input.technicianId },
       data: {

@@ -871,3 +871,342 @@ rather than by a real dispatch — the full offer chain runs through the
 dispatcher's action queue, and the technician-facing half is what this phase
 built. The HTTP-level suite exercises the same endpoints against the real
 table.
+
+## Phase 15b — Chat and event promotion / 2026-08-31 / (pending)
+
+### Built
+
+No migration. Every table this phase needed — `conversations`, `messages`,
+`message_deliveries`, `attachments`, `event_promotions`, `notifications` —
+was created in Phase 1 and read for the first time here.
+
+**Domain — pure, no I/O**
+- `src/domain/messageClassifier.ts` — the rule table. `classifyMessage(body)`
+  returns zero or more proposals, each with the phrases that fired and a
+  payload. `locationShareClassification(coords)` gives the structured
+  "send my exact location" tap the same shape.
+- `src/domain/promotionPolicy.ts` — `confirmerFor`, `mayConfirm`, `promptFor`,
+  `escalatedSafetyLevel`. Who is asked, what they are asked, and the rule that
+  a safety level only ever goes up.
+
+**Chat and commit**
+- `src/chat/messages.ts` — `postMessage`: conversation, message, attachment,
+  location event, deliveries and the flags it raises, in one transaction.
+  `markDeliveriesSent`.
+- `src/commit/eventPromotions.ts` — `flagPromotions` (writes rows, touches
+  nothing else) and `confirmPromotion` (conditional update, applies the change,
+  writes provenance both ways, returns the trigger for the caller to fire).
+
+**API** — `GET/POST /jobs/:id/messages`, `GET /jobs/:id/promotions`,
+`POST /promotions/:id/confirm` (`src/api/chat.ts`). Two new permission
+resources: `chatMessage` and `eventPromotion`.
+
+**Realtime** — `publishChatMessage`, `publishPromotion`,
+`publishPromotionResolved`, `publishNotification` added to the one fan-out
+point, all to the JOB ROOM only.
+
+**Coalescing** — `src/workers/notification.ts` rewritten: `notifyDriverOfReplan`
+debounces on `job:<id>:replan` for ninety seconds; `processNotification` reads
+the job AT DELIVERY TIME and composes one message from `driverNarrative`.
+Hooked at exactly one call site — `executeReassignment`.
+
+**Dispatch** — `handleTrigger` now picks the `FASTEST_RESOLUTION` plan for a
+HIGH_RISK job instead of `BALANCED`.
+
+**A bug fix that is not this phase's** — `src/realtime/transaction.ts`, and
+every commit-layer transaction routed through it. See What broke.
+
+**Frontend** — `panels/chat.js`, `panels/promotions.js`, `chatActions.js`
+(shared by both pages); chat and confirmation markup on the driver and
+technician pages; chat CSS.
+
+**Tests** — `tests/eventPromotion.test.ts` (24),
+`tests/coalescedNotifications.test.ts` (6), `tests/jobEventPublishing.test.ts`
+(3). Suite: 31 files, 421 tests.
+
+### Decisions
+
+**Decision:** The classifier flags; a separate function applies; and there is
+no code path from one to the other that does not pass through a person.
+**Why:** Invariant 5. "A message silently rewriting a dispatch location is how
+a technician is sent to the wrong place with no audit trail." The guarantee is
+worth more than the feature, so it is structural rather than a rule people
+remember: `flagPromotions` cannot change a job (it only inserts), and
+`confirmPromotion` cannot be called without an actor and a decision.
+**Alternative:** Auto-apply high-confidence classifications.
+**Why not:** A rule table has no confidence to be high about, and the failure
+is silent and unattributable — the worst combination available.
+**Tradeoff:** Nothing improves until somebody taps. That is the design.
+
+**Decision:** A SAFETY change is confirmed by the DRIVER; location, access and
+diagnosis by an operator.
+**Why:** It is a question about who can KNOW, not who owns the job. The driver
+is the only person who can see whether they are blocking traffic; a dispatcher
+confirming it is guessing from a chat message, three minutes and a queue away,
+and those three minutes are the entire reason the escalation exists. Location
+and access invert it — "there's a divider between me and the technician" is a
+claim about the road network, better judged by whoever is driving it.
+**Alternative:** All confirmations to the dispatcher, as an operator queue.
+**Why not:** It would make the safety path slower than the thing it is racing.
+**Tradeoff:** Two audiences and two surfaces to build.
+
+**Decision:** RBAC says a role may touch promotions at all; `promotionPolicy`
+says which KIND. Two layers, deliberately.
+**Why:** `permissions.ts` answers "may this role do this action to this
+resource" and has no vocabulary for "…but only for these four values of a
+column". Bending it to fit would make the one readable table unreadable.
+**Tradeoff:** Someone asking "can a dispatcher confirm this?" reads two files.
+The route returns 403 with `confirmer` named, so the answer is also in the API.
+
+**Decision:** The re-solve runs AFTER the confirmation transaction, and the
+confirmation returns the trigger rather than firing it.
+**Why:** `handleTrigger` opens transactions of its own and runs a whole solve;
+doing that inside the confirmation would hold that transaction open across it.
+**Tradeoff:** A crash between commit and trigger leaves a job escalated but not
+re-solved. It is HIGH_RISK and correctly ranked; what is missing is a
+recommendation, and any later trigger produces one.
+
+**Decision:** One notification per re-plan, composed at DELIVERY time from the
+job as it then is.
+**Why:** The trap is to pick one of the six events, and it cannot work —
+whichever you pick describes a moment that may already be false when it lands.
+Waiting and then describing the SETTLED state is the only version that is
+always true. It also means the body comes from `driverNarrative.headlineFor`,
+the same map the live page uses, so a notification cannot contradict the screen
+it points at.
+**Alternative:** Send on the first event and suppress the rest.
+**Why not:** "Your technician has been released" as the only message a driver
+gets is worse than six messages.
+**Tradeoff:** Up to ninety seconds of silence during a re-plan. Their live page
+is still updating throughout; this is the push, not the screen.
+
+**Decision:** Hooked at `executeReassignment`, not at `handleTrigger`.
+**Why:** A RECOMMEND a dispatcher never takes changes nothing, and notifying
+there would be telling a driver about a thought. The plan becomes real when the
+reservation starts.
+**Tradeoff:** A re-plan that stalls in the action queue produces no message.
+Correct — nothing has happened to them yet.
+
+**Decision:** Chat goes to the JOB ROOM only, not the zone or tenant rooms a
+job event goes to.
+**Why:** A zone room is every job in a neighbourhood. Pushing every driver's
+conversation into it puts private messages in front of operators who never
+asked for that job, and drowns the ones who did.
+**Tradeoff:** A dispatcher must subscribe to a job to see its chat, exactly as
+the driver and technician do.
+
+**Decision:** A HIGH_RISK job re-solves on `FASTEST_RESOLUTION`, not
+`BALANCED`.
+**Why:** The brief's chain is "safety escalates → objective flips". Invariant 4
+already puts safety above cost when ranking options; this puts it above the
+choice of WHICH cost function to rank with, which is the same argument one
+level up.
+**Tradeoff, stated plainly:** `FASTEST_RESOLUTION` is not literally
+minimise-arrival — it weights expected time to RESOLUTION, which includes
+diagnosis and repair. It is the closest vector this codebase has. A fourth
+would change the plan count Phase 14's competing-plans panel is built around,
+so it is recorded as a weakness rather than smuggled in.
+
+**Decision:** "Whose message is this" is derived in the browser from the
+reader's own role, not sent by the server.
+**Why:** Found by using it. A room fan-out cannot stamp "yours" per recipient,
+so a server-side `mine` existed on the fetched copy and not the pushed one —
+and the driver watched their own message relabel itself from "You" to "Driver"
+a second after sending it. One fact, one source.
+
+### Concurrency
+
+**Scenario:** Two operators press confirm on the same flagged message.
+**What races:** Two writers on one `event_promotions` row, and each would then
+apply the change and write a provenance event.
+**Why dangerous:** One sentence would produce two applied changes and two
+events describing the same correction twice — and for a location correction,
+two moves of the dispatch position.
+**How handled:** A conditional `updateMany … WHERE status = 'FLAGGED'` claims
+the row before anything is applied, the same shape holds.ts and offers.ts use.
+The loser gets zero rows, reads the current status and returns ALREADY_RESOLVED.
+**Assumption relied on:** the claim and the effect are in one transaction, so a
+winner that fails afterwards releases the claim with it. Proved with a real
+`Promise.all` of two concurrent confirms asserting exactly one APPLIED and
+exactly one provenance event carrying that promotion's id.
+
+**Scenario:** Two people type into a job that has no conversation yet.
+**How handled:** `conversations.job_id` is UNIQUE. The loser's create fails,
+and because it is inside the caller's message transaction the whole message
+rolls back and the client retries. A read-then-create would give the job two
+conversations and split its history.
+
+**Scenario:** A re-plan fires seven events in ninety seconds while the driver's
+phone is connected.
+**How handled:** The notification is debounced on the job, so one queued job
+exists however many triggers arrive; and `runIdempotently` on the queue's own
+delivery guarantee means a redelivery after a crash writes no second copy.
+
+### Weaknesses introduced
+
+1. **The classifier is a phrase list and will embarrass itself.** "I am not
+   blocking anyone" contains "blocking" and raises a safety flag. That is the
+   intended direction — flag aggressively, false negatives are the dangerous
+   one — but it means a driver may be asked a question whose answer is
+   obviously no. Phase 16 replaces the producer; the confirmation shape is what
+   makes that swap safe.
+2. **A photo is a data URI in a Postgres text column, capped at 400KB.** There
+   is no object store in this project. It works, it is honest, and it is not
+   how anyone would build this: no resizing, no content scanning, no CDN, and
+   `messages` rows that are three orders of magnitude larger than the rest.
+3. **`ACCESS_RESTRICTION` confirms to a note and nothing more.** There is
+   nowhere on `jobs` to put "there is a divider between the van and the car",
+   and inventing a text column the feasibility engine cannot read would look
+   like a feature. Making access a real routing constraint needs the road
+   graph.
+4. **A location correction from text can only set a road POSITION.** Coordinates
+   come only from the structured tap. "I'm 200m further up" is flagged, and
+   confirming it records the sentence without moving anything.
+5. **The dispatcher console has no promotions panel.** Operator-confirmable
+   cards appear on the technician's page, so a job with no assigned technician
+   and a flagged location correction has nobody looking at it until one is
+   assigned. The API is there and a dispatcher may call it; the surface is not.
+6. **A confirmed promotion can be re-flagged by the next message.** Nothing
+   deduplicates "we're blocking the left lane" sent three times, so a driver can
+   be asked the same question repeatedly. Answering it a second time is
+   harmless — the level does not move twice, and it records
+   `SAFETY_LEVEL_CONFIRMED` with `changed: false` — but it is noise.
+7. **The ninety-second coalescing window is a guess.** It is the brief's own
+   figure. A re-plan that takes longer produces one truthful message about an
+   unsettled state, which is the right way to be wrong, but the number is not
+   measured.
+8. **`MessageDelivery` records what was attempted, not what arrived.** It is
+   marked SENT after the socket fan-out, which is best-effort. Nothing reports
+   back — deliberately, because that is a read receipt.
+9. **Chat has no pagination.** Newest 100 messages, no cursor. Fine for a
+   roadside incident; not fine for anything longer.
+
+### Concepts now genuinely in use
+
+- Human-in-the-loop promotion, with two-way provenance: a dispatch change names
+  the sentence that caused it, and the sentence names what it did.
+- Confirmation authority as a function of WHAT IS KNOWABLE rather than of
+  ownership — the reason a driver outranks a dispatcher on exactly one question.
+- Coalescing by describing the settled state rather than by picking a
+  representative event.
+- The transactional outbox, finally used by every writer rather than one.
+
+### Interview angle
+
+"A customer types something that changes the dispatch. How do you act on it
+without letting a chat message move a van?" Flag, never apply; route the
+confirmation to whoever can actually KNOW the answer — safety to the driver,
+because they are the only one who can see the traffic and a dispatcher is three
+minutes too slow; and write provenance both ways so any change can be traced
+back to the sentence that caused it.
+
+"A re-plan fires seven events in ninety seconds. What does the customer see?"
+One message, composed when it is sent rather than when it was triggered, from
+the same sentence map their live page uses — because any of those seven events
+describes a moment that may already be false by the time it lands.
+
+### What broke
+
+- **THE BUG THIS PHASE ACTUALLY FOUND, AND IT WAS NOT THIS PHASE'S.** The
+  driver tapped Yes, the database did everything correctly — safety escalated,
+  the event written, a solver run and a RECOMMEND raised — and the page did not
+  change. `appendJobEvent` records into an outbox buffer that only exists inside
+  `collectJobEvents(...)`, and the only caller of that was
+  `runIntakeTransaction`. So intake's events were fanned out and **every other
+  writer's were not**: the saga committing a reservation, an offer being
+  accepted, Phase 15's technician ladder, this phase's promotions — all stored,
+  none broadcast.
+
+  It survived four phases because it looked like it worked. `recordForPublish`
+  finding no buffer is CORRECT for a seed or a script and indistinguishable
+  from a dropped event for a route. Every client hid it: a reconnect replays
+  from `job_events`, so a reload always showed the right thing, and each
+  surface refetches after its own action. Only a second browser watching a job
+  somebody ELSE was changing would show nothing — which is exactly what a
+  promotion confirmed on a driver's phone is.
+
+  Fixed with `src/realtime/transaction.ts` — the wrapper every writer needed,
+  the same two lines `runIntakeTransaction` already had — and all eleven
+  commit-layer and API transactions routed through it.
+  `tests/jobEventPublishing.test.ts` asserts no file that writes a job event
+  opens a bare `$transaction`, which turns a silent regression into a failing
+  build: the property the original bug lacked entirely.
+
+- **The chat router was never mounted, and every test 404'd.** The script that
+  added the permission entries and the `app.use` line hit an assertion halfway
+  and wrote nothing; the permissions half was re-run and the mount was not.
+  Twelve tests failed for one missing line. Worth recording because the
+  symptom — 404 on an unauthenticated request where 401 was expected — reads
+  like an auth bug and is not.
+
+- **Three tests passed alone and failed in the parallel suite.** They counted
+  `job_events` by TYPE, and the table is append-only so a re-run accumulates.
+  This is the same lesson as Phase 15's replay test, now hit from a third
+  direction, and the fix was better than a delta: count events carrying THIS
+  promotion's id (`payload -> promotionId`), which is the claim actually being
+  made — "confirming twice applies once" — and is true on the hundredth run.
+
+- **Two fixtures collided on a natural key.** `vehicle_profiles` is unique on
+  (make, model, year_from, year_to), and both this phase's fixture and Phase
+  15's reached for a Tata Tiago 2020-2025. A new instance of the CLAUDE.md
+  gotcha: a fixture that OWNS a row must name it so nothing else can, so the
+  profile is now "Coalesce Motors Fixture".
+
+- **The driver's own message relabelled itself a second after sending.** It
+  said "You" from the HTTP fetch and "Driver" when the socket copy arrived,
+  because `mine` was computed server-side per request and a room fan-out cannot
+  stamp it per recipient. One fact with two sources. The server now sends
+  neither the sender id nor a `mine` flag, and the browser derives it from the
+  reader's own role.
+
+- **A tool error that had already run made a message look auto-applied.** The
+  browser call reported the extension disconnected; the JavaScript had executed
+  anyway, so the retry sent the sentence and confirmed it a second time, and
+  the "before" reading showed HIGH_RISK. The promotion table settled it —
+  timestamps showed two confirmations two seconds apart — and the clean re-run
+  below is the one that counts. The same lesson as the CLAUDE.md note about
+  rejected Bash calls: a failed tool call may still have done the thing.
+
+### The phase check, performed
+
+One uninterrupted run in Chrome, driven through the page's own handlers:
+
+```
+job cmthhgt8x0026oqvgo845wvq4
+  at intake                    "While you wait"          (NORMAL)
+  after "we're blocking the left lane"
+                               "While you wait"          <- NOTHING CHANGED
+  card shown to the driver     "Are you blocking moving traffic?"
+  after tapping Yes            "Please move somewhere safe"  (HIGH_RISK)
+```
+
+The while-you-wait card is driven purely by the safety level, and nothing
+refetched it but the socket — so it is also the proof that the fan-out fix
+works.
+
+The first sentence of the check, on its own job:
+
+```
+event_promotions   LOCATION_CORRECTION | FLAGGED | job_event_id NULL
+                   payload: {"roadPosition": "SERVICE_ROAD",
+                             "matched": ["service road", "not the highway"]}
+jobs               road_position SHOULDER, on_highway t, version 0
+job_events         the five intake events, and nothing else
+```
+
+Flagged, with the position it proposes and the words that fired — and the job
+untouched down to the version column.
+
+And the re-rank, from the confirmed job:
+
+```
+event_promotions   SAFETY_CHANGE       | CONFIRMED | DRIVER
+                   LOCATION_CORRECTION | FLAGGED   |          <- routed to an operator
+job_events         … SAFETY_LEVEL_CHANGED, ACTION_RECOMMEND
+solver_runs        SAFETY_LEVEL_CHANGED | 24 options | 2 feasible
+action_requests    REASSIGN_AFTER_TRIGGER | RECOMMEND
+                   "confirmed from a message: safety change"
+```
+
+One sentence raised two proposals for two different people, which is the
+routing rule working rather than noise. Neither page logs a console error.

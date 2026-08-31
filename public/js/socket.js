@@ -15,6 +15,10 @@ import {
   cursorFor,
   getState,
   notifyJobEvent,
+  pushChatMessage,
+  pushPromotion,
+  removePromotion,
+  setNotification,
   pushTimelineEvent,
   render,
   resetJobHistory,
@@ -64,6 +68,31 @@ export function connect() {
     // driver view" rather than "patch this object". See state.onJobEvent.
     notifyJobEvent(event.jobId);
     if (jobChanged || timelineChanged) render();
+  });
+
+  // CHAT, PROMOTIONS AND NOTIFICATIONS — Phase 15b. Three more messages on the
+  // same socket, delivered to the JOB ROOM only (see realtime/publish.ts for
+  // why they do not go to the zone room the way job events do).
+  socket.on('chat:message', (message) => {
+    if (pushChatMessage(message)) render();
+  });
+
+  // A flagged message arriving for whoever must confirm it. NOTHING HAS
+  // CHANGED on the job when this lands — that is the whole design, and the
+  // card this renders is the human in the middle.
+  socket.on('promotion:flagged', (promotion) => {
+    if (pushPromotion(promotion)) render();
+  });
+
+  socket.on('promotion:resolved', (resolved) => {
+    removePromotion(resolved.promotionId);
+    render();
+  });
+
+  // ONE per re-plan, after the plan has settled. See workers/notification.ts.
+  socket.on('notification:new', (notification) => {
+    setNotification(notification);
+    render();
   });
 
   socket.on('job:replay', (replay) => {

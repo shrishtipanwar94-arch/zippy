@@ -221,6 +221,36 @@
           </div>
         </div>
 
+        <!-- THE CONFIRMATION CARD. A flagged message sits here until the
+             driver answers it, and NOTHING about the job has changed while it
+             is on screen. The question and the button labels come from the
+             server's policy table, not from this markup — see
+             src/domain/promotionPolicy.ts. -->
+        <div data-panel="promotions"></div>
+
+        <!-- ONE coalesced update per re-plan, never six. -->
+        <div class="alert alert-info" data-field="notification" hidden></div>
+
+        <h2 class="h6">Messages</h2>
+        <div class="card mb-3" data-panel="chat">
+          <div class="card-body">
+            <div class="chat-thread" data-field="chat-messages"></div>
+            <div class="d-flex gap-2 mt-2">
+              <input id="chat-input" class="form-control" placeholder="Tell us anything that would help" />
+              <button class="btn btn-primary" data-action="send-message">Send</button>
+            </div>
+            <div class="d-flex gap-2 mt-2">
+              <button class="btn btn-outline-light btn-sm" data-action="send-location">
+                Send my exact location
+              </button>
+              <label class="btn btn-outline-light btn-sm mb-0">
+                Send a photo
+                <input id="chat-photo" type="file" accept="image/*" hidden />
+              </label>
+            </div>
+          </div>
+        </div>
+
         <h2 class="h6">What has happened so far</h2>
         <ul class="list-group" data-panel="driver-updates"></ul>
       </div>
