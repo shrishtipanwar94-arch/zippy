@@ -21,6 +21,7 @@ import { recordTechnicianDecision } from '../commit/saga.js';
 import { applyTechnicianAction } from '../commit/technicianActions.js';
 import { recordArrivalEstimateQuietly } from '../commit/arrivalEstimate.js';
 import { authoriseCalloutQuietly, captureOnCompletionQuietly } from '../commit/payments.js';
+import { recordJobCompletionQuietly } from '../commit/earnings.js';
 import { LADDER_STEPS, nextStepFor } from '../domain/jobLadder.js';
 
 export const technicianRouter = Router();
@@ -251,6 +252,11 @@ technicianRouter.post(
     // capture is money to chase, not a reason to refuse to finish a job.
     if (result.outcome === 'APPLIED' && body.step === 'COMPLETE') {
       await captureOnCompletionQuietly(prismaBase, jobId);
+      // AND THE BOOKS. The capture moves the money; this records who earned
+      // what. Separate calls because they fail independently — a gateway being
+      // down does not mean the technician did not earn their share, and the
+      // ledger records what is OWED rather than what has physically moved.
+      await recordJobCompletionQuietly(prismaBase, jobId);
     }
 
     // EVERY OUTCOME IS 200, INCLUDING REJECTED. A queued action is replayed

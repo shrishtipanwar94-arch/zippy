@@ -2013,3 +2013,291 @@ driver-walkin-1    (no contract)    settlementPath WALK_IN
 ```
 
 Both pinned on the job row and on the `JOB_CREATED` payload.
+
+## Phase 15c Stage 4 — The ledger / 2026-09-01 / PARTIAL
+
+Stage 4 of Phase 15c only: double-entry accounts, the balance invariant, job
+completion, cash collection, and cancellation compensation wired into the
+saga. Payouts (section 5) are not built — `payoutDecision` is the RULE that
+stage must obey and is tested, but nothing creates a PayoutBatch.
+
+### Built
+
+**Migration** `20260901120000_phase15c_ledger_balance` — a DEFERRED CONSTRAINT
+TRIGGER enforcing `SUM(amount_paise) = 0` per `transaction_id`, and a unique
+index on `(transaction_id, account_id)`.
+
+**Domain — pure**
+- `src/domain/ledger.ts` — the chart of accounts, `isBalanced`/`imbalanceOf`,
+  `commissionPaise`, the three transaction shapes (`completionLines`,
+  `cashCollectionLines`, `compensationLines`), and `payoutDecision`.
+
+**Commit**
+- `src/commit/ledger.ts` — `postTransaction`, `ensurePlatformAccounts`,
+  `accountBalance`, `technicianBalance`, `UnbalancedTransactionError`.
+- `src/commit/earnings.ts` — `recordJobCompletion`, `recordCashCollection`,
+  `recordReleaseCompensation`, and the `Quietly` wrappers.
+
+**Wiring** — completion books earnings from the technician's COMPLETE step,
+alongside the capture; `compensateSaga` calls `recordReleaseCompensationQuietly`
+for a technician who had ACCEPTED.
+
+**Seed** — `prisma/seed/ledgerAccounts.ts`, the platform's three accounts.
+
+**Tests** — `tests/helpers/ledgerBalance.ts` (the assertion helper) and
+`tests/ledger.test.ts` (29). Suite: 35 files, 531 tests.
+
+### Decisions
+
+**Decision:** THE INVARIANT IS ENFORCED BY POSTGRES, not only by application
+code. A deferred constraint trigger rejects any commit where a transaction_id
+does not sum to zero.
+**Why:** This is the best decision in the stage. The Phase 1 schema comment
+said the balance would be "checked in /src/commit at write time", and that is
+worth doing and is not enough: it holds only for money written through the one
+function that remembers to check. A ledger's entire value is that the property
+is true of every row anybody ever wrote — including rows from a repair script,
+a migration, or a future phase that never read the file. Proved by inserting an
+unbalanced entry straight through psql and watching Postgres refuse it.
+**Alternative:** Check in `postTransaction` only.
+**Why not:** It makes the invariant a convention. Conventions are what a ledger
+exists to stop relying on.
+**Tradeoff:** DEFERRABLE INITIALLY DEFERRED means a balanced transaction must
+be written in ONE database transaction. Splitting one transaction_id across two
+commits fails at the first — which is correct: half a double entry is not a
+smaller truth, it is a wrong one.
+
+**Decision:** Three layers guard one invariant.
+**Why:** They catch different things. The domain builds the lines (pure,
+enumerable, tested); `postTransaction` refuses an unbalanced set BEFORE
+touching the database so the error names the imbalance in paise; the trigger
+refuses the commit anyway. Layer 2 without layer 3 is a convention; layer 3
+without layer 2 is a worse error message.
+
+**Decision:** A unique index on `(transaction_id, account_id)` buys idempotency
+for free.
+**Why:** Every transaction id is DERIVED from what happened —
+`completion:<jobId>`, `cash:<jobId>`, `compensation:<sagaId>` — so a replay
+collides on its first entry and the whole posting rolls back. Invariant 6
+satisfied by construction: nothing has to remember to check whether it already
+ran. The same shape `technician_actions` and `decision_records` use.
+**Tradeoff:** One transaction cannot touch one account twice. Splitting the
+technician's cash movement into "earnings settled" and "commission owed" would
+need two entries on their account; one signed amount says the same thing.
+
+**Decision:** The sign convention is a CLAIM, stated once at the top of the
+domain file: positive means this account is owed or has earned, negative means
+it owes or holds value belonging to others.
+**Why:** It makes the brief's worked example read literally — technician
++₹1,872, platform +₹468, customer −₹2,340 — and it makes the cash case read
+correctly too: a technician holding ₹2,340 of which only ₹1,872 is theirs is
+NEGATIVE, because they hold value belonging to somebody else.
+**Alternative:** Standard debit-positive accounting.
+**Why not:** It would invert the brief's signs and make "the technician's
+balance goes negative" — the thing the payout rule exists for — read as a
+positive liability. The convention chosen is internally consistent and is what
+the payout rule actually reasons about.
+
+**Decision:** Commission rounds DOWN.
+**Why:** A fraction of a paise in dispute goes to the technician rather than to
+the platform. Half a paise per job, and it is the right half to give away.
+
+**Decision:** A balance is a running SUM, never a stored column.
+**Why:** A balance derived from an append-only log cannot drift from the
+entries; a cached one eventually will. It costs a SUM over an indexed column,
+which is the right trade until somebody measures otherwise.
+
+**Decision:** Compensation for a released technician is booked against PLATFORM
+REVENUE, not against a customer receivable.
+**Why:** A technician who accepted and was then released is the dispatch system
+being wrong, not the customer changing their mind. Charging a customer for the
+platform's own re-plan would be indefensible.
+**Tradeoff:** The amount is the job's callout fee — a hand-set rule, not a
+measured one, and stated as such.
+
+**Decision:** Only a technician who had ACCEPTED is compensated.
+**Why:** That is the partial-commit case: they committed and may already be
+driving. A technician whose offer merely lapsed unanswered has lost nothing.
+
+**Decision:** `payoutDecision` is built and tested; PayoutBatch is not.
+**Why:** The brief says both "test the negative-balance netting explicitly" and
+"do not build payouts yet". The rule is the part that is easy to get wrong and
+is testable without any of the machinery, so it exists as a pure function stage
+5 must obey.
+
+**Decision:** The balance helper makes a WHOLE-DATABASE assertion, against this
+project's own rule.
+**Why:** CLAUDE.md forbids asserting raw table counts because they drift when
+another suite writes concurrently. "Every transaction ever written sums to
+zero" is the one case where the global claim is the right one: it is not a fact
+about how quiet the database is, it is the invariant itself. A parallel suite
+writing a BALANCED transaction cannot break it; one writing an unbalanced
+transaction SHOULD.
+
+### Concurrency
+
+**Scenario:** A technician's offline queue replays COMPLETE, or a redelivery
+fires the completion hook again.
+**What races:** Two postings of `completion:<jobId>`.
+**Why dangerous:** Doubling a technician's earnings and the platform's
+commission — the worst class of bug in this file, because a ledger that has
+been double-posted looks perfectly balanced.
+**How handled:** The unique `(transaction_id, account_id)` index. The replay
+collides on its first entry, the whole posting rolls back, and
+`postTransaction` reports ALREADY_POSTED rather than raising. Note this is a
+DIFFERENT guarantee from balance: a double-posted ledger still sums to zero, so
+the balance trigger would never have caught it. Two constraints, two failures.
+
+**Scenario:** `compensateSaga` runs twice for one saga — from a live response,
+from the offer-expiry worker, and from startup recovery, all of which can
+arrive for the same saga.
+**How handled:** The transaction id is derived from the SAGA id, so the second
+call collides and writes nothing. Keyed on the saga rather than the job on
+purpose: a job reassigned three times owes three technicians, and each release
+is its own debt.
+
+**Scenario:** Two entries of one transaction are written by two connections.
+**How handled:** They cannot be. The deferred trigger fires at each commit, so
+the first connection's commit sees an unbalanced transaction and is rejected.
+Atomicity is not a convention here either.
+
+### Weaknesses introduced
+
+1. **`cash-in-transit` is defined, seeded and never written.** Its first writer
+   is remittance — the technician handing the platform's share over — which is
+   stage 5. Under the chosen sign convention a technician's negative balance
+   already IS their cash-in-transit position, so inventing an entry for it now
+   would have been double-counting. Honest, and an account with no entries is
+   still an account somebody will ask about.
+2. **Nothing calls `recordCashCollection` from a route.** The function, its
+   ledger transaction and its `cash_collections` row are complete and tested,
+   but no surface lets a technician say "the driver paid me in cash". That is a
+   button on the technician's page and it is not built.
+3. **Compensation is the callout fee, invented.** A technician released after
+   driving twenty kilometres is owed more than one released from the depot, and
+   nothing distinguishes them.
+4. **No reversal or correction API.** The ledger is append-only and the only
+   legal correction is a compensating transaction — which is demonstrated by
+   hand in the check below but has no function, so a mis-posting today needs
+   psql.
+5. **The commission rate is one global number.** Per-contract commission is
+   named in the brief as "configurable per contract" and lives in config
+   instead.
+6. **`Commission.status` is always ACCRUED.** Nothing moves it to settled,
+   because settlement is payouts.
+7. **Balances are unbounded SUMs.** Correct and cheap at this size; a
+   technician with a hundred thousand entries will want a periodic snapshot
+   account, which is the standard answer and is not built.
+8. **The ledger tests cannot reset and so use a run-scoped id.** Every other
+   suite clears its fixture; this one cannot, because the table is append-only
+   and every posting is idempotent — so a second run against the same ids would
+   book nothing and assert on the previous run's balances. Each run therefore
+   creates its own technicians. It works, and it means this suite leaves rows
+   behind permanently.
+
+### Concepts now genuinely in use
+
+- Double-entry bookkeeping with the balance enforced as a database constraint
+  rather than a code path.
+- A DEFERRED constraint trigger — checking at COMMIT rather than per statement,
+  which is the only way to express an invariant over a SET of rows written one
+  at a time.
+- Two independent constraints guarding two different failures: the balance
+  trigger catches a malformed transaction, the unique index catches a
+  duplicated one, and neither would catch the other's.
+- Immutable financial records where correction is addition, not mutation.
+- A running balance derived from an append-only log, and the consequence that a
+  test wanting to assert a balance must own a fresh account.
+
+### Interview angle
+
+"How do you know your money is right?" Because it is arithmetic rather than an
+argument: for any transaction id the entries sum to zero, and that is a DEFERRED
+CONSTRAINT TRIGGER in Postgres, not a check in application code. Insert an
+unbalanced entry through psql and the database refuses the commit. Application
+code checks it too, but only so the error message names the imbalance in paise
+rather than arriving as a constraint violation.
+
+"What stops a replayed completion paying a technician twice?" A unique index on
+(transaction_id, account_id), with the transaction id derived from the job
+rather than random. Worth noticing that the balance invariant would NOT have
+caught that — a double-posted ledger still sums to zero — so the two
+constraints guard genuinely different failures.
+
+"A technician takes cash. What happens?" Their balance goes negative by exactly
+the platform's commission, because they are holding money that is not all
+theirs. A payout never transfers that: `payoutDecision` returns CARRY_DEBT, the
+debt stays on the ledger, and it is netted off the top of what they earn next —
+which falls out for free, because the balance is a SUM over an append-only log
+and nothing ever resets it.
+
+### What broke
+
+- **A balance assertion reasoned about the wrong technician's money.** The
+  payout-netting test asserted the technician was in debt after the cash job,
+  and found +₹1,439 instead: the SAME technician had completed an earlier job
+  in a previous describe block, so their account was in credit. Fixed by giving
+  the cash story its own technician, which is also the more honest fixture — a
+  debt narrative needs an account whose entire history is that narrative.
+
+- **THE LEDGER'S OWN DESIGN MADE THE TEST FILE UNRE-RUNNABLE, and the fix is
+  the interesting part.** Every other suite deletes its fixture on the way in.
+  This one cannot: `ledger_entries` is append-only and Postgres enforces it. And
+  because every posting is idempotent on a derived transaction id, a second run
+  against the same job ids books NOTHING — so the second run's balance
+  assertions were reading the first run's numbers. Both properties are correct
+  and desirable, and together they mean a test that wants to assert a balance
+  must own a FRESH ACCOUNT. Each run now mints its own technicians. That is not
+  a workaround for a testing problem; it is what an immutable ledger requires of
+  anybody reasoning about a balance.
+
+- **Dynamic imports crept in.** `earnings.ts` first reached for
+  `await import(...)` to pull in the pricing lookup, justified by a comment
+  about keeping the file's imports "about money". That is exactly the kind of
+  cleverness the readability contract rules out, there was no circular
+  dependency to avoid, and they are now ordinary top-level imports.
+
+### The stage check, performed
+
+`npm run test:fast` — 35 files, 531 tests, green, run twice.
+
+Every money operation in `tests/ledger.test.ts` is followed by
+`expectBalanced`, which asserts the transaction under test sums to zero AND
+that every transaction in the whole ledger still does.
+
+The invariant proved against Postgres directly, bypassing all application code:
+
+```
+-- 1. an unbalanced transaction, written straight past the application
+INSERT INTO ledger_entries (..., amount_paise) VALUES (..., 500);
+ERROR:  ledger transaction probe-tx does not balance: entries sum to 500 paise
+HINT:   every transaction must sum to zero; add the missing counter-entry
+
+-- 2. the same amounts, balanced
+BEGIN; INSERT +500; INSERT -500; COMMIT;
+COMMIT
+
+-- 3. and it cannot be edited afterwards
+UPDATE ledger_entries SET amount_paise = 1 WHERE id='probe-2';
+HINT:   write a new compensating row instead of changing an existing one
+
+-- 4. nor deleted — so the only legal correction is a compensating transaction
+BEGIN; INSERT -500; INSERT +500; COMMIT;
+ customer:receivable |       0
+ platform:commission |       0
+```
+
+The worked example from the brief, booked and balanced:
+
+```
+completion:<job>   technician  +187200   (₹1,872 earnings)
+                   platform     +46800   (₹468, 20%)
+                   customer    -234000   (₹2,340)
+                                      0
+cash:<job>         customer    +234000   (they paid the technician in hand)
+                   technician  -234000
+                                      0
+technician's net             = -46800    <- NEGATIVE by exactly the commission
+payoutDecision(-46800, ₹500) = CARRY_DEBT, never PAY
+after the next job           = +140400   <- the debt came off the top
+```

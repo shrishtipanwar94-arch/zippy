@@ -34,6 +34,7 @@ import type { Prisma, PrismaClient, SagaState } from '@prisma/client';
 import { appendJobEvent } from '../intake/events.js';
 import { createHold, releaseHold, consumeHold } from './holds.js';
 import { proposeOffer, respondToOffer } from './offers.js';
+import { recordReleaseCompensationQuietly } from './earnings.js';
 import { runPublishingTransaction } from '../realtime/transaction.js';
 
 export const TERMINAL_STATES: SagaState[] = ['COMMITTED', 'REQUEUED'];
@@ -305,6 +306,29 @@ export async function compensateSaga(
         payload: { sagaId: input.sagaId, technicianId: offer.technicianId, reason: input.reason },
       });
     });
+
+    // THE COMPENSATION SAGA CALLS THE MONEY DOMAIN — but only for a technician
+    // who had ACCEPTED. That is the partial-commit case: they committed to the
+    // job and may already be driving, and the reservation then fell apart
+    // around them. A technician whose offer merely lapsed unanswered has lost
+    // nothing and is owed nothing.
+    //
+    // IDEMPOTENT, AND IT HAS TO BE (invariant 6). This function is reachable
+    // from a live response, from the offer-expiry worker and from startup
+    // recovery, and all three can arrive for the same saga. The ledger's
+    // transaction id is derived from the saga id and (transaction, account) is
+    // unique, so a second call collides and writes nothing.
+    //
+    // `Quietly`: a compensation that cannot be booked must never stop the unit
+    // being released. The technician is owed either way, and the failure is
+    // logged rather than left to strand a van.
+    if (wasAccepted) {
+      await recordReleaseCompensationQuietly(db, {
+        sagaId: input.sagaId,
+        jobId: saga.jobId,
+        technicianId: offer.technicianId,
+      });
+    }
   }
 
   // LEG 1 last: the unit is the thing everyone else was waiting on.

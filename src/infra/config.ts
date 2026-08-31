@@ -93,6 +93,12 @@ const envSchema = z.object({
   // its technicians on small overruns sets it higher. 10% is a plausible
   // starting point and is not a measured figure.
   ESTIMATE_REAPPROVAL_TOLERANCE_BPS: z.coerce.number().int().min(0).default(1000),
+
+  // THE PLATFORM'S CUT, in basis points of the job total — 2000 bps is 20%.
+  // The marketplace's whole commercial model in one number, so it is
+  // configurable rather than a literal buried in the ledger. Per-contract
+  // commission is the obvious next want and would live on `Contract`.
+  PLATFORM_COMMISSION_BPS: z.coerce.number().int().min(0).max(10_000).default(2000),
 });
 
 function loadConfig() {

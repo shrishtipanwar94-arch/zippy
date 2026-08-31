@@ -1379,6 +1379,16 @@ model LedgerEntry {
   account LedgerAccount @relation(fields: [accountId], references: [id])
   job     Job?          @relation(fields: [jobId], references: [id])
 
+  // ONE ENTRY PER ACCOUNT PER TRANSACTION. Posting the same transaction twice
+  // would double every balance it touches, so the replay collides here and its
+  // whole posting rolls back — the database as arbiter, the same shape
+  // technician_actions and decision_records use.
+  //
+  // The invariant itself — SUM(amount_paise) = 0 for any transaction_id — is a
+  // DEFERRED CONSTRAINT TRIGGER added in the same migration. It cannot be
+  // expressed as a Prisma-level constraint, so it lives in SQL and is
+  // exercised by tests/ledger.test.ts.
+  @@unique([transactionId, accountId])
   @@index([transactionId])
   @@index([accountId, createdAt])
   @@map("ledger_entries")
