@@ -43,12 +43,16 @@ export type AccountKind = (typeof ACCOUNT_KINDS)[number];
 // accounts are per technician and their codes are derived below.
 export const PLATFORM_COMMISSION_ACCOUNT = 'platform:commission';
 export const CUSTOMER_RECEIVABLE_ACCOUNT = 'customer:receivable';
-// Cash a technician has collected and not yet handed over. Its first WRITER is
-// remittance, which is stage 5 — the account is defined here because the
-// ledger's chart of accounts is a whole thing or it is nothing, and because a
-// technician's negative balance is meaningless without somewhere for the cash
-// to go when they settle up.
+// Cash a technician has collected and not yet handed over. STILL HAS NO
+// WRITER: remittance — a technician physically handing the platform's share
+// back — is not built, and stage 5 did not build it either. The account is
+// defined because a chart of accounts is a whole thing or it is nothing, and
+// because a technician's negative balance is meaningless without somewhere for
+// the cash to go when they settle up.
 export const CASH_IN_TRANSIT_ACCOUNT = 'cash-in-transit';
+// Earnings a payout run has COMMITTED to sending but which have not yet left
+// the building. Phase 22b discharges it when the transfer actually happens.
+export const PAYOUTS_PAYABLE_ACCOUNT = 'payouts:payable';
 
 export function technicianAccountCode(technicianId: string): string {
   return `technician:${technicianId}`;
@@ -58,6 +62,7 @@ export const PLATFORM_ACCOUNTS: { code: string; name: string; kind: AccountKind 
   { code: PLATFORM_COMMISSION_ACCOUNT, name: 'Platform commission', kind: 'REVENUE' },
   { code: CUSTOMER_RECEIVABLE_ACCOUNT, name: 'Customer receivable', kind: 'ASSET' },
   { code: CASH_IN_TRANSIT_ACCOUNT, name: 'Cash in transit', kind: 'CLEARING' },
+  { code: PAYOUTS_PAYABLE_ACCOUNT, name: 'Payouts payable', kind: 'LIABILITY' },
 ];
 
 // ---------------------------------------------------------------------------
@@ -166,6 +171,37 @@ export function compensationLines(input: {
       accountCode: PLATFORM_COMMISSION_ACCOUNT,
       amountPaise: -input.amountPaise,
       memo: 'compensation paid to a released technician',
+    },
+  ];
+}
+
+// A PAYOUT IS ACCRUED. The technician's running balance is moved onto a
+// payables account, where it waits for Phase 22b to actually send it.
+//
+// THIS IS WHY THE DAILY RUN CAN BE DAILY. Without it the balance is untouched
+// by batching, so tomorrow's run computes the same figure and creates a second
+// payout for money already promised — and the ledger, summing to zero
+// throughout, would never notice. Accruing is also simply what happened: the
+// platform has committed to a transfer, and that is an economic event whether
+// or not the rail has moved yet.
+//
+// It keeps the brief's own formula literally true, too. `balance = SUM(ledger
+// entries for that account)` is only a correct basis for a payout if batching
+// changes that sum.
+export function payoutAccrualLines(input: {
+  technicianCode: string;
+  amountPaise: Paise;
+}): LedgerLine[] {
+  return [
+    {
+      accountCode: input.technicianCode,
+      amountPaise: -input.amountPaise,
+      memo: 'earnings accrued to a payout',
+    },
+    {
+      accountCode: PAYOUTS_PAYABLE_ACCOUNT,
+      amountPaise: input.amountPaise,
+      memo: 'payout awaiting transfer',
     },
   ];
 }

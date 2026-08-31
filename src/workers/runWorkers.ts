@@ -19,6 +19,7 @@ import { processSolver } from './solver.js';
 import { processNotification } from './notification.js';
 import { processOfferExpiry } from './offerExpiry.js';
 import { processCleanup, scheduleCleanup } from './cleanup.js';
+import { PAYOUT_JOB_NAME, processPayoutRun, schedulePayoutRun } from './payouts.js';
 
 // Keyed by QUEUE_NAMES rather than iterated with Object.entries: TypeScript
 // widens an object literal's keys back to plain `string` when you call
@@ -31,11 +32,24 @@ import { processCleanup, scheduleCleanup } from './cleanup.js';
 // is where the real type checking happens), but a table holding FOUR
 // differently-shaped processors has no single shape of its own to be precise
 // about. `Processor` is BullMQ's public boundary type for exactly this job.
+// THE CLEANUP QUEUE CARRIES TWO KINDS OF PERIODIC WORK, told apart by job
+// name: a five-minute sweep and a daily payout run. One queue rather than two
+// because both are "a thing on a timer with nobody waiting on the answer", and
+// a second queue would mean a second Worker, a second Redis connection and a
+// second entry in every wiring table to run one job a day.
+async function processPeriodic(job: Job): Promise<void> {
+  if (job.name === PAYOUT_JOB_NAME) {
+    await processPayoutRun(job);
+    return;
+  }
+  await processCleanup(job);
+}
+
 const PROCESSORS: Record<QueueName, Processor> = {
   solver: processSolver,
   'offer-expiry': processOfferExpiry,
   notification: processNotification,
-  cleanup: processCleanup,
+  cleanup: processPeriodic,
 };
 
 let workers: Worker[] = [];
@@ -58,6 +72,7 @@ export async function startWorkers(): Promise<void> {
   });
 
   await scheduleCleanup(queues.cleanup);
+  await schedulePayoutRun(queues.cleanup);
   logger.info({ queues: QUEUE_NAMES }, 'workers started');
 }
 

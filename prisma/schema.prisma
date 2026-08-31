@@ -1423,6 +1423,11 @@ model Payout {
   technician Technician   @relation(fields: [technicianId], references: [id])
   batch      PayoutBatch? @relation(fields: [batchId], references: [id])
 
+  // ONE PAYOUT PER TECHNICIAN PER BATCH. What makes the daily run RESUMABLE
+  // rather than merely idempotent: a run that died halfway can be re-entered
+  // and will work through the technicians it has not paid, and a second
+  // attempt at one it already paid collides here instead of paying twice.
+  @@unique([batchId, technicianId])
   @@index([technicianId])
   @@index([batchId])
   @@map("payouts")

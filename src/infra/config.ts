@@ -99,6 +99,14 @@ const envSchema = z.object({
   // configurable rather than a literal buried in the ledger. Per-contract
   // commission is the obvious next want and would live on `Contract`.
   PLATFORM_COMMISSION_BPS: z.coerce.number().int().min(0).max(10_000).default(2000),
+
+  // THE SMALLEST BALANCE WORTH A BANK TRANSFER. Below this a technician's
+  // earnings roll forward to the next run rather than being sent — every
+  // transfer costs the platform a fee and the technician a line on a statement,
+  // and ₹500 is a plausible floor for a daily cycle. Configurable because it is
+  // a commercial choice: a weekly cycle would want it higher, and a platform
+  // absorbing transfer fees might set it to zero.
+  PAYOUT_MINIMUM_PAISE: z.coerce.number().int().min(0).default(50_000),
 });
 
 function loadConfig() {

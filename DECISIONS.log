@@ -2301,3 +2301,251 @@ technician's net             = -46800    <- NEGATIVE by exactly the commission
 payoutDecision(-46800, ₹500) = CARRY_DEBT, never PAY
 after the next job           = +140400   <- the debt came off the top
 ```
+
+## Phase 15c Stage 5 — Payouts / 2026-09-01 / PARTIAL
+
+Stage 5 of Phase 15c: the daily payout run. It computes what each technician is
+owed, accrues it on the ledger and creates PayoutBatch and Payout rows in
+PENDING. It sends nothing — no bank rail, no provider, no network. Phase 22b
+does that.
+
+This completes sections 1-5 of the phase brief. Section 6 (payment never on the
+dispatch critical path) was built with stage 3. What remains unbuilt from the
+phase is named in Weaknesses below.
+
+### Built
+
+**Migration** `20260901180000_phase15c_payout_batch` — a unique index on
+`payouts(batch_id, technician_id)`.
+
+**Domain** — `PAYOUTS_PAYABLE_ACCOUNT` and `payoutAccrualLines` added to
+`src/domain/ledger.ts`. `payoutDecision` was already there from stage 4 and is
+unchanged; this stage is its first real caller.
+
+**Commit** — `src/commit/payouts.ts`: `runPayoutBatch`, `payoutReferenceFor`,
+`payoutBatchSummary`, and the private `technicianBalances`.
+
+**Worker** — `src/workers/payouts.ts`: `schedulePayoutRun`, `processPayoutRun`,
+scheduled daily on the cleanup queue and routed by job name in
+`runWorkers.processPeriodic`.
+
+**Config** — `PAYOUT_MINIMUM_PAISE`, default 50000 (₹500).
+
+**Tests** — `tests/payouts.test.ts` (14). Suite: 36 files, 545 tests.
+
+### Decisions
+
+**Decision:** A PAYOUT IS ACCRUED ON THE LEDGER when the batch is computed, not
+when the money is sent.
+**Why:** This is the decision the stage turns on, and without it the feature is
+wrong. The brief says `balance = SUM(ledger entries for that account)` and
+"create a PayoutBatch in PENDING; Phase 22b actually sends the money". Taken
+literally and naively, batching leaves the balance untouched — so tomorrow's
+run computes the same figure and creates a SECOND payout for money already
+promised. The ledger, summing to zero throughout, would never notice: a
+double-promised payout is perfectly balanced.
+So the accrual moves the technician's balance onto a payables account. That
+also makes the brief's own formula correct rather than dangerous, and it is
+simply what happened — the platform has committed to a transfer, which is an
+economic event whether or not the rail has moved.
+**Alternative:** Subtract payouts already PENDING when computing the balance.
+**Why not:** It makes "balance" mean "ledger sum minus something else", which
+is the beginning of a second source of truth. The ledger should be able to
+answer what a technician is owed without a join to another table.
+**Tradeoff:** `payouts:payable` accumulates until Phase 22b discharges it. That
+is what an un-transferred payables account is supposed to look like.
+
+**Decision:** The batch reference is a DATE, not a timestamp.
+**Why:** The reference IS the idempotency key for the day. A scheduled run at
+02:00 and an operator re-running by hand at 21:00 must be the same batch, not
+two. `payout-2026-09-01` is also the thing a human says out loud when asking
+about a payment.
+
+**Decision:** RESUMABLE, not merely idempotent.
+**Why:** A run that dies halfway leaves the batch row and some of its payouts.
+Refusing to run again because the batch exists would strand every technician it
+had not reached for a full day. So the run finds-or-creates the batch and works
+through whoever is not yet in it.
+**How it is safe:** two independent guards. `(batch_id, technician_id)` is
+unique, so a second attempt at a technician already paid collides; and each
+accrual's ledger transaction id is derived from the batch and the technician,
+so the posting collides too. Two guards because a duplicate Payout row and a
+duplicate ledger transaction are different failures and neither constraint
+catches the other's.
+
+**Decision:** The batch total is READ BACK from its rows, never accumulated in
+the loop.
+**Why:** A resumed run's loop only sees the payouts it added, so a loop total
+would describe a fraction of the batch. Summing the rows is the only version
+that is right for both a first run and a resumed one. (The loop accumulator was
+written first and eslint caught it as unused after the read-back replaced it,
+which was luckier than it should have been.)
+
+**Decision:** A negative balance produces NOTHING — no payout row, no ledger
+entry.
+**Why:** "Paying out" a negative amount means taking money from a technician's
+bank account. No rail will do it and nobody agreed to it. The debt stays on
+their ledger and nets off the top of what they earn next, which happens for
+free because a balance is a SUM over an append-only log and nothing resets it.
+**How it is enforced:** the code cannot express the alternative.
+`payoutDecision` never returns PAY for a negative balance, and this file only
+ever creates a Payout from a PAY. A test also asserts no payout row in a batch
+carries a negative amount, which is the claim from the other direction.
+
+**Decision:** Scheduled on the CLEANUP queue rather than a fifth queue.
+**Why:** The cleanup queue is already the periodic-work queue — a five-minute
+sweep and now a daily payout run, both "a thing on a timer with nobody waiting
+on the answer". A fifth queue means a fifth Worker, a fifth Redis connection
+and a fifth entry in every wiring table, to run one job a day. Told apart by
+job name in a small named function in `runWorkers`.
+**Tradeoff:** The queue's name now undersells it. Renaming it would be a
+migration of scheduler ids for no behavioural gain.
+
+**Decision:** `processPayoutRun` is NOT wrapped in `runIdempotently`.
+**Why:** That helper claims a key and runs the effect in ONE transaction, and
+this run posts a ledger transaction per technician — each of which must commit
+on its own for the deferred balance trigger to check it. The batch reference is
+the idempotency instead, and it is stronger here: it survives a crash mid-run
+and lets the next attempt resume rather than skip.
+
+**Decision:** A ledger account whose technician no longer exists is skipped
+with a warning.
+**Why:** `Payout` has a foreign key to `Technician`. Letting the insert fail
+would stop the whole run for everybody because of one deleted row.
+
+### Concurrency
+
+**Scenario:** The scheduler fires twice, or a worker restarts mid-run and
+BullMQ redelivers.
+**What races:** Two runs of the same day's batch.
+**Why dangerous:** Paying every technician twice.
+**How handled:** `payout_batches.reference` is unique, so both runs converge on
+one batch. Within it, each technician's accrual collides on the ledger's
+`(transaction_id, account_id)` index and each Payout row on
+`(batch_id, technician_id)`. Proved by running the same day twice and asserting
+`paid = 0`, an unchanged payout count, an unchanged balance, and exactly two
+ledger entries for the accrual.
+
+**Scenario:** A job completes while the payout run is computing balances.
+**Not handled, and recorded below.** The run reads a balance and then accrues
+it in a separate transaction, so earnings landing in between are simply picked
+up by tomorrow's run. No money is lost or double-counted — the accrual is for
+the amount that was read — but the two are not serialised and a technician can
+be paid a figure that was already stale when the row was written.
+
+### Weaknesses introduced
+
+1. **The balance read and the accrual are not one transaction.** Earnings that
+   land between them roll to the next run. Harmless, because the accrual books
+   exactly what was read, but it means a payout is a snapshot rather than an
+   instant.
+2. **`payouts:payable` only ever grows.** Nothing discharges it, because
+   nothing sends money — that is Phase 22b. Its balance is currently the total
+   of every payout ever accrued, which is correct and will look alarming to
+   anybody reading the chart of accounts without this note.
+3. **`Payout.periodStart` is never set.** Only `periodEnd`. A payout covers
+   "everything up to now" because the ledger has no notion of what was already
+   paid other than the accrual itself, and inventing a start date would be
+   decoration.
+4. **The daily schedule is `every: 24h from first registration`, not a cron at
+   a fixed hour.** BullMQ supports a cron pattern and this does not use one, so
+   the run drifts to whenever the worker first started. For a payout that
+   should be a fixed local hour, this is the wrong tool setting.
+5. **No API and no surface.** A dispatcher cannot see a batch, a technician
+   cannot see what they are owed, and the run cannot be triggered by hand
+   except through code. `payoutBatchSummary` exists and has no caller.
+6. **Still no remittance, so `cash-in-transit` still has no writer.** A
+   technician who owes the platform for collected cash can only clear it by
+   earning, never by handing money back. That is the missing half of the cash
+   story and it is not built.
+7. **`Payout.status` never leaves PENDING** and `PayoutBatch.status` never
+   leaves PENDING either. Phase 22b owns both transitions.
+8. **The minimum is one global number.** Per-technician or per-contract
+   minimums are plausible and are not modelled.
+9. **A run over every technician who has ever earned anything is one query plus
+   two per payable technician.** Fine at 31 technicians; a platform with
+   100,000 would want batching and a cursor.
+
+### Concepts now genuinely in use
+
+- Accrual accounting as the mechanism that makes a periodic job safe to repeat:
+  the run changes the balance it read, so the next run sees a different world.
+- Resumability as distinct from idempotency — the difference between "running
+  twice is harmless" and "a half-finished run can be finished".
+- Two constraints guarding two different duplications, neither of which catches
+  the other's.
+- A date used deliberately as an idempotency key, so human and machine triggers
+  converge.
+
+### Interview angle
+
+"You compute payouts daily. What stops the second day paying the same money
+again?" The batch ACCRUES on the ledger: the technician's balance moves onto a
+payables account, so tomorrow's run reads zero. Without that the balance is
+untouched by batching and the ledger — which sums to zero throughout — would
+never notice the double promise. It is also the only version that keeps
+`balance = SUM(ledger entries)` a correct basis for a payment.
+
+"A technician owes you money. What does the payout do?" Nothing at all — no row
+and no entry. Paying out a negative amount would mean debiting their bank
+account, so the code cannot express it: the decision function never returns PAY
+for a negative balance. The debt stays on the ledger and nets off the top of
+their next earnings for free, because a balance is a running SUM over an
+append-only log.
+
+### What broke
+
+- **Nothing broke, and the one thing that nearly did was caught by design
+  rather than by a test.** The double-payment hole — batching that leaves the
+  balance untouched, so every day re-pays the same money — would have passed
+  every balance assertion in the suite, because a double-promised payout is
+  perfectly balanced. It was found by asking what the SECOND day's run would
+  compute, before writing it. Recorded because it is the kind of bug a ledger
+  invariant deliberately cannot catch: the invariant proves entries are
+  consistent, not that they describe reality.
+
+- **A dead accumulator, caught by eslint.** The batch total was summed in the
+  loop and then also read back from the rows; the read-back is the correct one
+  for a resumed run, and the loop variable survived as unused until lint
+  objected. Removed with the reasoning written down rather than just deleted.
+
+- **A stale comment corrected.** `cash-in-transit` was documented in stage 4 as
+  "first written at remittance, which is stage 5". Stage 5 did not build
+  remittance, so the comment now says plainly that the account still has no
+  writer.
+
+### The stage check, performed
+
+`npm run test:fast` — 36 files, 545 tests, green, run twice.
+
+Against the seeded fleet, three technicians given opening balances covering the
+three outcomes, then one run:
+
+```
+EMP-01     balance   250000     (₹2,500 — above the ₹500 minimum)
+EMP-02     balance    12000     (₹120  — below it)
+EMP-03     balance   -46800     (owes the platform ₹468)
+
+run: { reference: "payout-2034-05-01",
+       paid: 1, heldBelowMinimum: 1, carryingDebt: 1, totalPaise: 250000 }
+
+EMP-01     after          0     <- accrued; tomorrow reads zero
+EMP-02     after      12000     <- untouched, rolls forward
+EMP-03     after     -46800     <- debt carried, nothing sent
+```
+
+```
+ reference         | status  | total_paise | payouts
+ payout-2034-05-01 | PENDING |      250000 |       1
+
+ amount_paise | status  | employee_code
+       250000 | PENDING | EMP-01
+
+ SELECT transaction_id, SUM(amount_paise) FROM ledger_entries
+  GROUP BY transaction_id HAVING SUM(amount_paise) <> 0;
+ (0 rows)
+```
+
+One payout, PENDING, nothing sent — and zero unbalanced transactions in the
+whole ledger after a payout run, which is the property this phase exists to be
+able to prove.
