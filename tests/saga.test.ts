@@ -21,6 +21,7 @@ import {
   recordTechnicianDecision,
   recordDestinationDecision,
 } from '../src/commit/saga.js';
+import { timeoutOffer } from '../src/commit/offers.js';
 import { recoverSagas } from '../src/commit/sagaRecovery.js';
 
 const PREFIX = 'saga';
@@ -290,6 +291,42 @@ describe('compensation is idempotent', () => {
 
     expect(await advanceSaga(prismaBase, started.sagaId)).toBe('COMMITTED');
     expect(await unitStatus(unitId)).toBe('ON_JOB');
+  });
+});
+
+describe('an offer that times out', () => {
+  // THE GAP PHASE 13 STAGE 3 CLOSED. Timing an offer out used to move the
+  // offer row and stop there — the saga stayed AWAITING_LEGS, holding its
+  // unit, until the recovery sweep noticed hours later. The technician had
+  // gone quiet and the van stayed reserved for them.
+  it('compensates its saga rather than leaving the unit held', async () => {
+    const jobId = await freshJob();
+    const { unitId, technicianId, version } = await freshUnit('timeout');
+
+    const started = await startSaga(prismaBase, {
+      jobId,
+      unitId,
+      technicianId,
+      expectedUnitVersion: version,
+      // Born expired, so the timeout path is immediately live.
+      offerTtlMs: -1_000,
+      scheduleExpiry: noSchedule,
+    });
+    if (started.outcome !== 'AWAITING_LEGS') throw new Error('setup failed');
+    expect(await unitStatus(unitId)).toBe('HELD');
+
+    const offer = await prismaBase.technicianOffer.findFirstOrThrow({
+      where: { dispatchOfferId: started.sagaId },
+      select: { id: true },
+    });
+    await timeoutOffer(prismaBase, { offerId: offer.id });
+
+    // Advancing is what the offer-expiry worker now does after timing out.
+    const state = await advanceSaga(prismaBase, started.sagaId);
+
+    expect(state).toBe('REQUEUED');
+    expect(await unitStatus(unitId)).toBe('AVAILABLE');
+    expect(await prismaBase.unitHold.count({ where: { unitId, status: 'ACTIVE' } })).toBe(0);
   });
 });
 

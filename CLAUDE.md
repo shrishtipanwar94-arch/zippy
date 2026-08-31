@@ -85,6 +85,35 @@ plain language and why this code needs it. Two or three sentences. Example:
 That comment is what the maintainer will read the night before an interview.
 Write it for that reader.
 
+## GOTCHAS — things already discovered the hard way
+
+**An upsert on a JOIN TABLE is append-only, not idempotent.** `upsert({ where,
+update: {}, create })` on `technician_capability` or `unit_capability` adds a
+link and never removes one. A fixture that grants capabilities this way keeps
+every capability any earlier version of that fixture granted, because
+`zippy_test` persists between runs. Phase 13 lost most of an afternoon to it:
+two test files each granted the same scarce capability pair, one file's crew
+silently kept a capability from a previous edit, and each file's jobs were
+being served by the other file's units. Any fixture that OWNS a set — rather
+than adding to one — must `deleteMany` the links first and then grant. The
+same applies to any seeder or route that means "these are the capabilities"
+rather than "add this capability".
+
+**A test fixture competes with the seeded fleet.** `buildDispatchSnapshot`
+reads the WHOLE fleet, not one zone, so all 24 seeded units are candidates for
+every job in every test. Distance does NOT isolate a fixture: OSRM snaps a
+coordinate to the nearest node in its graph, so with a Bengaluru-only extract a
+job 1500km away still comes back adjacent to a Bengaluru van. Isolate by
+required capabilities instead, and make two fixtures' requirement sets
+DISJOINT rather than merely rare — there is only one non-tow capability pair no
+seeded crew holds, so two files both reaching for "something scarce" will
+collide.
+
+**A rejected Bash tool call may still have run.** The rejection text is written
+for the Edit/Write case, where the harness performs the write and can decline
+to. A Bash command that was already executing cannot be unwound: check the disk
+before assuming a change did not land.
+
 ## docs/CODEMAP.md — maintain this alongside INTERVIEW.md
 
 The maintainer did not type this code and needs to be able to find their way

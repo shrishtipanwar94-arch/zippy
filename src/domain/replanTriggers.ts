@@ -24,16 +24,16 @@ export const REPLAN_TRIGGERS = [
   'JOB_CANCELLED',
 ] as const;
 
-// DELIBERATELY ABSENT: a trigger for "the SLA window closed while the job was
-// still queued". Phase 10 measured the problem it would address — once a job
-// passes its promised window, `SLA_UNREACHABLE` rejects every option for it
-// forever and it silently stops appearing in any plan — and DECISIONS.log
-// carries the proposal. It is not in this list yet because the response is
-// the unresolved part, not the detection: an APPROVE-tier action BLOCKS
-// pending sign-off, so a job that is already late would then wait longer in
-// an approval queue. Whether the right shape is a blocking APPROVE or an AUTO
-// relaxation plus a RECOMMEND for the commercial follow-up is a decision, and
-// adding a list entry would look like having made it. Phase 13 Stage 2.
+// NO SLA TRIGGER, AND THAT IS NOW A CONCLUSION RATHER THAN A DEFERRAL.
+// Phase 10 found that a job whose SLA window closed became permanently
+// infeasible and vanished from every plan, and proposed a ninth trigger to
+// catch it. Stage 3 fixed it somewhere better: the bug was in the FILTER, not
+// in the absence of a trigger. `feasibility.ts` now stops applying the SLA
+// deadline once it has passed, so a late job re-enters candidate generation
+// on its own and needs no re-plan event at all. What remains is the
+// commercial fact that a promise was broken, which is a RECOMMEND action
+// raised by a sweep (src/commit/slaEscalation.ts) — not a dispatch decision,
+// and not something re-planning would have helped with.
 
 export type ReplanTrigger = (typeof REPLAN_TRIGGERS)[number];
 

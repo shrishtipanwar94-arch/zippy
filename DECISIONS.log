@@ -1262,3 +1262,154 @@ across 22 files, 9 concurrency. `tsc --noEmit`, `eslint src evaluation` clean.
   was chosen by enumerating the payload space and reading off which one lands
   on a capability pair no seeded crew holds, rather than by guessing at a
   plausible-sounding set of symptoms.
+
+## Phase 13 Stage 3 — trigger audit, the SLA resolution / 2026-08-31 / PARTIAL
+
+Still not the phase close. Stage 4 owns `scripts/fire-10-triggers-fast.js`,
+its debounce SQL check, and the checkpoint consolidation.
+
+### Built
+
+`src/engine/feasibility.ts` — the SLA filter now applies only while the window
+is still open (`deadline && deadline > now`).
+
+`src/domain/actionTiers.ts` — `ESCALATE_SLA_WINDOW_CLOSED` moved from APPROVE
+to RECOMMEND.
+
+`src/commit/slaEscalation.ts` — wired into the cleanup sweep, header rewritten
+around the resolved design.
+
+`src/workers/offerExpiry.ts` — after timing an offer out, advances its saga.
+
+`src/domain/replanTriggers.ts` — the absent-SLA-trigger comment now records a
+conclusion rather than a deferral.
+
+`CLAUDE.md` — a GOTCHAS section: append-only join-table upserts, fixtures
+competing with the seeded fleet, and rejected-Bash-calls-that-ran.
+
+Tests: 3 new (2 in `feasibility.test.ts`, 1 in `saga.test.ts`), 1 rewritten in
+`replanTriggers.test.ts`. Suite 293 fast across 22 files, 9 concurrency.
+`tsc --noEmit`, `eslint src evaluation` clean.
+
+### The trigger audit — what has a real event source and what does not
+
+Checked each of the seven against the codebase rather than against intent.
+The honest headline: **none of the seven has a production caller today**, and
+the reason differs per trigger. Only `DIAGNOSIS_CHANGED` — wired in Stage 2 —
+is live.
+
+- **TECHNICIAN_DECLINED.** `respondToOffer(status: 'DECLINED')` and
+  `recordTechnicianDecision` both exist and are tested, but nothing in
+  production calls them: there is no technician route. The technician app —
+  "job offers with a visible countdown, accept/decline" — is **Phase 15**.
+  What DOES exist is the sibling path, and auditing this trigger is what found
+  it: see the offer-expiry gap below.
+- **TECHNICIAN_OFFLINE.** Nothing writes `Technician.active = false` anywhere
+  in `src/`. The technician status ladder and offline queue are **Phase 15**;
+  **Phase 17** then exercises it under chaos.
+- **UNIT_BREAKDOWN.** Nothing writes `Unit.status = 'MAINTENANCE' | 'OFFLINE'`
+  except this phase's own release path, and `UnitStatusHistory` has no writer
+  at all. **No phase in the build plan owns a unit-breakdown event source** —
+  Phase 21's fleet dashboard is a read surface, and Phase 17's chaos work is
+  the nearest fit but is about injecting failures rather than modelling a van
+  breaking. Recorded as a genuine gap in the plan, not a deferral to a phase
+  that will handle it.
+- **DESTINATION_DECLINED.** `recordDestinationDecision` exists and is tested,
+  but the workshop side is a stub by design and nothing sends a destination
+  offer anywhere. **Phase 22** (workshop network) builds the real one.
+- **DRIVER_MOVED_MATERIALLY.** `LocationEvent` is written once, at intake
+  (`src/intake/createJob.ts`), and never again. Live tracking is **Phase 15**
+  ("live tracking with a real ETA"). `isMaterialMove` and its 250m threshold
+  exist and are tested so that when the pings arrive the answer to "is this a
+  trigger?" already exists — which is the point of the threshold living in the
+  domain rather than in whatever route eventually receives a ping.
+- **SAFETY_LEVEL_CHANGED.** `Job.safetyLevel` is written once, by intake
+  triage, and never updated. **Phase 15b** owns this explicitly: a chat
+  message is classified, "safety changes → THE DRIVER confirms, one tap", and
+  "the event may trigger a re-solve". The trigger is waiting for its
+  confirmation flow, not for a decision.
+- **JOB_CANCELLED.** No route or worker sets `JobStatus.CANCELLED`.
+  **Phase 15c** owns it: `src/domain/cancellationPolicy.ts`, cancellation at
+  each of four stages, and the ledger compensation for a technician who drove
+  out and was cancelled on. Wiring a cancel path here would mean writing the
+  refund half of it too, or writing a cancellation that quietly owes somebody
+  money.
+
+### Decisions
+
+- **Decision:** `SLA_UNREACHABLE` filters only while the deadline is still in
+  the future.
+  **Why:** the check was evaluated against `now`, so once a window closed
+  every option for that job was rejected — permanently, and invisibly, because
+  the rejection code reads identically to the ordinary case of one van being
+  too far away. Phase 10 measured it accounting for most unserved jobs in a
+  busy scenario. Refusing to dispatch to a job you are already late for does
+  not avoid a breach; it converts a late arrival into no arrival.
+  **Alternative:** keep the filter and add a re-plan trigger for the moment
+  the window closes (Phase 10's own proposal).
+  **Why not:** re-solving returns exactly what it returned a minute earlier,
+  because the thing that removed the options was the clock, not the fleet. The
+  bug was in the filter; a trigger would have been a workaround pointed at the
+  symptom.
+  **Tradeoff:** while the window is still OPEN and no option can meet it, every
+  option is still rejected and the job waits until the deadline passes before
+  becoming servable. That is a real remaining weakness — see below.
+
+- **Decision:** the breach escalation is RECOMMEND, not APPROVE.
+  **Why:** APPROVE blocks pending sign-off. Tiering a late job that way would
+  make it wait longer still — for a human to acknowledge that it is late —
+  which defeats the purpose of noticing. Nothing about dispatch is gated on
+  this any more: the filter change means the job is already competing for a
+  van while the action sits in a queue.
+  **Alternative:** APPROVE, as Phase 10 originally proposed.
+  **Why not:** that proposal was written when the filter still blocked
+  dispatch, so an APPROVE gate looked like the only place a human could
+  intervene. Once the dispatch half is fixed in the filter, what remains is
+  purely commercial — re-contract, credit, escalate to a partner, tell the
+  customer — and none of it needs to happen before a van moves.
+  **Tradeoff:** a RECOMMEND can be ignored, and an ignored breach is an
+  un-followed-up breach. There is no escalation if the queue is not worked.
+
+- **Decision:** the offer-expiry worker advances its saga.
+  **Why:** found while auditing TECHNICIAN_DECLINED. `timeoutOffer` moved the
+  offer row and stopped, so the saga stayed AWAITING_LEGS holding its unit
+  until the recovery sweep noticed — the technician had gone quiet and the van
+  stayed reserved for them.
+  **Alternative:** leave it to `recoverSagas`.
+  **Why not:** recovery only touches sagas older than the hold TTL, so a van
+  sat reserved for a technician who was never going to answer for as long as
+  that took.
+  **Tradeoff:** the worker now reaches into the saga layer, which is one more
+  edge in the dependency graph.
+
+### Weaknesses introduced
+
+- **A job whose window is open but unreachable by everyone still waits.** The
+  filter now stops applying once the deadline passes, but while it is still in
+  the future and NO option can meet it, every option is rejected and nothing
+  is dispatched until the deadline expires. Feasibility is per-option and has
+  no view of the whole candidate set, so it cannot notice "all of them miss".
+  The honest fix is for the solver to fall back when a job has zero feasible
+  options for SLA reasons alone; not done.
+- **A RECOMMEND for a breach can be ignored forever.** There is no ageing, no
+  second escalation, and nothing that notices an SLA follow-up sitting
+  unactioned for a week.
+- **Seven of eight triggers remain unwired**, and one of them
+  (UNIT_BREAKDOWN) has no phase that owns building its event source.
+- **`Job.safetyLevel` is never updated after intake**, so the
+  lexicographic safety ordering in `ranking.ts` operates on a value that was
+  decided from a phone call and can no longer change. That is a bigger
+  weakness than the missing trigger.
+
+### What broke
+
+- Nothing broke this stage. The SLA change was a three-line edit to a filter
+  and the two new feasibility tests passed first run; the offer-expiry gap was
+  found by reading rather than by a failure.
+- Worth recording as a near-miss rather than a break: the first instinct on
+  the SLA question was to add the ninth trigger Phase 10 proposed. Auditing
+  the trigger sources first is what showed the trigger would have been useless
+  — a re-solve after the window closes returns what it returned before,
+  because the filter removing the options is a function of the clock. The
+  proposal was written against the broken filter and would have shipped a
+  workaround alongside the bug.

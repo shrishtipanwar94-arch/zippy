@@ -116,9 +116,16 @@ describe('the action-tier table', () => {
   });
 
   it('blocks the commercial decisions behind sign-off', () => {
-    expect(tierFor('ESCALATE_SLA_WINDOW_CLOSED')).toBe('APPROVE');
     expect(tierFor('ESCALATE_THRASHING_JOB')).toBe('APPROVE');
     expect(tierFor('CANCEL_JOB')).toBe('APPROVE');
+  });
+
+  // NOT APPROVE, deliberately. An APPROVE action blocks pending sign-off, so
+  // tiering a late job that way would make it wait longer still — for a human
+  // to acknowledge that it is late. Nothing about dispatch is gated on this
+  // any more; feasibility stops filtering on a passed deadline on its own.
+  it('does not block a late job behind sign-off', () => {
+    expect(tierFor('ESCALATE_SLA_WINDOW_CLOSED')).toBe('RECOMMEND');
   });
 
   it('only executes AUTO immediately', () => {

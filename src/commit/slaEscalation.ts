@@ -1,37 +1,30 @@
-// SLA ESCALATION — written, tested by nobody, and deliberately not wired.
+// SLA BREACH ESCALATION — the commercial follow-up, not a gate on dispatch.
 //
-// STATUS: Phase 13 Stage 2. This module exists and compiles; nothing calls it.
-// The detection is not the hard part — the RESPONSE is. Raising an APPROVE
-// action blocks pending sign-off, which means a job that is ALREADY late then
-// waits longer in an approval queue. Whether the right shape is a blocking
-// APPROVE, or an AUTO relaxation that dispatches immediately plus a RECOMMEND
-// for the commercial follow-up, is an open decision recorded in DECISIONS.log.
-// Running this now would raise those actions for real while the question is
-// still open, so the cleanup worker does not call it yet.
+// Phase 10 measured the problem: `SLA_UNREACHABLE` was evaluated against
+// `now`, so a job still queued when its window closed had every option
+// rejected forever and silently stopped appearing in any plan.
+//
+// PHASE 13 STAGE 3 FIXED THE DISPATCH HALF IN THE FILTER, not here:
+// feasibility now stops filtering on a deadline once it has passed, so a late
+// job competes for a van normally. This sweep exists for what is left over —
+// the fact that a promise was broken, which is a commercial matter with a
+// human owner.
+//
+// RECOMMEND, NOT APPROVE. An APPROVE action blocks pending sign-off, and
+// tiering a late job that way would make it wait longer still, for a human to
+// acknowledge that it is late. Nothing about the van is gated on this.
 //
 // It lives in /src/commit rather than /src/workers because it WRITES —
 // ActionRequest rows and a JobEvent — and mutation belongs here regardless of
-// which scheduler eventually invokes it.
+// which scheduler invokes it.
 
 import type { Prisma } from '@prisma/client';
 import { tierFor } from '../domain/actionTiers.js';
 
-// A JOB WHOSE SLA WINDOW CLOSED WHILE IT WAS STILL QUEUED — the trigger whose
-// cause is the clock rather than an event, and the reason it needs a sweep
-// rather than a hook.
-//
-// Phase 10's harness measured what happens without this: `SLA_UNREACHABLE` is
-// a hard filter evaluated against `now`, so the moment a job passes its
-// promised window EVERY option for it is rejected and it can never be
-// dispatched again. It stops appearing in plans and nothing says so — the one
-// trace is a dispatch_options row whose rejection code reads exactly like the
-// ordinary, healthy case of a single unit being too far away. A stranded
-// customer, invisible. Invariant 8 exists to forbid precisely that.
-//
-// Re-solving would not help: it returns what it returned a minute ago, which
-// is nothing. So this raises an APPROVE-tier action instead, and a human makes
-// the call the engine has no standing to make — serve it late, re-contract the
-// window, escalate to a partner, or cancel with the customer told.
+// A sweep rather than a hook, because the cause is the clock rather than an
+// event: nothing happens at the moment a deadline passes, so something has to
+// go and look. Invariant 8 — a degraded state has to be visible to an
+// operator — is what this satisfies.
 //
 // ONE ACTION PER JOB, not one every five minutes: an operator queue that
 // refills itself is one nobody reads.
@@ -73,7 +66,7 @@ export async function escalateClosedSlaWindows(tx: Prisma.TransactionClient): Pr
         jobId: job.id,
         tier: tierFor('ESCALATE_SLA_WINDOW_CLOSED'),
         kind: 'ESCALATE_SLA_WINDOW_CLOSED',
-        reason: `SLA window of ${minutes}min closed ${overdueMinutes}min ago while the job was still unassigned; every option is now filtered by the deadline rather than by capacity`,
+        reason: `SLA window of ${minutes}min closed ${overdueMinutes}min ago while the job was still unassigned. Dispatch is not blocked — the job is competing for a van normally — this is the commercial follow-up.`,
         computedImpact: { slaResponseMinutes: minutes, overdueMinutes },
         status: 'PENDING',
         requestedByRole: 'SYSTEM',

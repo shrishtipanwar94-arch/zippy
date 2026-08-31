@@ -23,6 +23,7 @@ import { queues } from '../queues/queues.js';
 import { runIdempotently } from '../queues/idempotent.js';
 import { prismaBase } from '../infra/prismaBase.js';
 import { timeoutOffer } from '../commit/offers.js';
+import { advanceSaga } from '../commit/saga.js';
 
 // A HYPHEN, NOT A COLON. BullMQ rejects a custom job id containing `:` — it
 // uses colons as separators in its own Redis key layout, so one inside an id
@@ -53,6 +54,26 @@ export async function processOfferExpiry(job: Job<{ offerId: string }>): Promise
     // construction: a second delivery finds the offer no longer PROPOSED and
     // changes nothing.
     const result = await timeoutOffer(prismaBase, { offerId: job.data.offerId });
+
+    // THE GAP THIS CLOSES, found while auditing which re-plan triggers have a
+    // real event source. Timing the offer out moved the offer row and stopped
+    // there: the SAGA that offer belonged to stayed in AWAITING_LEGS forever,
+    // holding its unit, until the recovery sweep noticed hours later. The
+    // technician had gone quiet and the van stayed reserved for them.
+    //
+    // Advancing the saga is what turns a timeout into the compensation it
+    // always should have been: the hold is released, the job goes back to
+    // PLANNED, and the unit is on the board again. `advanceSaga` is
+    // idempotent and refuses to act on a terminal saga, so an accept that
+    // landed first is not undone by this.
+    const offer = await prismaBase.technicianOffer.findUnique({
+      where: { id: job.data.offerId },
+      select: { dispatchOfferId: true },
+    });
+    if (offer?.dispatchOfferId) {
+      await advanceSaga(prismaBase, offer.dispatchOfferId);
+    }
+
     await job.log(`offer ${job.data.offerId}: ${result.outcome} (${result.status})`);
   });
 }

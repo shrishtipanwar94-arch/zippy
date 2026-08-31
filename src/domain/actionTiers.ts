@@ -36,10 +36,10 @@ export const ACTION_KINDS = [
   'REASSIGN_AFTER_DIAGNOSIS_CHANGE',
   'REASSIGN_AFTER_TRIGGER',
   'RELEASE_TECHNICIAN_NO_LONGER_NEEDED',
+  'ESCALATE_SLA_WINDOW_CLOSED',
 
   // APPROVE — commercial, or an admission that something has already failed.
   'ESCALATE_THRASHING_JOB',
-  'ESCALATE_SLA_WINDOW_CLOSED',
   'CANCEL_JOB',
 ] as const;
 
@@ -53,15 +53,21 @@ const TIERS: Record<ActionKind, ActionTier> = {
   REASSIGN_AFTER_DIAGNOSIS_CHANGE: 'RECOMMEND',
   REASSIGN_AFTER_TRIGGER: 'RECOMMEND',
   RELEASE_TECHNICIAN_NO_LONGER_NEEDED: 'RECOMMEND',
+  // A job whose SLA window closed while it queued. RECOMMEND, NOT APPROVE,
+  // and the reasoning is the whole point: APPROVE blocks pending sign-off,
+  // so tiering this decision that way would make a job that is ALREADY late
+  // wait even longer — for a human to acknowledge that it is late. That
+  // defeats the purpose of noticing.
+  //
+  // Dispatch is no longer gated on this at all: feasibility stops filtering
+  // on a deadline once it has passed, so the job is already competing for a
+  // van while this sits in the queue. What the action is FOR is the
+  // commercial follow-up — re-contract, credit, escalate to a partner, tell
+  // the customer — which is a real decision a human owns but which nobody
+  // needs to make before a van moves.
+  ESCALATE_SLA_WINDOW_CLOSED: 'RECOMMEND',
 
   ESCALATE_THRASHING_JOB: 'APPROVE',
-  // A job whose SLA window closed while it queued. APPROVE rather than
-  // RECOMMEND because the decision is commercial — serve it late, re-contract
-  // the window, escalate to a partner, or cancel with the customer told — and
-  // nothing in the engine has the standing to make it. AUTO would be the
-  // clearest possible example of the rule above: silently relaxing a
-  // contracted deadline is exactly what a human would want to review.
-  ESCALATE_SLA_WINDOW_CLOSED: 'APPROVE',
   CANCEL_JOB: 'APPROVE',
 };
 

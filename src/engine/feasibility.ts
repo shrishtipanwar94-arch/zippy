@@ -227,8 +227,26 @@ function classify(
     };
   }
 
+  // SLA — A FILTER ONLY WHILE THE PROMISE CAN STILL BE KEPT.
+  //
+  // This check used to run against every option regardless of when `now` was,
+  // and Phase 10's harness measured what that did: because the deadline is a
+  // function of the clock, a job still queued when its window closed had
+  // EVERY option rejected, forever. It stopped appearing in any plan and
+  // nothing said so — a stranded customer, invisible, whose only trace was a
+  // rejection code that reads exactly like the healthy case of one van being
+  // too far away. Across a busy scenario that accounted for most of the
+  // unserved jobs.
+  //
+  // Refusing to dispatch to a job you are already late for is not a way to
+  // avoid breaching an SLA; it is a way to turn a late arrival into no
+  // arrival. So the filter now applies only while the window is still open:
+  // prefer a crew who can genuinely make it, and once the promise is already
+  // broken let the job compete normally on cost. The breach itself is a
+  // commercial fact, handled by a RECOMMEND action
+  // (src/commit/slaEscalation.ts), not by withholding a van.
   const deadline = slaDeadline(job);
-  if (deadline) {
+  if (deadline && deadline > now) {
     const arrivesAt = new Date(now.getTime() + option.estimatedTravelMinutes * 60_000);
     if (arrivesAt > deadline) {
       return {

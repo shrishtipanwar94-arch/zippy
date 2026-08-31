@@ -24,6 +24,7 @@
 import type { Job, Queue } from 'bullmq';
 import type { Prisma } from '@prisma/client';
 import { runIdempotently } from '../queues/idempotent.js';
+import { escalateClosedSlaWindows } from '../commit/slaEscalation.js';
 
 export const CLEANUP_SCHEDULER_ID = 'cleanup-sweep';
 export const CLEANUP_INTERVAL_MS = 5 * 60 * 1000; // 5 minutes
@@ -60,6 +61,10 @@ export async function processCleanup(job: Job): Promise<void> {
     // over that single connection rather than actually running in parallel.
     const keysSwept = await sweepExpiredIdempotencyKeys(tx);
     const holdsReleased = await releaseExpiredHolds(tx);
-    await job.log(`swept ${keysSwept} expired idempotency keys, released ${holdsReleased} expired holds`);
+    const slaEscalated = await escalateClosedSlaWindows(tx);
+    await job.log(
+      `swept ${keysSwept} expired idempotency keys, released ${holdsReleased} expired holds, ` +
+        `raised ${slaEscalated} SLA breach follow-ups`,
+    );
   });
 }

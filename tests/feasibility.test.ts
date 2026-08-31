@@ -317,6 +317,56 @@ describe('SLA_UNREACHABLE', () => {
     expect(result.rejected).toEqual([]);
   });
 
+  // THE PHASE 13 CHANGE, and the measurement behind it. This filter used to
+  // apply whatever the time was, and because the deadline is a function of the
+  // clock, a job still queued when its window closed had EVERY option rejected
+  // — permanently. Phase 10's harness found that accounted for most of the
+  // unserved jobs in a busy scenario, and that it surfaced nowhere: the
+  // rejection code reads exactly like the healthy case of one van being too
+  // far away.
+  //
+  // Refusing to dispatch to a job you are already late for does not avoid a
+  // breach, it converts a late arrival into no arrival. So once the window has
+  // closed the filter stops applying and the job competes on cost like any
+  // other.
+  it('stops filtering once the window has already closed', () => {
+    // Created an hour ago with a 10-minute SLA: the deadline is 50 minutes in
+    // the past. Under the old rule this option — and every other — was
+    // rejected forever.
+    const lateJob = job({
+      createdAt: new Date(NOW.getTime() - 60 * 60_000),
+      slaResponseMinutes: 10,
+    });
+
+    const result = checkFeasibility(
+      [option({ estimatedTravelMinutes: 20 })],
+      lateJob,
+      snapshot(),
+      NOW,
+    );
+
+    expect(result.rejected).toEqual([]);
+    expect(result.feasible).toHaveLength(1);
+  });
+
+  // The filter still does its real job while the promise can still be kept:
+  // prefer a crew who can actually make it.
+  it('still rejects a miss while the window is open', () => {
+    const urgentJob = job({
+      createdAt: new Date(NOW.getTime() - 1 * 60_000),
+      slaResponseMinutes: 30,
+    });
+
+    const result = checkFeasibility(
+      [option({ estimatedTravelMinutes: 45 })],
+      urgentJob,
+      snapshot(),
+      NOW,
+    );
+
+    expect(result.rejected[0]!.code).toBe('SLA_UNREACHABLE');
+  });
+
   it('never fires for a job with no SLA policy at all', () => {
     const noSlaJob = job({ slaResponseMinutes: null });
     const result = checkFeasibility(
