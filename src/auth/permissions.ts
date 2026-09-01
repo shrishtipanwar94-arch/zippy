@@ -83,7 +83,12 @@ export type Resource =
   // Putting a vehicle on a tenant's books (Phase 20). Its own resource because
   // it is the one write a FLEET_MANAGER has, and "may read my fleet" should
   // not have quietly meant "may add to it".
-  | 'vehicle';
+  | 'vehicle'
+  // The fleet manager's own dashboard (Phase 21): active incidents, SLA%,
+  // exposure, spend, per-vehicle history. FLEET_MANAGER-only — a DISPATCHER
+  // has no tenant to read it as, and reading somebody else's the DISPATCHER
+  // way would be exactly the cross-tenant visibility the phase brief forbids.
+  | 'fleetDashboard';
 
 type PermissionTable = Record<Role, Partial<Record<Resource, Action[]>>>;
 
@@ -162,6 +167,7 @@ const PERMISSIONS: PermissionTable = {
     unit: ['read'],
     technician: ['read'],
     fleetStock: ['read'],
+    fleetDashboard: ['read'],
   },
 };
 

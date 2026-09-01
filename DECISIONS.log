@@ -745,3 +745,263 @@ which was doing exactly its job.
 writing nothing** — the same failure Phase 19 recorded, at around the same length.
 Both files went through the Write tool instead. The note from last phase was
 right and is now confirmed rather than suspected.
+
+## Phase 21 — Fleet dashboard / 2026-09-02 / phase 21: fleet dashboard
+
+### Built
+No migration — every number reads rows Phases 1-20 already write.
+
+- `src/domain/fleetSlaOutcome.ts` — `slaOutcomeFor()`: MET / BREACHED /
+  UNDECIDED / NOT_APPLICABLE for one incident. The fourth state is the point —
+  a job still inside its window is excluded from both halves of "SLA met %",
+  not counted as either.
+- `src/domain/fleetMetrics.ts` — `slaMetSummary()`, `currentExposurePaise()`,
+  `meanResolutionSummary()`, `spendPaiseThisMonth()`, `isActive()`,
+  `startOfMonthUtc()`. Pure; all five take the same plain `Incident[]`.
+- `src/domain/repeatPattern.ts` — `repeatPatternFlag()`. A count over a
+  60-day window, threshold 3, labelled a RULE in its own header and on the
+  card. No model.
+- `src/domain/fleetPrior.ts` — `fleetVehiclePrior()`. Folds up to
+  `MAX_PRIOR_INCIDENTS` (5) past faults into a starting belief via the SAME
+  `applyLikelihood` symptom evidence already uses.
+- `src/domain/faultRules.ts` — `classifySymptoms()` gains an optional second
+  parameter, `startingPrior`, defaulting to `FAULT_PRIORS`. Every existing
+  caller is unaffected; one new caller passes a sharpened prior.
+- `src/commit/fleetIncidents.ts` — `fleetIncidentsFor()`, the one query
+  everything else reads. Explicit `tenantId` filter, not the auth-context
+  extension — this file is called from a route that already has the caller's
+  own tenant off their token.
+- `src/commit/fleetPrior.ts` — `fleetVehiclePriorFaults()`: FLEET-tenant
+  vehicles only, most-recent incidents first, via the job's latest
+  `FaultHypothesis.topFault`.
+- `src/commit/fleetDashboard.ts` — `buildFleetDashboard()`, the one function
+  the route calls. Groups incidents by vehicle, flags the worst pattern per
+  vehicle, sorts flagged vehicles first.
+- `src/intake/createJob.ts` — reads `fleetVehiclePriorFaults` and folds it
+  through `fleetVehiclePrior` before `classifySymptoms`, inside the intake
+  transaction.
+- `src/api/fleet.ts` — `GET /fleet/dashboard`. Tenant from the token, never a
+  query parameter. Money rendered once, server-side, through
+  `formatRupees`.
+- `src/auth/permissions.ts` — new resource `fleetDashboard`, FLEET_MANAGER
+  read-only.
+- `src/workers/notification.ts` — `notifyFleetManagerOfStateChange()`,
+  `FLEET_STATE_CHANGE_COALESCE_MS` (10 minutes, ~6.7x the driver's 90
+  seconds), `deliverFleetStateChangeNotification()`. Routed inside the
+  existing `processNotification` by the queued job's own `name`
+  (`'fleet-state-change'` vs `'driver-replan'`) rather than a second queue.
+- `src/realtime/publish.ts` — `publishFleetNotification()`, to the
+  `tenant:<id>` room a FLEET_MANAGER already stands in
+  (`rooms.ts`'s `standingRoomsFor`, unread by anything until now).
+- `src/commit/redispatch.ts` — the one existing driver-notification call site
+  gained a sibling call. No new trigger points invented.
+- `public/fleet.html`, `public/js/pages/fleet.js`,
+  `public/js/panels/fleetDashboard.js`, `state.js`/`api.js` additions.
+- Tests: `tests/fleetDomain.test.ts` (26, pure), `tests/fleetDashboard.test.ts`
+  (12, real Postgres — includes the phase's own named check), 
+  `tests/fleetNotifications.test.ts` (6, real Postgres).
+
+### Decisions
+
+**Decision** SLA outcome is a FOUR-state answer (`fleetSlaOutcome.ts`), not a
+boolean.
+**Why** A job raised ten minutes ago, still inside its window, is neither a
+success nor a failure — it has not happened yet. Counting it either way makes
+"SLA met %" swing on jobs still in progress. UNDECIDED lets the denominator be
+DECIDED jobs only, the same move `evaluation/metrics.ts` makes measuring
+resolution time only over jobs that finished.
+**Alternative** Two states — met or not-yet-breached counts as "on track", roll
+it into the percentage now.
+**Why not** That is optimistic rounding dressed as a number: a job with nine
+minutes left on a thirty-minute window is not "on track" in any sense a fleet
+manager should trust, and the honest answer is "not decided yet", not "fine so
+far".
+**Tradeoff** The percentage can be computed over very few decided jobs early
+in a slow month and read as noisy. `slaDecidedCount` rides beside it on the
+dashboard so a fleet manager can see the sample size, not just the number.
+
+**Decision** Current exposure is a BOOLEAN "already breached" summed over
+active incidents, never a probability.
+**Why** Phase 20's `contractSlaExposure` prices a DISPATCH DECISION under
+uncertainty about an option's estimated arrival — an input this dashboard does
+not have (no candidate is being scored) and should not manufacture from a
+stale ETA row. What the dashboard CAN say honestly is simpler: has this
+incident's window already closed with nobody there, using the identical
+deadline arithmetic `feasibility.ts` and `slaEscalation.ts` already apply.
+**Alternative** Reuse `avoidedBreachPenaltyPaise` against the job's latest
+`EtaEstimate` row.
+**Why not** An ETA row can be stale or entirely absent (a job not yet
+assigned a unit has none), and turning "we do not know" into a probability
+would be inventing precision the data does not support — the same objection
+Phase 19's fail-closed stock rule answers for parts.
+**Tradeoff** A job dispatched with a comfortable-looking ETA that is about to
+miss its window shows zero exposure until the deadline actually passes, one
+minute before it would under a probabilistic model. Simpler and never
+overstates; understates by at most one decision cycle.
+
+**Decision** "Spend this month" reads `Estimate.totalPaise` for jobs RESOLVED
+this month (`src/commit/estimates.ts`'s own `approvedTotalFor`, re-derived
+inline via a join rather than N+1 calls), not the `tenant:<id>` ledger
+account balance.
+**Why** The ledger booking for a FLEET_TENANT job with a CAPPED contract
+coverage routes the uncovered remainder to the generic
+`CUSTOMER_RECEIVABLE_ACCOUNT`, not the tenant's own account — a latent gap
+from Phase 15c that happens not to bite today because every seeded fleet
+contract is uncapped, but auditing and fixing that booking is out of scope for
+this phase. Reading the estimate total sidesteps the question entirely and
+still matches earnings.ts's own words for the number: "what the work was
+worth".
+**Alternative** Fix the Phase 15c booking gap first, then read the ledger.
+**Why not** A phase named "fleet dashboard" fixing an unrelated Phase 15c
+accounting bug is scope creep dressed as thoroughness. Flagged here and left
+for whichever phase actually owns billing correctness.
+**Tradeoff** If a fleet contract with a coverage cap is ever configured,
+dashboard spend and the ledger's own tenant-account balance could disagree.
+Recorded rather than silently risked.
+
+**Decision** The safety-band precedent from Phase 20 (splitting a plan into
+sequential Hungarian runs) has NO analogue here — the dashboard has no
+allocation to protect.
+**Why** Worth stating precisely: nothing on this dashboard is a dispatch
+decision. Every number is a READ over what earlier phases already decided and
+wrote. There is no ranking, no assignment, no place invariant 4 could be
+violated by adding a metric.
+
+**Decision** A vehicle's starting prior folds in past incidents through the
+SAME `applyLikelihood` mechanism a symptom answer already goes through, capped
+at the five most recent, rather than a bespoke weighting formula.
+**Why** One update mechanism, already tested, already the thing a maintainer
+reading `faultRules.ts` recognises. A second kind of "how much does this
+observation move the belief" arithmetic living beside the first would be two
+things to explain instead of one.
+**Alternative** A frequency-weighted multiplier — each repeat multiplies that
+fault's prior odds by a fixed factor.
+**Why not** Nothing about Bayesian updating changes just because the
+"observation" is history instead of a symptom; reusing `applyLikelihood`
+means the fold-in is provably the same kind of belief revision as everything
+around it, checkable by the same entropy maths.
+**Tradeoff** The cap at five exists only to bound how sharp the prior can get
+before a single symptom is even asked about — an unmeasured, hand-set number,
+the same honest admission every other threshold in this project carries.
+
+**Decision** Fleet notifications route through the SAME queue and the SAME
+`processNotification` handler as driver notifications, distinguished by the
+BullMQ job's own `name` field, rather than a second queue.
+**Why** Both are "wait, then describe where the job settled" — identical
+shape, different audience and window. A second queue would be a second
+worker registration, a second idempotency namespace, and a second thing that
+could silently stop being polled.
+**Alternative** One `NotificationJobData.kind` field inside the payload
+instead of routing on the queue job name.
+**Why not** Either works; `job.name` was already the label `enqueueDebounced`
+passes for the driver path, so using the field that already existed for
+exactly this purpose was one fewer thing to add to the payload shape.
+
+### Concurrency
+
+**Scenario** A re-plan fires for a fleet job; the ten-minute fleet window and
+the ninety-second driver window are both open at once.
+**What races** Nothing — they are two independent debounce keys
+(`job:<id>:replan` vs `job:<id>:fleet-state-change`) on two independent
+`enqueueDebounced` calls. Two BullMQ jobs are created, each collapsing its
+own bursts.
+**Why this matters anyway** It is worth stating precisely BECAUSE the two
+calls sit next to each other in `redispatch.ts` and could look like one
+event fanning out to two recipients. They are two separate coalescing
+windows that happen to start at the same trigger and settle independently —
+if the fleet manager's ten-minute window still has three more re-plans to
+absorb after the driver's ninety seconds have already delivered a message,
+that is correct, not a bug.
+
+**Scenario** A tenant has two FLEET_MANAGER users; a fleet state-change fires.
+**What races** Nothing new — `Promise.all` over per-recipient
+`notification.create` calls, each its own row, each independently
+idempotent through the outer `runIdempotently` on the queue job id. A crash
+mid-`Promise.all` after some rows are written and a redelivery both land on
+the SAME idempotency key, so a partial write is replayed as a whole retry —
+`runIdempotently`'s existing guarantee, unchanged by there being two
+recipients instead of one.
+
+### Weaknesses introduced
+- **Fleet spend can drift from the ledger if a fleet contract ever gets a
+  coverage cap.** Documented above. Not reachable with today's seed data.
+- **`currentExposurePaise` understates risk by up to one decision cycle** for
+  a job dispatched with an ETA that is about to miss its window — it reads
+  zero until the deadline has actually passed. Deliberate; the alternative
+  invents precision from a possibly stale or absent ETA row.
+- **The repeat-pattern rule matches on the EXACT fault code**, not a category
+  — `FLAT_BATTERY` and `FAILED_BATTERY` never combine into one pattern even
+  though both are "the battery". Simpler and defensible without inventing a
+  fault taxonomy this codebase does not otherwise have; a vehicle alternating
+  between the two codes would go unflagged.
+- **The intake prior has no decay beyond the five-incident cap.** A vehicle
+  with two ancient battery incidents and one very recent tyre incident is
+  still nudged toward "battery" by the two old ones — there is no recency
+  WEIGHTING, only a recency CAP (the five most recent, unweighted equally
+  whether one day or fifty-nine days old).
+- **`GET /fleet/dashboard` has no pagination.** A fleet of thousands of
+  vehicles would return one very large JSON body. Not reachable by the three
+  seeded fleets; the seed's largest is under thirty vehicles.
+- **"This month" is a UTC calendar month.** A fleet manager in Bengaluru can
+  read a report that rolled over at 5:30am local time rather than midnight.
+  Stated in `fleetMetrics.ts`'s own header rather than silently accepted.
+
+### Concepts now genuinely in use
+Excluding an undecided case from BOTH sides of a percentage, not just the
+numerator — the same shape as "only jobs that finished have a resolution
+time" applied to a binary outcome instead of a duration. Reusing one Bayesian
+update mechanism for two conceptually different kinds of evidence (a symptom
+answer, a vehicle's own history) rather than inventing a second kind of
+arithmetic that happens to produce a similar-looking number. Routing two
+audiences through one queue by a field that was already there for a smaller
+reason (BullMQ's job name), rather than duplicating the debounce-and-deliver
+machinery.
+
+### Interview angle
+"Two workers read a solver run and both want to escalate a threshold breach —
+how does the fleet dashboard avoid double-counting?" It does not read live
+state at all — every number is a SUM or a COUNT over rows earlier phases
+already committed (`FleetIncident[]`, one query, no lock needed), so there is
+no read-then-decide race to have in the first place; the closest thing to one
+is two fleet-manager notification rows written by an unordered `Promise.all`,
+which is safe because each write is its own row and the whole delivery is
+wrapped in one idempotency key.
+
+"Why does a fleet vehicle's prior use the same `applyLikelihood` function a
+symptom answer does, instead of its own weighting formula?" Because the two
+are the same operation under a different name — "how much should this
+observation move the belief" — and reusing the tested, entropy-checkable
+mechanism means the prior's effect on question count is provable by the exact
+same maths that already governs when intake stops asking, rather than a
+second formula nobody has separately verified against `ENTROPY_STOP_THRESHOLD_BITS`.
+
+### What broke
+**The fairness grep in `tests/evaluation.test.ts` did not fire this phase —
+worth noting why it easily could have.** Phase 20 tripped it once by naming
+"earnings Gini" in a comment; Phase 21 does not touch `cost.ts` at all, so the
+risk never arose, but it is the second phase in a row where a well-meant
+explanatory comment came close to a standing test that greps production
+source for forbidden words. Worth remembering before the next comment that
+wants to contrast something with fairness.
+
+**The intake-prior end-to-end test polluted its own fixture across manual test
+reruns, twice, before landing.** `createIntakeJob` writes a real job with real
+`job_events` behind it, and those cannot be deleted (the same append-only rule
+`tests/contracts.test.ts` already ran into at Phase 20). The first version of
+this test called `createIntakeJob` against `fd-vehicle-a` and `fd-vehicle-repeat`
+— vehicles the SAME file also makes exact assertions about ("this vehicle
+carries no repeat-pattern flag", "this vehicle carries exactly three
+incidents") — and three manual reruns while iterating on the fixture left both
+permanently carrying extra FLAT_BATTERY incidents from the debug runs,
+eventually flipping a boolean flag on a vehicle the test asserted had none.
+Fixed by giving the intake-prior comparison two vehicles dedicated to nothing
+else, and by rewriting the one assertion that happened to name a vehicle
+positionally ("the flagged vehicle is first") as the general sort invariant it
+actually meant ("no flagged vehicle sorts after any unflagged one") — the
+second fix is arguably the more durable one, since it no longer depends on
+exactly one vehicle in the fixture being flagged.
+
+**Two heredocs sent through the Bash tool failed with `unexpected EOF`, at
+the same length threshold Phases 19 and 20 both recorded.** Same fix as
+those phases — the Write tool — and the note is now three phases running,
+which is enough to stop treating it as a one-off.

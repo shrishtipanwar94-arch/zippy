@@ -34,7 +34,7 @@ import { persistSolverRun } from './persistSolverRun.js';
 import { solve } from '../engine/solve.js';
 import { startSaga } from './saga.js';
 import { appendJobEvent } from '../intake/events.js';
-import { notifyDriverOfReplan } from '../workers/notification.js';
+import { notifyDriverOfReplan, notifyFleetManagerOfStateChange } from '../workers/notification.js';
 import { runPublishingTransaction } from '../realtime/transaction.js';
 
 export type RedispatchOutcome =
@@ -292,6 +292,12 @@ export async function executeReassignment(
     // A driver missing an update is not a reason to fail a reservation that
     // has already started.
     logger.warn({ err: error, jobId: action.jobId }, 'could not enqueue a replan notification');
+  });
+  // AND, ON ITS OWN SLOWER CADENCE (Phase 21), THE FLEET MANAGER. The delivery
+  // side skips a walk-in job silently — see workers/notification.ts — so this
+  // call site does not need to know or check whether one exists.
+  await notifyFleetManagerOfStateChange(action.jobId, `reassignment:${action.kind}`).catch((error) => {
+    logger.warn({ err: error, jobId: action.jobId }, 'could not enqueue a fleet notification');
   });
 
   return {

@@ -28,6 +28,9 @@ import { nearestZone } from '../domain/geo.js';
 import { priceListInForce } from '../pricing/priceList.js';
 import { settlementPathFor } from '../commit/settlement.js';
 import { slaPolicyIdInForce } from '../commit/contractTerms.js';
+import { fleetVehiclePriorFaults } from '../commit/fleetPrior.js';
+import { fleetVehiclePrior } from '../domain/fleetPrior.js';
+import { FAULT_PRIORS } from '../domain/faults.js';
 import { logger } from '../infra/logger.js';
 import { linkExtractionToJob } from '../ai/store.js';
 import { appendJobEvent } from './events.js';
@@ -129,7 +132,6 @@ async function resolvePriceListId(
 }
 
 export async function createIntakeJob(db: PrismaClient, request: IntakeRequest): Promise<IntakeResult> {
-  const distribution = classifySymptoms(request.symptoms);
   const columns = locationColumns(request.location);
 
   // ONE FACT, ONE HOME. The road position the driver reported is the only
@@ -160,6 +162,19 @@ export async function createIntakeJob(db: PrismaClient, request: IntakeRequest):
       onHighway: columns.onHighway,
       at: request.at,
     });
+
+    // THE INTAKE PRIOR (Phase 21). A fleet vehicle's own past incidents,
+    // folded in as the starting belief before this job's actual symptoms are
+    // read — see src/domain/fleetPrior.ts for why this is a rule and not a
+    // model. Empty for everyone else, which is what makes `fleetVehiclePrior`
+    // a no-op and `distribution` come out identical to Phase 3's behaviour.
+    const priorFaults = await fleetVehiclePriorFaults(tx, {
+      vehicleId: request.vehicleId,
+      tenantId: request.tenantId,
+      before: request.at,
+    });
+    const startingPrior = fleetVehiclePrior(FAULT_PRIORS, priorFaults);
+    const distribution = classifySymptoms(request.symptoms, startingPrior);
 
     const job = await tx.job.create({
       data: {

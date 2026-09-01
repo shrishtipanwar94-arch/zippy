@@ -12,7 +12,7 @@
 
 import { prismaBase } from '../infra/prismaBase.js';
 import { logger } from '../infra/logger.js';
-import { jobRoom, roomsForJobEvent } from './rooms.js';
+import { jobRoom, roomsForJobEvent, tenantRoom } from './rooms.js';
 import type { PublishableJobEvent } from './outbox.js';
 
 // TWO WAYS TO REACH A BROWSER, ONE INTERFACE. The web process holds the real
@@ -199,15 +199,33 @@ export async function publishNotification(
   await emitToJobRoom(jobId, 'notification:new', notification);
 }
 
+// PHASE 21. A fleet manager stands in the `tenant:<tenantId>` room from the
+// moment they connect (rooms.ts's `standingRoomsFor`) rather than subscribing
+// per job the way a driver does — they are watching a fleet, not one
+// breakdown — so a fleet-facing notification is emitted to that room instead
+// of a job room. Same event name as the driver's, so one socket handler on
+// the fleet page can listen for `notification:new` without caring which room
+// it arrived through.
+export async function publishFleetNotification(
+  tenantId: string,
+  notification: NotificationMessage,
+): Promise<void> {
+  await emitToRoom(tenantRoom(tenantId), 'notification:new', notification);
+}
+
 // Best-effort, exactly as `publishJobEvents` is and for the same reason:
 // Postgres is the source of truth and the row is already committed by the time
 // this runs. A browser not hearing about it is a worse UX, not a lost message —
 // the history is refetched over HTTP on the next load.
 async function emitToJobRoom(jobId: string, event: string, payload: unknown): Promise<void> {
+  await emitToRoom(jobRoom(jobId), event, payload);
+}
+
+async function emitToRoom(room: string, event: string, payload: unknown): Promise<void> {
   try {
     const target = server ?? (await emitterFallback());
-    target.to([jobRoom(jobId)]).emit(event, payload);
+    target.to([room]).emit(event, payload);
   } catch (error) {
-    logger.error({ err: error, jobId, event }, 'failed to publish to a job room');
+    logger.error({ err: error, room, event }, 'failed to publish to a room');
   }
 }

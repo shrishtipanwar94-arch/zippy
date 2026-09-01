@@ -165,6 +165,12 @@ const state = {
   // like everything else.
   outbox: { pending: [], results: [], online: true },
 
+  // THE FLEET MANAGER'S DASHBOARD (Phase 21). One whole-board read, refreshed
+  // on demand — the same treatment scarcity and queue get, and for the same
+  // reason: this is a summary a person checks, not a live feed a socket event
+  // should be patching mid-glance.
+  fleetDashboard: null,
+
   error: null,
 };
 
@@ -406,6 +412,10 @@ export function tickClock() {
 
 export function setOutbox(outbox) {
   state.outbox = outbox;
+}
+
+export function setFleetDashboard(dashboard) {
+  state.fleetDashboard = dashboard;
 }
 
 // A PAGE ASKING TO BE TOLD. The socket writes state and calls render(), which

@@ -300,8 +300,20 @@ const VEHICLE_MOVES_LIKELIHOOD: Record<'true' | 'false', LikelihoodRow> = {
 // The one entry point. Every observation present in the payload is folded into
 // the priors in a fixed order, so the same payload always yields the same
 // distribution — Phase 10's harness replays these.
-export function classifySymptoms(symptoms: SymptomPayload): FaultDistribution {
-  let distribution: FaultDistribution = { ...FAULT_PRIORS };
+//
+// `startingPrior` DEFAULTS TO THE BASE RATE and almost every caller should
+// leave it there. It exists for exactly one other caller (Phase 21,
+// src/commit/fleetPrior.ts): a fleet vehicle with a service history starts
+// intake from a SHARPER prior than "how common is each fault across every
+// vehicle ever" — its own past incidents already say something. The symptom
+// evidence below is folded on top of whichever prior comes in, so a returning
+// vehicle and a stranger reporting the identical complaint still update by
+// exactly the same arithmetic; only where they started differs.
+export function classifySymptoms(
+  symptoms: SymptomPayload,
+  startingPrior: FaultDistribution = FAULT_PRIORS,
+): FaultDistribution {
+  let distribution: FaultDistribution = { ...startingPrior };
 
   distribution = applyLikelihood(
     distribution,
