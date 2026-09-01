@@ -41,6 +41,7 @@ export const ACTION_KINDS = [
   // APPROVE — commercial, or an admission that something has already failed.
   'ESCALATE_THRASHING_JOB',
   'CANCEL_JOB',
+  'APPROVE_CROSS_TENANT_CONTENTION',
 ] as const;
 
 export type ActionKind = (typeof ACTION_KINDS)[number];
@@ -69,6 +70,16 @@ const TIERS: Record<ActionKind, ActionTier> = {
 
   ESCALATE_THRASHING_JOB: 'APPROVE',
   CANCEL_JOB: 'APPROVE',
+  // One scarce van, a contract job and a consumer job, the same safety level.
+  // APPROVE is the whole point rather than a tier chosen by habit: the system
+  // has priced both sides and could pick, and picking is exactly what it must
+  // not do. A system that silently decides which paying customer to disappoint
+  // is a system nobody deploys — so it writes both numbers down and asks.
+  //
+  // It blocks, and blocking is the cost. A dispatcher who does not answer
+  // leaves one of two people waiting, which is the honest shape of the
+  // situation: there was only ever one van.
+  APPROVE_CROSS_TENANT_CONTENTION: 'APPROVE',
 };
 
 export function tierFor(kind: ActionKind): ActionTier {

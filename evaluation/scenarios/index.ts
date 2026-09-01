@@ -98,6 +98,10 @@ function makeJob(
       faultDistribution: distribution,
       createdAt: new Date(SCENARIO_START.getTime() + arrivalMinute * 60_000),
       slaResponseMinutes,
+      // No contract terms in the harness. A scenario measures policies against
+      // each other, and a breach penalty on some jobs and not others would be a
+      // second thing varying between runs — see the SLA note in scenarios.ts.
+      contract: null,
       parkingLevel: null,
       onHighway: false,
       safetyLevel: 'NORMAL',

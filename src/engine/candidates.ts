@@ -25,6 +25,7 @@
 import { FAULT_CODES, capabilitiesForFault } from '../domain/faults.js';
 import type { FaultCode, FaultDistribution } from '../domain/faults.js';
 import { requiredCapabilities } from '../domain/capabilitySet.js';
+import type { ContractTerms } from '../domain/contractExposure.js';
 import { sourcePartsForPairs } from './partSourcing.js';
 import type { PartsSnapshot, PartSourcing } from './partSourcing.js';
 import { travelTimeMatrix } from '../infra/routing.js';
@@ -43,7 +44,7 @@ export type JobForDispatch = {
   // stored on the job. Candidate generation does not diagnose anything — it
   // reads the belief intake already settled on.
   faultDistribution: FaultDistribution;
-  // The four fields below are unused in this file — nothing in
+  // The five fields below are unused in this file — nothing in
   // generateCandidates reads them. They ride along on the same job object
   // because Phase 7's feasibility filter needs them and takes the exact same
   // JobForDispatch, and a job splitting into two overlapping "job for X" types
@@ -53,6 +54,14 @@ export type JobForDispatch = {
   // null when the job has no SLA contract behind it (a walk-in customer) —
   // there is then no window to be unreachable within.
   slaResponseMinutes: number | null;
+  // THE CONTRACT TERMS IN FORCE WHEN THIS JOB WAS RAISED, pinned at intake and
+  // never recomputed — the same rule the price list and the settlement path
+  // follow. Null for a job no contract stands behind, which is the honest
+  // answer and not the same as a contract with a zero penalty.
+  //
+  // Read by the cost function (contractSlaExposure) and by the cross-tenant
+  // contention check. NOT read by ranking: a tier can never outrank safety.
+  contract: ContractTerms | null;
   parkingLevel: string | null;
   onHighway: boolean;
   // Read by ranking.ts, not by this file and not by the cost function —
@@ -90,7 +99,7 @@ export type UnitSnapshot = {
   lat: number | null;
   lng: number | null;
   // kind and status are unused in this file, same reason as JobForDispatch's
-  // trailing four fields — Phase 7 reads them, this file does not.
+  // trailing five fields — Phase 7 reads them, this file does not.
   kind: UnitKindSnapshot;
   status: UnitStatusSnapshot;
 };

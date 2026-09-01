@@ -2,7 +2,7 @@
 //
 //   cost = w1·expectedTimeToResolution + w2·travelDistance
 //        + w3·capabilityShortfallRisk  + w4·slaRisk + w5·operationalCost
-//        + w6·partSourcingCost
+//        + w6·partSourcingCost        + w7·contractSlaExposure
 //
 // EXPECTED TIME TO RESOLUTION IS THE WHOLE ARGUMENT. Every dispatch system
 // can send the nearest van. This one asks a different question: given what we
@@ -43,6 +43,7 @@
 import type { FaultCode } from '../domain/faults.js';
 import { FAULT_CODES } from '../domain/faults.js';
 import type { DispatchOption, JobForDispatch } from './candidates.js';
+import { avoidedBreachPenaltyPaise, remainingWindowMinutes } from '../domain/contractExposure.js';
 import { diagnoseMinutes, escalationMinutes, resolveMinutes } from './durations.js';
 
 // ---------------------------------------------------------------------------
@@ -54,7 +55,7 @@ const LABOUR_PAISE_PER_MINUTE = 500; // ~Rs 300/hour of a technician's time
 // ---------------------------------------------------------------------------
 // Weights.
 //
-// THE UNITS DO NOT MATCH, AND THAT IS THE WEIGHTS' JOB. The five terms are
+// THE UNITS DO NOT MATCH, AND THAT IS THE WEIGHTS' JOB. The seven terms are
 // measured in minutes, kilometres, two bare probabilities, and paise. A
 // weight is therefore not a "how much do I care" dial on its own — it is that
 // dial AND the conversion factor into a common scale. This is why the numbers
@@ -67,6 +68,7 @@ export type CostWeights = {
   slaRisk: number;
   operationalCost: number;
   partSourcingCost: number;
+  contractSlaExposure: number;
 };
 
 export const WEIGHT_VECTORS = {
@@ -83,6 +85,11 @@ export const WEIGHT_VECTORS = {
     // this vector cares about, and the value of the part is not what a driver
     // on a roadside is waiting for.
     partSourcingCost: 0.00002,
+    // The same weight BALANCED uses. This vector is already racing the clock
+    // for every job, contract or not, so leaning further on the contract term
+    // would buy very little and would quietly turn "fastest resolution" into
+    // "fastest resolution for whoever pays".
+    contractSlaExposure: 0.0004,
   },
   // Optimise what the run costs to operate: fuel, wear, paid time. Will
   // happily send a nearer, less capable unit and accept the re-dispatch risk.
@@ -95,6 +102,11 @@ export const WEIGHT_VECTORS = {
     // The vector that most dislikes sending a van across town for a part it
     // could have loaded this morning.
     partSourcingCost: 0.0002,
+    // A breach penalty is money leaving the business exactly like fuel is, so
+    // the vector that counts rupees counts these too — at the same weight it
+    // gives operational cost, because they are the same currency and the same
+    // ledger.
+    contractSlaExposure: 0.001,
   },
   // The default. Neither extreme; the vector a dispatcher sees first.
   BALANCED: {
@@ -111,6 +123,35 @@ export const WEIGHT_VECTORS = {
     // and a weight tuned until an option can never win has quietly become the
     // former.
     partSourcingCost: 0.00005,
+    // A ₹2,500 GOLD penalty comfortably avoided is a 250,000-paise credit,
+    // which this weight turns into a hundred points against option totals in
+    // the forties. Deliberately large: a contract breach is the most expensive
+    // single thing an ordinary shift can do. It is still a WEIGHT and can still
+    // be outvoted — and it can never outvote safety, because safety is not in
+    // this function at all.
+    contractSlaExposure: 0.0004,
+  },
+  // PLAN C. The dispatcher's answer to "we cannot afford to breach MetroCab
+  // again this month" — the same feasible options, with the contract term
+  // dominating everything except the hard filters and the safety ordering.
+  //
+  // IT DEPRIORITISES CONSUMER JOBS AND THE UI SAYS SO. A consumer job this
+  // plan leaves waiting that the recommended plan would have served is named
+  // on the plan card before a dispatcher can take it
+  // (src/domain/contractContention.ts, public/js/panels/plans.js). A
+  // trade-off a tool makes silently is a trade-off nobody signed up for.
+  PROTECT_CONTRACTS: {
+    expectedTimeToResolution: 0.6,
+    travelDistance: 0.8,
+    capabilityShortfallRisk: 25,
+    slaRisk: 20,
+    operationalCost: 0.0004,
+    partSourcingCost: 0.00005,
+    // Ten times BALANCED. Everything else is BALANCED exactly, so the ONLY
+    // difference between plan B and plan C is how much a contract promise is
+    // worth — which is what makes the two cards comparable rather than two
+    // unrelated opinions.
+    contractSlaExposure: 0.004,
   },
 } as const satisfies Record<string, CostWeights>;
 
@@ -135,6 +176,7 @@ export type CostBreakdown = {
   slaRisk: CostTerm;
   operationalCost: CostTerm;
   partSourcingCost: CostTerm;
+  contractSlaExposure: CostTerm;
   total: number;
   weightVector: WeightVectorName;
 };
@@ -219,6 +261,40 @@ export function partSourcingCostPaise(option: DispatchOption): number {
   return detourCost + option.partSourcing.partValuePaise;
 }
 
+// HOW MUCH CONTRACT PENALTY THIS OPTION IS EXPOSED TO, in paise, MEASURED
+// AGAINST NOBODY GOING — so it is zero or NEGATIVE, and the negative is a
+// credit for the breach this dispatch avoids. src/domain/contractExposure.ts
+// carries the full argument for the sign, which is not cosmetic: as a positive
+// cost this term would make a GOLD job the expensive job and hand the last van
+// to the consumer, and a heavier weight would make that worse.
+//
+// WHY A CONTRACT BELONGS IN THE OBJECTIVE WHEN AN EVEN SPREAD OF WORK DOES NOT:
+// a breach penalty is a quantified obligation somebody signed, denominated in
+// the same rupees the operational-cost term already trades in. How work is
+// distributed across technicians is a policy preference with no defensible
+// exchange rate against a stranded driver, so it stays a measured OUTCOME of a
+// whole run (evaluation/metrics.ts) and never becomes a term here.
+// src/domain/contractExposure.ts carries that argument in full.
+//
+// IT IS A WEIGHT AND CAN BE OUTVOTED, WHICH IS THE POINT. A ₹2,500 penalty at
+// the BALANCED weight is worth about a hundred points against option totals in
+// the forties, so a contract job usually does win a contested van — but an
+// option a hundred points cheaper still beats it, and it can never touch the
+// safety ordering, which is not in this function at all. A term tuned until it
+// could never lose would be a constraint wearing a disguise (invariant 3), and
+// the honest statement is that this one is large rather than absolute.
+//
+// THE DETOUR COUNTS. Arrival means arrival, so a crew diverting through a depot
+// for a part is exposed to the same window as one driving straight there — the
+// same number feasibility.ts uses for SLA_UNREACHABLE.
+export function contractSlaExposure(option: DispatchOption, job: JobForDispatch, now: Date): number {
+  if (job.slaResponseMinutes === null) return 0;
+
+  const arrivalMinutes = option.estimatedTravelMinutes + option.partSourcing.detourMinutes;
+  const remaining = remainingWindowMinutes(job.slaResponseMinutes, job.createdAt, now);
+  return -avoidedBreachPenaltyPaise(job.contract, arrivalMinutes, remaining);
+}
+
 // ---------------------------------------------------------------------------
 function term(value: number, unit: CostTerm['unit'], weight: number): CostTerm {
   return { value, unit, weight, contribution: value * weight };
@@ -247,6 +323,11 @@ export function scoreOption(
     slaRisk: term(slaRisk(option, job, now), 'probability', weights.slaRisk),
     operationalCost: term(operationalCostPaise(option, job), 'paise', weights.operationalCost),
     partSourcingCost: term(partSourcingCostPaise(option), 'paise', weights.partSourcingCost),
+    contractSlaExposure: term(
+      contractSlaExposure(option, job, now),
+      'paise',
+      weights.contractSlaExposure,
+    ),
   };
 
   const total =
@@ -255,7 +336,8 @@ export function scoreOption(
     breakdown.capabilityShortfallRisk.contribution +
     breakdown.slaRisk.contribution +
     breakdown.operationalCost.contribution +
-    breakdown.partSourcingCost.contribution;
+    breakdown.partSourcingCost.contribution +
+    breakdown.contractSlaExposure.contribution;
 
   return { ...breakdown, total, weightVector };
 }

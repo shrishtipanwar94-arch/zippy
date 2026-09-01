@@ -1,5 +1,5 @@
 // src/engine/solve.ts — the four engine pieces assembled, and the two
-// properties this phase actually has to prove:
+// properties Phase 9 actually had to prove:
 //
 //   1. GLOBAL BEATS NEAREST. A greedy pass that gives each job its own best
 //      option strands jobs that only one unit can serve. The Hungarian
@@ -36,6 +36,7 @@ function job(id: string, overrides: Partial<JobForDispatch> = {}): JobForDispatc
     faultDistribution: distribution({ FLAT_BATTERY: 1 }),
     createdAt: NOW,
     slaResponseMinutes: null,
+    contract: null,
     parkingLevel: null,
     onHighway: false,
     safetyLevel: 'NORMAL',
@@ -45,7 +46,7 @@ function job(id: string, overrides: Partial<JobForDispatch> = {}): JobForDispatc
 
 const allDayShift = { startsAt: new Date('2026-06-01T00:00:00Z'), endsAt: new Date('2026-06-01T23:59:00Z') };
 
-describe('solve — three plans over a real assignment', () => {
+describe('solve — one plan per weight vector, over a real assignment', () => {
   it('returns one plan per weight vector', async () => {
     const outcome = await solve({
       jobs: [job('j1')],
@@ -75,6 +76,7 @@ describe('solve — three plans over a real assignment', () => {
       'BALANCED',
       'FASTEST_RESOLUTION',
       'LOWEST_COST',
+      'PROTECT_CONTRACTS',
     ]);
     expect(outcome.plans.every((plan) => plan.assignments.length === 1)).toBe(true);
   });

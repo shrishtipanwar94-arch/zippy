@@ -457,3 +457,291 @@ against 30 dispatched and 27 resolved).
 around 180 lines, twice, writing nothing. Not a shell syntax problem — the same
 content written through the Write tool was fine. Anything long goes to a file
 first now.
+
+## Phase 20 — Tenancy and contracts / 2026-09-02 / phase 20: tenancy
+
+### Built
+Migration `20260902020000_phase20_contract_sla`: `sla_policies.breach_penalty_paise`
+(INTEGER NOT NULL DEFAULT 0) and a unique index on
+`sla_policies (contract_id, service_type)`, so "which policy covers this service
+under this contract" has exactly one answer for a job to pin.
+
+- `src/domain/contractExposure.ts` — `breachProbability()`,
+  `avoidedBreachPenaltyPaise()`, `remainingWindowMinutes()`, the `ContractTerms`
+  and `ContractTierSnapshot` types. Pure; no clock, no database.
+- `src/domain/contractContention.ts` — `findContestedResources()`,
+  `deprioritisedConsumerJobs()`. Pure, over plain shapes.
+- `src/commit/contractTerms.ts` — `slaPolicyIdInForce()`, the pinning read.
+- `src/commit/contention.ts` — `raiseContentionApprovals()`.
+- `src/commit/vehicleRegistration.ts` — `registerVehicle()`,
+  `normaliseRegistration()`, four typed rejection codes.
+- `src/api/vehicles.ts` — `POST /vehicles`.
+- `src/engine/cost.ts` — seventh term `contractSlaExposure`; fourth weight
+  vector `PROTECT_CONTRACTS`.
+- `src/engine/solve.ts` — `buildPlan` now solves one Hungarian per SAFETY BAND;
+  `assignBand()` extracted; `RECOMMENDED_PLAN`; `contestedIn()`;
+  `SolverOutcome.contestedResources`; the pinned contract terms joined the
+  snapshot hash.
+- `src/engine/candidates.ts` — `JobForDispatch.contract`.
+- `src/commit/dispatchSnapshot.ts` — reads the terms through the job's PINNED
+  `sla_policy_id`, not through the contract active now.
+- `src/intake/createJob.ts` — pins `slaPolicyId` at creation, on the row and on
+  the `JOB_CREATED` event. Until this phase the column was never written, so
+  `slaResponseMinutes` was null for every job in production and the whole SLA
+  half of feasibility and cost was dead code.
+- `src/domain/actionTiers.ts` — `APPROVE_CROSS_TENANT_CONTENTION` (APPROVE).
+- `src/auth/permissions.ts` — new resource `vehicle`; FLEET_MANAGER and
+  DISPATCHER get read+create.
+- `src/api/solve.ts` and `src/workers/solver.ts` — raise the contention
+  approvals after persisting the run; the route also returns
+  `deprioritisedConsumerJobIds` per plan.
+- `public/js/panels/plans.js` — the trade-off warning line on a plan card.
+- `prisma/seed/tenants.ts` — GOLD ₹2,500, SILVER ₹800, highway double.
+- `tests/contracts.test.ts` — 28 tests, the four the phase names among them.
+
+### Decisions
+
+**Decision** The contract term enters the cost function as a NEGATIVE number —
+`-(1 - P(breach)) x penalty`, the penalty this dispatch avoids — rather than as
+the positive `P(breach) x penalty` the build plan writes.
+**Why** The assignment minimises the sum over a plan, and a job that goes
+unserved contributes `UNAVAILABLE_COST`, a flat sentinel identical for every job.
+So a positive exposure on the served cell makes a GOLD job the EXPENSIVE job: with
+one van left the solver hands it to the consumer and lets the contract breach, and
+raising the weight makes that worse rather than better. The only place the cost of
+NOT serving a job can enter is by shifting the served cells down by what a
+dispatch avoids.
+**Alternative** Put the penalty on the unassigned side instead — give each job's
+padding column its own penalty rather than the shared sentinel.
+**Why not** `UNAVAILABLE_COST` means "there is nothing here to choose", not "this
+is very bad", and allocation.ts's own comment is the argument that it is not a
+disguised constraint. Making it per-job re-opens exactly that question, in the
+file where invariant 3 is hardest to defend.
+**Tradeoff** A cost term that is never positive reads oddly, and `plan.totalCost`
+can now be negative. Both are commented where they appear.
+
+**Decision** Safety became a lexicographic ordering in the GLOBAL ASSIGNMENT, not
+only inside one job's ranking: `buildPlan` runs one Hungarian per safety level,
+HIGH_RISK first, each band seeing only the units the bands above it left.
+**Why** `ranking.ts` has held invariant 4 since Phase 8 for "who do we send to
+THIS job". It says nothing about "which job gets the last van", and that gap was
+unreachable in practice only because nothing in the cost function was large enough
+to exploit it. A ₹2,500 penalty at the BALANCED weight is about a hundred points
+against option totals in the forties. The phase's own required test — a HIGH_RISK
+consumer beating a GOLD contract job — cannot pass honestly without this.
+**Alternative** A very large safety bonus inside the cost function.
+**Why not** That is precisely the mistake invariant 4 exists to rule out; a
+weighted term can always be outvoted, and the phase that introduced a hundred-point
+term is the phase that proves it.
+**Tradeoff** The plan is no longer globally cost-optimal. Sequential bands are
+greedy ACROSS bands and exact WITHIN each, so a HIGH_RISK job can take a unit an
+ELEVATED job needed more, at a higher total. Stated in the file. It only bites
+when two safety levels genuinely compete; the whole evaluation harness (every job
+NORMAL) produced byte-identical outcome metrics before and after.
+
+**Decision** `PROTECT_CONTRACTS` is BALANCED with one weight changed —
+`contractSlaExposure` x10 — and nothing else.
+**Why** Plan B and plan C are then comparable: the only difference between them
+is how much a contract promise is worth, which is the question a dispatcher is
+actually being asked. A vector that also moved travel and operational weights
+would be a different opinion about everything, and "why is C different?" would
+have no short answer.
+**Alternative** Tune all six weights for a contract-first posture.
+**Why not** Nothing has been measured that would justify any of the other five
+numbers, and an untuned guess dressed as a policy is worse than one honest dial.
+**Tradeoff** There are now four plan cards where the UI was designed for three.
+Bootstrap wraps them; the count lives in `WEIGHT_VECTORS` and nowhere else.
+
+**Decision** Cross-tenant contention ESCALATES rather than resolving — an APPROVE
+`ActionRequest` carrying both jobs, both costs, and the contested unit.
+**Why** At the same safety level the objective will always prefer the job with a
+priced obligation attached, and "we sent the van to the fleet because the fleet
+pays us" is not a sentence anybody wants to discover after the fact.
+**Alternative** Let the cost function settle it silently; it already can.
+**Why not** The build plan is explicit and it is right: a system that silently
+chooses which paying customer to disappoint is a system nobody deploys.
+**Tradeoff** APPROVE blocks. A dispatcher who never answers leaves one of two
+people waiting — which is the honest shape of the situation, because there was
+only ever one van.
+
+**Decision** The card is raised on the job that LOST, once per job, skipped while
+a PENDING card of that kind already exists.
+**Why** The loser is the job whose fate is open, and it is the job somebody will
+ring up about. The debounced zone re-plan fires every couple of seconds under
+load and would otherwise stack an identical card until somebody answered.
+**Alternative** Key idempotency on the solver run.
+**Why not** Every run is a new run, so that is not idempotency, it is a new card
+per run with extra steps.
+**Tradeoff** If a dispatcher rejects a card and the contention persists, the next
+solve raises a fresh one. Correct, but it means "rejected" does not mean "stop
+asking".
+
+**Decision** `TENANT_CONTRACT_EXCLUDES` stays a stub after the phase that was
+supposed to implement it.
+**Why** The obvious candidate is not one. `covered_services.covered = false`
+means "this contract does not pay for this service", and
+`src/domain/settlementPath.ts` already resolves that: the driver is a WALK_IN for
+that job and is served and billed accordingly. Turning cover into a hard filter
+would make the system refuse to help a stranded person over a billing question —
+the same mistake the SLA filter had to be talked out of at Phase 10. No contract
+term in the schema names which providers may serve it, so nothing here can be
+honest yet.
+**Alternative** Implement it against the coverage flag anyway, so the code has no
+stub in it.
+**Why not** Documenting as implemented what is not implemented is the one thing
+the standing instruction forbids outright, and a filter that fires for the wrong
+reason is worse than a filter that does not fire.
+**Tradeoff** One of the ten reason codes is still dead. Recorded in §15.
+
+**Decision** A vehicle is checked against two tenancy conflicts at registration:
+the plate already on file under another tenant, and the vehicle's tenant
+differing from its driver's.
+**Why** The tenant on the vehicle decides whose contract a breakdown is served
+under, whose SLA window the solver prices, and who is invoiced. Two answers to
+those means the system picks whichever row came back first — serving one fleet's
+vehicle on another fleet's contract, in a job that looks entirely ordinary.
+**Alternative** Rely on the unique index on `vehicles.registration`.
+**Why not** It catches the first conflict and produces "unique constraint
+failed" rather than a sentence naming the tenant that holds the plate, and it
+catches the second not at all — that row inserts cleanly.
+**Tradeoff** The read-then-insert is not atomic; the index is still what enforces
+it, and the loser of a race gets a 409 from the error middleware.
+
+### Concurrency
+
+**Scenario** Two dispatchers, or a dispatcher and the debounced zone re-plan,
+solve the same zone at the same moment and both see the same contested unit.
+**What races** Both call `raiseContentionApprovals` for the same losing job.
+**Why dangerous** Two identical APPROVE cards for one decision; approving one
+leaves the other pending, and the queue shows a question that has been answered.
+**How handled** A `findFirst` for a PENDING card of that kind on that job, then
+the insert. This is a read-then-write and it is NOT atomic — two callers inside
+the same window can both find nothing and both insert.
+**Assumption relied on** That the window is small (both statements are on the
+same connection, milliseconds apart) and that the failure is cosmetic rather than
+harmful: the second card is a duplicate question, not a duplicate side effect,
+because approving one of these executes nothing (`src/api/actions.ts` records the
+decision and stops). A unique partial index on
+`(job_id, kind) WHERE status = 'PENDING'` would close it and is the right fix if
+duplicates ever show up; it is not there yet, and §15 says so rather than the
+comment claiming a guarantee the code does not make.
+
+**Scenario** A contract is edited — re-tiered, deactivated, its window shortened
+— while a technician is driving to a job under it.
+**What races** The solver re-plans mid-incident and reads the contract as it is
+NOW, while the customer was quoted the terms as they WERE.
+**Why dangerous** The objective changes underneath a live job, producing a
+re-plan nobody can explain, and in the other direction a customer is served under
+terms they were never offered.
+**How handled** Not by locking. `jobs.sla_policy_id` is resolved once inside the
+intake transaction and never re-read — the third pinned column alongside
+`price_list_id` and `settlement_path` — and `buildDispatchSnapshot` follows the
+pinned policy rather than looking up the active contract.
+**Assumption relied on** That an SLA policy row is not itself edited in place.
+Pinning the id fixes WHICH policy; it does not freeze that policy's numbers. A
+`UPDATE sla_policies SET response_minutes` would still reach live jobs. Contract
+terms are not edited in this system today, and a versioned policy row is the fix
+if they ever are.
+
+### Weaknesses introduced
+- **The contention guard is read-then-write.** Two concurrent solves can raise
+  two identical APPROVE cards. Cosmetic at current scale — the action executes
+  nothing — and the fix is one partial unique index. Matters only when two
+  dispatchers work the same zone during a surge, which is exactly when it would
+  happen.
+- **Pinning the policy id does not pin the policy's numbers.** Editing an
+  `sla_policies` row reaches every live job that pinned it. Nothing edits them
+  today. Does not matter at current scale; would matter the first time a contract
+  is renegotiated in place.
+- **`breachProbability` is a ruler, not a model.** Linear from a hand-set
+  half-window threshold to certainty at the deadline. Nothing about travel-time
+  error has ever been measured in this project, so the shape is asserted, not
+  fitted. It is monotone in arrival time, which is the only property the ranking
+  actually depends on.
+- **The contract credit is large.** At BALANCED a GOLD penalty is worth about a
+  hundred points against option totals in the forties, so a contract job usually
+  does win a contested van. It is still a weight — an option a hundred points
+  cheaper beats it — but "usually decisive" is close enough to the constraint
+  invariant 3 forbids that it is worth saying out loud rather than discovering.
+- **Safety bands cost optimality.** The plan is exact within a band and greedy
+  across bands. A HIGH_RISK job can take a unit an ELEVATED job needed more.
+  Deliberate; invariant 4 is the point.
+- **`TENANT_CONTRACT_EXCLUDES` is still a stub.** Ten reason codes, nine real.
+- **`POST /vehicles` is the only vehicle route.** No update, no deactivation, no
+  transfer between tenants — and transfer is the operation a real fleet actually
+  performs when it sells a van. Registration was what the phase required; the rest
+  is not built and is not pretended.
+- **Nothing reads `ContractTerms.tier`.** The penalty carries all the weight; the
+  tier rides along for the escalation card and the UI. `contract_tiers.priority`
+  is still unused by any decision.
+
+### Concepts now genuinely in use
+Lexicographic ordering applied to a MATCHING rather than to a sort — safety bands
+solved in sequence, each seeing what the band above left. The baseline problem in
+a linear objective: a term that prices an alternative the model cannot represent
+has to be folded into the cells as a credit, and getting the sign wrong inverts
+the behaviour it was added for. Pinned terms as a concurrency technique — three
+columns now (`price_list_id`, `settlement_path`, `sla_policy_id`) that exist so a
+later read cannot disagree with an earlier promise. Escalation as a first-class
+outcome: a decision the system can make and deliberately does not.
+
+### Interview angle
+"You put a contract penalty in the cost function. Which way does the sign go, and
+why?" Negative — the term is what the dispatch AVOIDS, not what it risks, because
+the assignment prices an unserved job with one flat sentinel and the only way the
+penalty for going unserved can enter is as a credit on the served cells. Priced
+the other way round, a GOLD job becomes the expensive job and the last van goes to
+the consumer while the contract breaches.
+
+"Safety outranks contract tier — where is that actually enforced?" In two places
+for two different questions: `ranking.ts` for which crew goes to one job, and the
+safety bands in `buildPlan` for which job gets the last van. The second arrived
+this phase, because a hundred-point contract term is the first thing in the cost
+function large enough to have exploited the gap.
+
+### What broke
+**The cost term was backwards the first time it was wired.** Written as the build
+plan states it — `P(breach) x penalty`, a positive cost — it made the GOLD job the
+expensive cell in the matrix, so with one van and two jobs the Hungarian gave the
+van to the consumer and left the contract breaching, and `PROTECT_CONTRACTS` made
+it worse in proportion to its weight. Caught while designing the phase's own
+required test, before the code ran: writing down what the assertion should say
+("the GOLD job wins when both are NORMAL") made the sign obviously wrong. The fix
+is the credit formulation above and `tests/contracts.test.ts` pins it with an
+assertion whose comment says why.
+
+**The phase's HIGH_RISK-beats-GOLD test could not have passed.** `buildPlan` fed
+one Hungarian a matrix of cost totals and consulted safety nowhere, so invariant 4
+had no representation in the global assignment at all. It had been invisible for
+eleven phases because no term was ever big enough to notice. Fixed with safety
+bands; the evaluation harness's outcome metrics are byte-identical before and
+after, which is the evidence that the change only fires when two safety levels
+compete.
+
+**`jobs.sla_policy_id` had never been written.** Three consumers read it —
+`buildDispatchSnapshot`, `slaEscalation`, the console — and intake had never set
+it, so `slaResponseMinutes` was null on every job in production and the SLA
+filter, the SLA cost term and the SLA escalation sweep were all dead paths that
+only fixtures setting the column by hand ever exercised. Found while looking for
+where to hang the contract terms.
+
+**The test fixture could not be torn down.** `job_events` rejects DELETE, so
+deleting a job fails on the cascade, and with the jobs still there the driver,
+vehicle and tenant behind them cannot go either — the gotcha the file already
+warned about, met from the other side. The suite passed 28/28 and failed in
+`afterAll`. Rewritten as an idempotent upsert fixture whose only cleanup is
+cancelling the jobs (a terminal status is what keeps them out of other suites'
+snapshots) and deleting the APPROVE cards (the contention test asserts that the
+first call raises one and the second does not, so a card left pending from the
+last run would make the first call a no-op).
+
+**The fairness grep went red.** `tests/evaluation.test.ts` reads `src/engine/cost.ts`
+and asserts it never matches `/fairness|gini|earnings/i`. The new term's comment
+explained why a contract obligation belongs in the objective by contrasting it
+with the earnings Gini — and named it. Reworded rather than weakening the test,
+which was doing exactly its job.
+
+**A long heredoc through the Bash tool failed with `unexpected EOF`, twice,
+writing nothing** — the same failure Phase 19 recorded, at around the same length.
+Both files went through the Write tool instead. The note from last phase was
+right and is now confirmed rather than suspected.

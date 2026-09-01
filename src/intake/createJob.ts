@@ -27,6 +27,7 @@ import type { LocationInput } from '../domain/location.js';
 import { nearestZone } from '../domain/geo.js';
 import { priceListInForce } from '../pricing/priceList.js';
 import { settlementPathFor } from '../commit/settlement.js';
+import { slaPolicyIdInForce } from '../commit/contractTerms.js';
 import { logger } from '../infra/logger.js';
 import { linkExtractionToJob } from '../ai/store.js';
 import { appendJobEvent } from './events.js';
@@ -74,6 +75,10 @@ export type IntakeResult = {
   // while a technician is driving out does not retroactively hand the customer
   // a bill they were never quoted.
   settlementPath: SettlementPath;
+  // The SLA policy this job is pinned to, or null for a walk-in. Returned
+  // alongside the other two pinned decisions so a caller can see all three
+  // without a second read.
+  slaPolicyId: string | null;
   safetyLevel: SafetyLevel;
   safetyReasonCodes: string[];
   entropyBits: number;
@@ -148,6 +153,13 @@ export async function createIntakeJob(db: PrismaClient, request: IntakeRequest):
       onHighway: columns.onHighway,
       at: request.at,
     });
+    // The third pinning, and the one dispatch reads: the response window this
+    // job is promised and what breaching it costs. Null for a walk-in.
+    const slaPolicyId = await slaPolicyIdInForce(tx, {
+      tenantId: request.tenantId,
+      onHighway: columns.onHighway,
+      at: request.at,
+    });
 
     const job = await tx.job.create({
       data: {
@@ -157,6 +169,7 @@ export async function createIntakeJob(db: PrismaClient, request: IntakeRequest):
         zoneId,
         priceListId,
         settlementPath,
+        slaPolicyId,
         status: 'INTAKE',
         safetyLevel: triage.level,
         createdAt: request.at,
@@ -212,7 +225,7 @@ export async function createIntakeJob(db: PrismaClient, request: IntakeRequest):
       // The pinned price list is on the event as well as the column: the
       // column is what the job settles at, this is the record that it was
       // decided at creation and by whom.
-      payload: { zoneId, priceListId, settlementPath },
+      payload: { zoneId, priceListId, settlementPath, slaPolicyId },
     });
     await appendJobEvent(tx, {
       ...common,
@@ -272,6 +285,7 @@ export async function createIntakeJob(db: PrismaClient, request: IntakeRequest):
       zoneId,
       priceListId,
       settlementPath,
+      slaPolicyId,
       safetyLevel: triage.level,
       safetyReasonCodes: triage.reasonCodes,
       entropyBits: hypothesis.entropy,

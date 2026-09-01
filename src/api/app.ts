@@ -9,6 +9,7 @@ import { logger } from '../infra/logger.js';
 import { healthRouter } from './health.js';
 import { authRouter } from './auth.js';
 import { jobsRouter } from './jobs.js';
+import { vehiclesRouter } from './vehicles.js';
 import { intakeRouter } from './intake.js';
 import { solveRouter } from './solve.js';
 import { diagnosisRouter } from './diagnosis.js';
@@ -77,6 +78,7 @@ export function createApp(): Express {
   app.use(healthRouter);
   app.use(authRouter);
   app.use(jobsRouter);
+  app.use(vehiclesRouter);
   app.use(intakeRouter);
   app.use(solveRouter);
   app.use(diagnosisRouter);

@@ -55,30 +55,30 @@ be byte-identical across runs. Decisions and simulated durations are.
 
 | scenario | policy | solver wall clock p95 |
 | --- | --- | ---: |
-| normal-day | fifo | 2.15 ms |
-| normal-day | nearest-unit | 2.43 ms |
-| normal-day | skill-aware | 2.22 ms |
-| normal-day | capability-aware-global | 3.46 ms |
-| monsoon-surge | fifo | 17.30 ms |
-| monsoon-surge | nearest-unit | 15.95 ms |
-| monsoon-surge | skill-aware | 16.59 ms |
-| monsoon-surge | capability-aware-global | 37.29 ms |
-| capability-scarcity | fifo | 0.37 ms |
-| capability-scarcity | nearest-unit | 0.38 ms |
-| capability-scarcity | skill-aware | 0.46 ms |
-| capability-scarcity | capability-aware-global | 1.92 ms |
-| ambiguous-diagnosis | fifo | 7.31 ms |
-| ambiguous-diagnosis | nearest-unit | 4.56 ms |
-| ambiguous-diagnosis | skill-aware | 4.19 ms |
-| ambiguous-diagnosis | capability-aware-global | 12.80 ms |
-| technician-dropout | fifo | 1.45 ms |
-| technician-dropout | nearest-unit | 1.28 ms |
-| technician-dropout | skill-aware | 2.38 ms |
-| technician-dropout | capability-aware-global | 2.83 ms |
-| parts-stockout | fifo | 5.14 ms |
-| parts-stockout | nearest-unit | 3.99 ms |
-| parts-stockout | skill-aware | 7.35 ms |
-| parts-stockout | capability-aware-global | 10.00 ms |
+| normal-day | fifo | 1.10 ms |
+| normal-day | nearest-unit | 1.10 ms |
+| normal-day | skill-aware | 1.09 ms |
+| normal-day | capability-aware-global | 1.93 ms |
+| monsoon-surge | fifo | 8.04 ms |
+| monsoon-surge | nearest-unit | 7.84 ms |
+| monsoon-surge | skill-aware | 7.72 ms |
+| monsoon-surge | capability-aware-global | 19.98 ms |
+| capability-scarcity | fifo | 0.21 ms |
+| capability-scarcity | nearest-unit | 0.22 ms |
+| capability-scarcity | skill-aware | 0.22 ms |
+| capability-scarcity | capability-aware-global | 1.02 ms |
+| ambiguous-diagnosis | fifo | 2.38 ms |
+| ambiguous-diagnosis | nearest-unit | 2.38 ms |
+| ambiguous-diagnosis | skill-aware | 2.28 ms |
+| ambiguous-diagnosis | capability-aware-global | 6.84 ms |
+| technician-dropout | fifo | 0.64 ms |
+| technician-dropout | nearest-unit | 0.63 ms |
+| technician-dropout | skill-aware | 0.75 ms |
+| technician-dropout | capability-aware-global | 1.72 ms |
+| parts-stockout | fifo | 2.23 ms |
+| parts-stockout | nearest-unit | 2.49 ms |
+| parts-stockout | skill-aware | 2.10 ms |
+| parts-stockout | capability-aware-global | 6.13 ms |
 
 ## How to read this
 

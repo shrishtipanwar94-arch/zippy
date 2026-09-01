@@ -298,12 +298,20 @@ model SlaPolicy {
   serviceType       String   @map("service_type")
   responseMinutes   Int      @map("response_minutes")
   resolutionMinutes Int      @map("resolution_minutes")
+  // WHAT MISSING THE WINDOW COSTS, in paise. This is the number that lets a
+  // contract obligation enter the cost function as arithmetic rather than as a
+  // preference: P(breach) x penalty is a quantity of money, and money is
+  // already what `operational_cost` is measured in.
+  breachPenaltyPaise Int     @default(0) @map("breach_penalty_paise")
   createdAt         DateTime @default(now()) @map("created_at")
 
   contract  Contract   @relation(fields: [contractId], references: [id], onDelete: Cascade)
   jobs      Job[]
   slaEvents SlaEvent[]
 
+  // A job pins ONE policy at creation, so "which policy covers this service
+  // under this contract" has to have one answer.
+  @@unique([contractId, serviceType])
   @@index([contractId])
   @@map("sla_policies")
 }

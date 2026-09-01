@@ -39,6 +39,7 @@ function job(overrides: Partial<JobForDispatch> = {}): JobForDispatch {
     faultDistribution: distribution({ FLAT_BATTERY: 1 }),
     createdAt: NOW,
     slaResponseMinutes: null,
+    contract: null,
     parkingLevel: null,
     onHighway: false,
     safetyLevel: 'NORMAL',

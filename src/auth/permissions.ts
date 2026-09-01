@@ -79,7 +79,11 @@ export type Resource =
   // system on purpose is not "updating a job" — and because the route that
   // uses it does not exist in a production build at all, so this permission is
   // the second lock rather than the only one.
-  | 'chaosControl';
+  | 'chaosControl'
+  // Putting a vehicle on a tenant's books (Phase 20). Its own resource because
+  // it is the one write a FLEET_MANAGER has, and "may read my fleet" should
+  // not have quietly meant "may add to it".
+  | 'vehicle';
 
 type PermissionTable = Record<Role, Partial<Record<Resource, Action[]>>>;
 
@@ -138,6 +142,9 @@ const PERMISSIONS: PermissionTable = {
     unit: ['read', 'update'],
     technician: ['read'],
     driver: ['read'],
+    // A dispatcher registers a vehicle on a fleet's behalf — a phone call to
+    // the desk is how half of these actually arrive.
+    vehicle: ['read', 'create'],
     user: ['read'],
     auditLog: ['read'],
     // Any van's parts, and how stale the count is. Read-only: a dispatcher who
@@ -148,6 +155,9 @@ const PERMISSIONS: PermissionTable = {
   },
   FLEET_MANAGER: {
     job: ['read'],
+    // Registers vehicles into their own fleet. The tenant comes off the token,
+    // never off the body — see src/api/vehicles.ts.
+    vehicle: ['read', 'create'],
     driver: ['read'],
     unit: ['read'],
     technician: ['read'],

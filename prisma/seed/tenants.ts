@@ -24,6 +24,12 @@ type FleetSeed = {
   tierId: string;
   responseMinutes: number;
   resolutionMinutes: number;
+  // WHAT MISSING THE RESPONSE WINDOW COSTS, in paise, per incident. Plausible
+  // Indian fleet-contract figures, not measured ones — a GOLD contract's
+  // service credit is worth several times a SILVER one's, which is most of
+  // what "tier" means once the marketing is stripped out. This is the number
+  // the cost function prices exposure against (src/domain/contractExposure.ts).
+  breachPenaltyPaise: number;
   managerEmail: string;
   managerName: string;
 };
@@ -35,6 +41,7 @@ const FLEETS: FleetSeed[] = [
     tierId: 'tier-gold',
     responseMinutes: 30,
     resolutionMinutes: 90,
+    breachPenaltyPaise: 250_000, // Rs 2,500
     managerEmail: 'fm-metrocab@zippy.internal',
     managerName: 'MetroCab Fleet Manager',
   },
@@ -44,6 +51,7 @@ const FLEETS: FleetSeed[] = [
     tierId: 'tier-silver',
     responseMinutes: 45,
     resolutionMinutes: 120,
+    breachPenaltyPaise: 80_000, // Rs 800
     managerEmail: 'fm-city@zippy.internal',
     managerName: 'CityLogistics Fleet Manager',
   },
@@ -53,6 +61,7 @@ const FLEETS: FleetSeed[] = [
     tierId: 'tier-silver',
     responseMinutes: 45,
     resolutionMinutes: 120,
+    breachPenaltyPaise: 80_000, // Rs 800
     managerEmail: 'fm-quick@zippy.internal',
     managerName: 'QuickMove Fleet Manager',
   },
@@ -89,23 +98,30 @@ async function seedFleetTenant(prisma: PrismaClient, fleet: FleetSeed): Promise<
     },
   });
 
-  // One SLA policy per service type. Highway work gets a tighter window
-  // because a stranded vehicle on a highway is the dangerous case.
+  // One SLA policy per service type. Highway work gets a tighter window AND a
+  // heavier penalty, both for the same reason: a stranded vehicle on a highway
+  // is the dangerous case, and a contract that priced both callouts identically
+  // would not be a contract anybody in this business would sign.
   const slaPolicies = [
-    { suffix: 'standard', serviceType: 'STANDARD', response: fleet.responseMinutes, resolution: fleet.resolutionMinutes },
-    { suffix: 'highway', serviceType: 'HIGHWAY', response: Math.round(fleet.responseMinutes * 0.7), resolution: Math.round(fleet.resolutionMinutes * 0.8) },
+    { suffix: 'standard', serviceType: 'STANDARD', response: fleet.responseMinutes, resolution: fleet.resolutionMinutes, penalty: fleet.breachPenaltyPaise },
+    { suffix: 'highway', serviceType: 'HIGHWAY', response: Math.round(fleet.responseMinutes * 0.7), resolution: Math.round(fleet.resolutionMinutes * 0.8), penalty: fleet.breachPenaltyPaise * 2 },
   ];
   for (const policy of slaPolicies) {
     const id = `sla-${fleet.id}-${policy.suffix}`;
     await prisma.slaPolicy.upsert({
       where: { id },
-      update: { responseMinutes: policy.response, resolutionMinutes: policy.resolution },
+      update: {
+        responseMinutes: policy.response,
+        resolutionMinutes: policy.resolution,
+        breachPenaltyPaise: policy.penalty,
+      },
       create: {
         id,
         contractId,
         serviceType: policy.serviceType,
         responseMinutes: policy.response,
         resolutionMinutes: policy.resolution,
+        breachPenaltyPaise: policy.penalty,
       },
     });
     await prisma.coveredService.upsert({

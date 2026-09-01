@@ -195,8 +195,26 @@ function checkDestinationAuthorised(_option: DispatchOption, _job: JobForDispatc
   return null;
 }
 
-// STUB until Phase 20. Tenancy and contract coverage exclusions are not
-// modelled yet. Never rejects.
+// TENANT_CONTRACT_EXCLUDES — AND WHY PHASE 20 DELIBERATELY LEFT IT A STUB.
+//
+// The tenancy layer is live: a job carries the contract terms it was pinned to
+// at creation, and the cost function prices a breach against them
+// (src/domain/contractExposure.ts). What did NOT arrive with it is a case where
+// a contract makes an option illegal, and the reason is worth reading, because
+// the obvious candidate looks like one and is not.
+//
+// `covered_services.covered = false` means "this contract does not pay for this
+// service". It does not mean "do not send anyone". A driver whose contract
+// excludes towing is a WALK-IN for that job — src/domain/settlementPath.ts
+// resolves exactly that, and they are served and billed accordingly. Turning
+// cover into a hard filter would make the system refuse to help a stranded
+// person over a billing question, which is the same mistake the SLA filter
+// already had to be talked out of (see the comment on the deadline check above).
+//
+// So this code is reserved rather than implemented, and it is reserved for a
+// genuine exclusion: a contract that names which providers may serve it. No
+// such term exists in the schema, so nothing here can be honest yet. Never
+// rejects — see INTERVIEW.md §15.
 function checkTenantContract(_option: DispatchOption, _job: JobForDispatch): Rejection['detail'] | null {
   return null;
 }

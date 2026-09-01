@@ -29,6 +29,7 @@ import type { PartsSnapshot } from '../engine/partSourcing.js';
 import { FAULT_CODES } from '../domain/faults.js';
 import type { FaultDistribution } from '../domain/faults.js';
 import { stockConfidence } from '../domain/stockConfidence.js';
+import type { ContractTerms, ContractTierSnapshot } from '../domain/contractExposure.js';
 import { STOCK_AGE_THRESHOLDS } from './vanStock.js';
 
 // Jobs the solver should be planning for: raised, diagnosed, and not yet
@@ -56,6 +57,18 @@ function toDistribution(stored: unknown): FaultDistribution {
     distribution[fault] = typeof value === 'number' && value > 0 ? value : 0;
   }
   return distribution;
+}
+
+// The pinned SLA policy as the engine's plain terms. Null when the job pinned
+// no policy — a walk-in with no contract behind them, which is most jobs.
+function contractTerms(
+  policy: { breachPenaltyPaise: number; contract: { tier: { name: string } } } | null,
+): ContractTerms | null {
+  if (!policy) return null;
+  return {
+    tier: policy.contract.tier.name as ContractTierSnapshot,
+    breachPenaltyPaise: policy.breachPenaltyPaise,
+  };
 }
 
 export async function buildDispatchSnapshot(
@@ -99,7 +112,19 @@ export async function buildDispatchSnapshot(
         safetyLevel: true,
         parkingLevel: true,
         onHighway: true,
-        slaPolicy: { select: { responseMinutes: true } },
+        // THE TERMS THIS JOB WAS PINNED TO AT CREATION, followed through the
+        // policy it pinned rather than looked up again from the contract that
+        // is active now. A contract that lapsed or was re-tiered while a
+        // technician was driving out does not change what this job is being
+        // served under — the same rule `price_list_id` and `settlement_path`
+        // follow, and the reason `slaPolicyId` is a column at all.
+        slaPolicy: {
+          select: {
+            responseMinutes: true,
+            breachPenaltyPaise: true,
+            contract: { select: { tier: { select: { name: true } } } },
+          },
+        },
         // The most recent hypothesis is the current belief — intake writes a
         // new row per answer rather than updating in place.
         faultHypotheses: {
@@ -175,6 +200,7 @@ export async function buildDispatchSnapshot(
       faultDistribution: toDistribution(hypothesis.distribution),
       createdAt: row.createdAt,
       slaResponseMinutes: row.slaPolicy?.responseMinutes ?? null,
+      contract: contractTerms(row.slaPolicy),
       parkingLevel: row.parkingLevel,
       onHighway: row.onHighway ?? false,
       safetyLevel: row.safetyLevel as SafetyLevelSnapshot,

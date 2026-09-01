@@ -21,6 +21,7 @@ import { config } from '../infra/config.js';
 import { buildDispatchSnapshot } from '../commit/dispatchSnapshot.js';
 import { persistSolverRun } from '../commit/persistSolverRun.js';
 import { solve } from '../engine/solve.js';
+import { raiseContentionApprovals } from '../commit/contention.js';
 import { isChaosOn } from '../chaos/switches.js';
 import { logger } from '../infra/logger.js';
 
@@ -103,8 +104,19 @@ export async function processSolver(job: Job<{ zoneId: string; trigger?: string 
       jobId: null,
     });
 
+    // CROSS-TENANT CONTENTION ESCALATES FROM THE AUTOMATIC PATH TOO, and this
+    // is the more important of the two: nobody pressed anything. A contract job
+    // and a consumer job arriving a minute apart and wanting the same van is
+    // exactly the case a dispatcher would otherwise never learn about, because
+    // the plan that resolved it looked entirely ordinary.
+    //
+    // Safe under the debounce: a job that already has a PENDING card of this
+    // kind is skipped, so a zone re-planning every few seconds asks once.
+    const raised = await raiseContentionApprovals(prismaBase, outcome.contestedResources);
+
     await job.log(
-      `zone ${job.data.zoneId}: solved ${jobs.length} jobs, run ${solverRunId}, ${outcome.wallClockMs}ms`,
+      `zone ${job.data.zoneId}: solved ${jobs.length} jobs, run ${solverRunId}, ` +
+        `${outcome.wallClockMs}ms, ${raised.length} contention approval(s) raised`,
     );
   });
 }
