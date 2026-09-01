@@ -7,44 +7,46 @@ implementation of the solver in this directory.
 
 Seed: `20260901`. Re-running the same seed reproduces this table exactly.
 
-| scenario | policy | resolved | stranded | 1st-visit | mean arrival | mean resolution | 2nd dispatch | SLA breach | utilisation | earnings Gini |
-| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
-| normal-day | fifo | 58/60 | 0 | 96.7% | 39.9 min | 63.2 min | 3.3% | 12 | 14.5% | 0.686 |
-| normal-day | nearest-unit | 58/60 | 0 | 96.7% | 28.0 min | 51.4 min | 3.3% | 6 | 13.0% | 0.631 |
-| normal-day | skill-aware | 59/60 | 0 | 96.7% | 33.1 min | 57.8 min | 3.3% | 7 | 13.6% | 0.650 |
-| normal-day | capability-aware-global | 59/60 | 0 | 96.7% | 24.8 min | 49.2 min | 3.3% | 3 | 12.3% | 0.630 |
-| monsoon-surge | fifo | 97/180 | 77 | 94.2% | 166.4 min | 201.8 min | 1.9% | 149 | 29.9% | 0.468 |
-| monsoon-surge | nearest-unit | 95/180 | 80 | 95.0% | 156.8 min | 193.8 min | 2.0% | 142 | 29.6% | 0.474 |
-| monsoon-surge | skill-aware | 98/180 | 75 | 93.3% | 158.0 min | 192.7 min | 1.9% | 142 | 29.2% | 0.474 |
-| monsoon-surge | capability-aware-global | 90/180 | 84 | 93.8% | 95.8 min | 126.6 min | 4.2% | 121 | 19.3% | 0.525 |
-| capability-scarcity | fifo | 23/23 | 0 | 100.0% | 39.1 min | 65.2 min | 0.0% | 5 | 5.5% | 0.780 |
-| capability-scarcity | nearest-unit | 22/23 | 0 | 95.7% | 31.3 min | 57.6 min | 4.3% | 4 | 6.1% | 0.723 |
-| capability-scarcity | skill-aware | 23/23 | 0 | 95.7% | 32.1 min | 61.2 min | 4.3% | 4 | 5.3% | 0.756 |
-| capability-scarcity | capability-aware-global | 22/23 | 0 | 95.7% | 30.1 min | 56.3 min | 4.3% | 4 | 6.0% | 0.713 |
-| ambiguous-diagnosis | fifo | 29/60 | 31 | 100.0% | 150.1 min | 179.3 min | 0.0% | 51 | 8.2% | 0.847 |
-| ambiguous-diagnosis | nearest-unit | 32/60 | 28 | 100.0% | 145.5 min | 175.0 min | 0.0% | 50 | 8.6% | 0.850 |
-| ambiguous-diagnosis | skill-aware | 32/60 | 28 | 100.0% | 145.5 min | 175.0 min | 0.0% | 50 | 8.6% | 0.850 |
-| ambiguous-diagnosis | capability-aware-global | 31/60 | 29 | 100.0% | 71.5 min | 98.3 min | 0.0% | 45 | 6.7% | 0.856 |
-| technician-dropout | fifo | 59/60 | 0 | 96.7% | 64.9 min | 91.0 min | 3.3% | 28 | 14.4% | 0.679 |
-| technician-dropout | nearest-unit | 58/60 | 0 | 96.7% | 66.4 min | 88.9 min | 3.3% | 32 | 14.0% | 0.688 |
-| technician-dropout | skill-aware | 59/60 | 0 | 96.7% | 62.7 min | 87.7 min | 3.3% | 29 | 13.9% | 0.678 |
-| technician-dropout | capability-aware-global | 58/60 | 0 | 96.7% | 56.8 min | 81.2 min | 3.3% | 18 | 13.3% | 0.677 |
+| scenario | policy | resolved | stranded | 1st-visit | mean arrival | mean resolution | 2nd dispatch | SLA breach | stockout fails | utilisation | earnings Gini |
+| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| normal-day | fifo | 42/60 | 0 | 65.0% | 35.9 min | 59.9 min | 33.3% | 9 | 70 | 20.9% | 0.623 |
+| normal-day | nearest-unit | 41/60 | 0 | 63.3% | 37.3 min | 63.4 min | 30.0% | 14 | 97 | 20.2% | 0.612 |
+| normal-day | skill-aware | 40/60 | 0 | 61.7% | 38.1 min | 70.4 min | 33.3% | 14 | 105 | 21.6% | 0.600 |
+| normal-day | capability-aware-global | 56/60 | 1 | 94.9% | 53.1 min | 78.3 min | 5.1% | 19 | 10 | 15.7% | 0.648 |
+| monsoon-surge | fifo | 39/180 | 59 | 32.2% | 164.5 min | 202.3 min | 29.8% | 128 | 127 | 32.1% | 0.451 |
+| monsoon-surge | nearest-unit | 37/180 | 61 | 31.1% | 163.2 min | 208.1 min | 29.4% | 132 | 136 | 32.3% | 0.453 |
+| monsoon-surge | skill-aware | 36/180 | 62 | 30.5% | 143.2 min | 189.8 min | 36.4% | 125 | 149 | 32.2% | 0.456 |
+| monsoon-surge | capability-aware-global | 76/180 | 99 | 93.8% | 102.1 min | 131.1 min | 3.7% | 133 | 0 | 21.0% | 0.537 |
+| capability-scarcity | fifo | 19/23 | 0 | 60.9% | 35.9 min | 73.2 min | 39.1% | 3 | 50 | 11.7% | 0.710 |
+| capability-scarcity | nearest-unit | 18/23 | 0 | 69.6% | 29.4 min | 82.4 min | 30.4% | 4 | 124 | 9.8% | 0.615 |
+| capability-scarcity | skill-aware | 19/23 | 0 | 73.9% | 30.4 min | 85.3 min | 26.1% | 4 | 122 | 8.9% | 0.639 |
+| capability-scarcity | capability-aware-global | 22/23 | 0 | 95.7% | 45.1 min | 72.0 min | 4.3% | 6 | 0 | 6.7% | 0.734 |
+| ambiguous-diagnosis | fifo | 22/60 | 29 | 71.0% | 152.7 min | 173.6 min | 3.2% | 52 | 14 | 8.7% | 0.848 |
+| ambiguous-diagnosis | nearest-unit | 22/60 | 28 | 68.8% | 146.8 min | 156.1 min | 3.1% | 52 | 15 | 8.7% | 0.848 |
+| ambiguous-diagnosis | skill-aware | 22/60 | 28 | 68.8% | 146.8 min | 156.1 min | 3.1% | 52 | 15 | 8.7% | 0.848 |
+| ambiguous-diagnosis | capability-aware-global | 19/60 | 39 | 90.5% | 81.7 min | 114.6 min | 9.5% | 49 | 5 | 5.7% | 0.885 |
+| technician-dropout | fifo | 39/60 | 0 | 61.7% | 63.3 min | 82.6 min | 30.0% | 27 | 59 | 18.4% | 0.635 |
+| technician-dropout | nearest-unit | 41/60 | 0 | 63.3% | 50.3 min | 82.1 min | 31.7% | 19 | 74 | 17.7% | 0.654 |
+| technician-dropout | skill-aware | 39/60 | 0 | 60.0% | 54.2 min | 84.5 min | 31.7% | 23 | 81 | 18.6% | 0.645 |
+| technician-dropout | capability-aware-global | 54/60 | 3 | 94.7% | 62.4 min | 87.3 min | 5.3% | 19 | 5 | 14.3% | 0.691 |
+| parts-stockout | fifo | 21/60 | 5 | 32.7% | 93.0 min | 117.5 min | 20.0% | 45 | 54 | 15.4% | 0.740 |
+| parts-stockout | nearest-unit | 22/60 | 2 | 36.2% | 92.2 min | 114.7 min | 15.5% | 44 | 52 | 15.3% | 0.743 |
+| parts-stockout | skill-aware | 22/60 | 2 | 36.2% | 92.2 min | 114.7 min | 15.5% | 44 | 52 | 15.3% | 0.743 |
+| parts-stockout | capability-aware-global | 27/60 | 30 | 90.0% | 84.6 min | 119.5 min | 10.0% | 45 | 27 | 12.9% | 0.759 |
 
 ## Verdicts
 
-- **normal-day** — fastest resolution: `capability-aware-global` (59/60 resolved, 49.2 min). Fastest arrival: `capability-aware-global` (24.8 min).
-- **monsoon-surge** — fastest resolution: `skill-aware` (98/180 resolved, 192.7 min). Fastest arrival: `capability-aware-global` (95.8 min).
-  - `capability-aware-global` **loses this scenario** on resolution: 90/180 resolved, 126.6 min against 192.7 min.
+- **normal-day** — fastest resolution: `capability-aware-global` (56/60 resolved, 78.3 min). Fastest arrival: `fifo` (35.9 min).
   - Arrival and resolution disagree here — the inversion the project is about.
-- **capability-scarcity** — fastest resolution: `skill-aware` (23/23 resolved, 61.2 min). Fastest arrival: `capability-aware-global` (30.1 min).
-  - `capability-aware-global` **loses this scenario** on resolution: 22/23 resolved, 56.3 min against 61.2 min.
+- **monsoon-surge** — fastest resolution: `capability-aware-global` (76/180 resolved, 131.1 min). Fastest arrival: `capability-aware-global` (102.1 min).
+- **capability-scarcity** — fastest resolution: `capability-aware-global` (22/23 resolved, 72.0 min). Fastest arrival: `nearest-unit` (29.4 min).
   - Arrival and resolution disagree here — the inversion the project is about.
-- **ambiguous-diagnosis** — fastest resolution: `nearest-unit` (32/60 resolved, 175.0 min). Fastest arrival: `capability-aware-global` (71.5 min).
-  - `capability-aware-global` **loses this scenario** on resolution: 31/60 resolved, 98.3 min against 175.0 min.
+- **ambiguous-diagnosis** — fastest resolution: `nearest-unit` (22/60 resolved, 156.1 min). Fastest arrival: `capability-aware-global` (81.7 min).
+  - `capability-aware-global` **loses this scenario** on resolution: 19/60 resolved, 114.6 min against 156.1 min.
   - Arrival and resolution disagree here — the inversion the project is about.
-- **technician-dropout** — fastest resolution: `skill-aware` (59/60 resolved, 87.7 min). Fastest arrival: `capability-aware-global` (56.8 min).
-  - `capability-aware-global` **loses this scenario** on resolution: 58/60 resolved, 81.2 min against 87.7 min.
+- **technician-dropout** — fastest resolution: `capability-aware-global` (54/60 resolved, 87.3 min). Fastest arrival: `nearest-unit` (50.3 min).
   - Arrival and resolution disagree here — the inversion the project is about.
+- **parts-stockout** — fastest resolution: `capability-aware-global` (27/60 resolved, 119.5 min). Fastest arrival: `capability-aware-global` (84.6 min).
 
 ## Solver wall clock
 
@@ -53,26 +55,30 @@ be byte-identical across runs. Decisions and simulated durations are.
 
 | scenario | policy | solver wall clock p95 |
 | --- | --- | ---: |
-| normal-day | fifo | 1.23 ms |
-| normal-day | nearest-unit | 0.62 ms |
-| normal-day | skill-aware | 0.57 ms |
-| normal-day | capability-aware-global | 1.09 ms |
-| monsoon-surge | fifo | 12.53 ms |
-| monsoon-surge | nearest-unit | 11.46 ms |
-| monsoon-surge | skill-aware | 12.24 ms |
-| monsoon-surge | capability-aware-global | 23.81 ms |
-| capability-scarcity | fifo | 0.66 ms |
-| capability-scarcity | nearest-unit | 0.59 ms |
-| capability-scarcity | skill-aware | 0.92 ms |
-| capability-scarcity | capability-aware-global | 1.25 ms |
-| ambiguous-diagnosis | fifo | 4.38 ms |
-| ambiguous-diagnosis | nearest-unit | 3.81 ms |
-| ambiguous-diagnosis | skill-aware | 4.15 ms |
-| ambiguous-diagnosis | capability-aware-global | 4.92 ms |
-| technician-dropout | fifo | 0.75 ms |
-| technician-dropout | nearest-unit | 1.02 ms |
-| technician-dropout | skill-aware | 1.02 ms |
-| technician-dropout | capability-aware-global | 1.64 ms |
+| normal-day | fifo | 2.15 ms |
+| normal-day | nearest-unit | 2.43 ms |
+| normal-day | skill-aware | 2.22 ms |
+| normal-day | capability-aware-global | 3.46 ms |
+| monsoon-surge | fifo | 17.30 ms |
+| monsoon-surge | nearest-unit | 15.95 ms |
+| monsoon-surge | skill-aware | 16.59 ms |
+| monsoon-surge | capability-aware-global | 37.29 ms |
+| capability-scarcity | fifo | 0.37 ms |
+| capability-scarcity | nearest-unit | 0.38 ms |
+| capability-scarcity | skill-aware | 0.46 ms |
+| capability-scarcity | capability-aware-global | 1.92 ms |
+| ambiguous-diagnosis | fifo | 7.31 ms |
+| ambiguous-diagnosis | nearest-unit | 4.56 ms |
+| ambiguous-diagnosis | skill-aware | 4.19 ms |
+| ambiguous-diagnosis | capability-aware-global | 12.80 ms |
+| technician-dropout | fifo | 1.45 ms |
+| technician-dropout | nearest-unit | 1.28 ms |
+| technician-dropout | skill-aware | 2.38 ms |
+| technician-dropout | capability-aware-global | 2.83 ms |
+| parts-stockout | fifo | 5.14 ms |
+| parts-stockout | nearest-unit | 3.99 ms |
+| parts-stockout | skill-aware | 7.35 ms |
+| parts-stockout | capability-aware-global | 10.00 ms |
 
 ## How to read this
 
@@ -84,6 +90,12 @@ be byte-identical across runs. Decisions and simulated durations are.
   filter, so once a job is late every option for it is rejected and it can
   never be dispatched at all. See "What this run found" below.
 - **1st-visit** — resolved by the first crew sent, with no second dispatch.
+- **stockout fails** — visits where the crew had the skill and the van did
+  not have the part. The three greedy baselines are stock-blind by
+  construction (`evaluation/policies/greedy.ts`), so this column is what
+  the parts layer buys: `capability-aware-global` reads van stock, treats
+  an unverified count as absent, and prices a depot run when one is worth
+  taking.
 - **mean arrival** — minutes from the call to the first crew reaching the
   vehicle. The metric a nearest-unit policy optimises.
 - **mean resolution** — minutes from the call to the fault being fixed. The
@@ -95,7 +107,7 @@ be byte-identical across runs. Decisions and simulated durations are.
 ## What this run found
 
 The harness exists to measure the system, including when the system is
-wrong. Two findings from the current engine, neither of them fixed here:
+wrong. Findings from the current engine, none of them fixed here:
 
 1. **`SLA_UNREACHABLE` permanently strands a late job.** It is a hard
    filter (Phase 7), so the moment a job passes its promised window every
@@ -122,6 +134,31 @@ wrong. Two findings from the current engine, neither of them fixed here:
    where a job sits in a zone whose own units are busy while a neighbouring
    zone has capacity, and the partitioned matrix cannot see across. It is
    the single biggest reason global loses rows in the sweep below.
+4. **The parts layer moves the number it was built to move, and the row
+   the build plan predicted did not appear.** Stock-aware dispatch cuts
+   stockout-induced failures hard — 10 against 70-105 at normal-day, 0
+   against 127-149 at monsoon-surge, 0 against 50-124 at
+   capability-scarcity, 27 against 52-54 at parts-stockout. What did NOT
+   happen is `nearest-unit` > `skill-aware` > `global`. `skill-aware`
+   posts MORE stockout failures than `nearest-unit` at normal-day (105 v
+   97), monsoon-surge (149 v 136) and technician-dropout (81 v 74), ties
+   at ambiguous-diagnosis and parts-stockout, and beats it only at
+   capability-scarcity (122 v 124). The reason is in the definition: a
+   stockout failure is a crew who HAD the skill and not the part, so a
+   policy that maximises skill coverage moves failures INTO this column
+   that `nearest-unit` records as capability failures instead. The column
+   separates two kinds of wasted visit; it is not a ranking of how
+   parts-aware a policy is, and reading it as one would be wrong.
+5. **Failing closed costs service level, and it is the SLA filter that
+   turns that cost into stranding.** At parts-stockout
+   `capability-aware-global` dispatched 30 of 60 jobs and resolved 27 of
+   them; the greedy baselines dispatched 58 and resolved 22, by sending
+   crews who could not finish and sending them again. The 30 stranded
+   jobs are NOT the parts filter: instrumenting a whole run counted 23
+   `PART_UNAVAILABLE` rejections against 45,618 `CAPABILITY_MISSING`,
+   10,120 `UNIT_UNAVAILABLE` and 277 `SLA_UNREACHABLE`. They are jobs
+   whose promised window closed while every crew who could have finished
+   them was busy — finding 1, reached by a different road.
 3. **First-visit resolution is 93-100% for every policy**, which makes the
    escalation term in the cost function nearly inert. The capability
    filter already requires a crew to cover the contending faults, so a

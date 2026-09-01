@@ -13,11 +13,13 @@ import {
   capabilityShortfallRisk,
   expectedTimeToResolutionMinutes,
   operationalCostPaise,
+  partSourcingCostPaise,
   scoreOption,
   slaRisk,
 } from '../src/engine/cost.js';
 import { comparatorFor, rankOptions } from '../src/engine/ranking.js';
 import type { DispatchOption, JobForDispatch } from '../src/engine/candidates.js';
+import { NO_PARTS_MODELLED } from '../src/engine/partSourcing.js';
 import { FAULT_CODES } from '../src/domain/faults.js';
 import type { FaultDistribution } from '../src/domain/faults.js';
 import {
@@ -59,6 +61,8 @@ function option(overrides: Partial<DispatchOption> = {}): DispatchOption {
     travelEstimateDegraded: false,
     estimatedTravelKm: 5,
     resolvableFaults: ['FLAT_BATTERY'],
+    skillResolvableFaults: ['FLAT_BATTERY'],
+    partSourcing: NO_PARTS_MODELLED,
     coveredFaultProbability: 1,
     missingCapabilities: [],
     ...overrides,
@@ -201,6 +205,58 @@ describe('operationalCost', () => {
   });
 });
 
+describe('partSourcingCost', () => {
+  const WORKSHOP_RUN = {
+    status: 'WORKSHOP_RUN' as const,
+    detourMinutes: 20,
+    partValuePaise: 480_000,
+    depotId: 'depot-near',
+    missingSkus: ['BAT-45AH'],
+  };
+
+  it('is zero for a crew who already has everything on board', () => {
+    expect(partSourcingCostPaise(option())).toBe(0);
+  });
+
+  it('charges the detour as paid time plus the value of the stock drawn down', () => {
+    // 20 minutes at the labour rate, plus one battery.
+    expect(partSourcingCostPaise(option({ partSourcing: WORKSHOP_RUN }))).toBe(490_000);
+  });
+
+  // The detour is also time the vehicle stays broken, so it has to appear in
+  // the term the project actually claims to optimise — not only in the money.
+  it('puts the detour into expected time to resolution as well, exactly once', () => {
+    const uncertainJob = job({ faultDistribution: UNCERTAIN_BATTERY });
+    const direct = expectedTimeToResolutionMinutes(option(), uncertainJob);
+    const viaDepot = expectedTimeToResolutionMinutes(
+      option({ partSourcing: WORKSHOP_RUN }),
+      uncertainJob,
+    );
+
+    expect(viaDepot - direct).toBeCloseTo(20, 10);
+  });
+
+  // Invariant 3 in the cost function's own terms: a sourcing cost must be
+  // outrankable, or it is a hard constraint that nobody declared. A van three
+  // minutes further away that HAS the part should still be able to lose to one
+  // that has to fetch it, if everything else about it is bad enough.
+  it('is a cost a good enough option can still outweigh', () => {
+    const uncertainJob = job({ faultDistribution: UNCERTAIN_BATTERY });
+    const fetching = scoreOption(
+      option({ estimatedTravelMinutes: 5, estimatedTravelKm: 2, partSourcing: WORKSHOP_RUN }),
+      uncertainJob,
+      NOW,
+    );
+    const stockedButFar = scoreOption(
+      option({ estimatedTravelMinutes: 90, estimatedTravelKm: 60 }),
+      uncertainJob,
+      NOW,
+    );
+
+    expect(fetching.total).toBeLessThan(stockedButFar.total);
+  });
+});
+
 describe('CostBreakdown', () => {
   it('returns every term with its raw value, unit, weight and contribution', () => {
     const breakdown = scoreOption(NEAR_NARROW, job({ faultDistribution: UNCERTAIN_BATTERY }), NOW);
@@ -210,6 +266,7 @@ describe('CostBreakdown', () => {
     expect(breakdown.capabilityShortfallRisk.unit).toBe('probability');
     expect(breakdown.slaRisk.unit).toBe('probability');
     expect(breakdown.operationalCost.unit).toBe('paise');
+    expect(breakdown.partSourcingCost.unit).toBe('paise');
     expect(breakdown.weightVector).toBe('BALANCED');
   });
 
@@ -220,7 +277,8 @@ describe('CostBreakdown', () => {
       breakdown.travelDistance.contribution +
       breakdown.capabilityShortfallRisk.contribution +
       breakdown.slaRisk.contribution +
-      breakdown.operationalCost.contribution;
+      breakdown.operationalCost.contribution +
+      breakdown.partSourcingCost.contribution;
 
     expect(breakdown.total).toBeCloseTo(summed, 10);
   });

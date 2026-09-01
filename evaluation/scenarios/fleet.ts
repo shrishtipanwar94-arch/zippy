@@ -11,14 +11,18 @@
 // Everything is a plain object. No Prisma, no Redis, no clock.
 
 import { technicianPlan, shiftPlan } from '../../prisma/seed/technicians.js';
-import { unitPlanEntries } from '../../prisma/seed/fleet.js';
+import { unitPlanEntries, unitStockPlanEntries } from '../../prisma/seed/fleet.js';
 import { planCrews } from '../../prisma/seed/crews.js';
 import { ZONES } from '../../prisma/seed/zones.js';
+import { DEPOTS } from '../../prisma/seed/depots.js';
+import { PARTS } from '../../prisma/seed/parts.js';
 import type {
   DispatchSnapshot,
   UnitKindSnapshot,
   ZoneSnapshot,
 } from '../../src/engine/candidates.js';
+import type { PartsSnapshot, PartStockSnapshot } from '../../src/engine/partSourcing.js';
+import type { StockConfidence } from '../../src/domain/stockConfidence.js';
 
 // The knobs the sweep varies. Each one narrows the seeded fleet rather than
 // inventing a different one, so a swept run stays comparable to the base run.
@@ -32,12 +36,18 @@ export type FleetShape = {
   // first `scarceHolders` holders of that code. This is how the sweep makes a
   // skill scarcer without rewriting the capability matrix by hand.
   scarcity: { code: string; holders: number }[];
+  // How much of each van's shelf starts EMPTY, 0 to 1, applied
+  // deterministically by index. 0 is the seeded fleet with a full kit; the
+  // parts-stockout scenario turns it up. Emptying shelves rather than
+  // rewriting the kit keeps a depleted run comparable to a stocked one.
+  stockDepletion: number;
 };
 
 export const FULL_FLEET: FleetShape = {
   unitCount: 24,
   technicianCount: 31,
   scarcity: [],
+  stockDepletion: 0,
 };
 
 export function zoneSnapshots(): ZoneSnapshot[] {
@@ -123,7 +133,69 @@ export function buildSnapshot(shape: FleetShape, at: Date): DispatchSnapshot {
     .filter((window) => technicianIds.has(window.technicianId))
     .map((window) => rebaseShift(window, at));
 
-  return { units, technicians, shifts, zones };
+  return { units, technicians, shifts, zones, parts: partsSnapshot(shape) };
+}
+
+// ---------------------------------------------------------------------------
+// WHAT IS IN THE BACK OF EACH VAN, and how much anybody believes it.
+//
+// The quantities are the seed's own standard kit (prisma/seed/fleet.ts), so a
+// measured run is measuring the fleet that actually exists. The CONFIDENCE
+// banding mirrors prisma/seed/vanCounts.ts rather than importing it: a third
+// of the fleet counted within the hour, a third counted this morning, a third
+// never counted at all. That last third is the interesting one — its stock
+// fails closed and is treated as absent, which is exactly the conservatism the
+// harness is here to put a number on.
+function bandedConfidence(unitNumber: number): StockConfidence {
+  const band = unitNumber % 3;
+  if (band === 0) return 'VERIFIED';
+  if (band === 1) return 'AGEING';
+  return 'UNVERIFIED';
+}
+
+// Which shelves a depleted fleet has run out of. Deterministic — the same
+// shelves are empty on every replay of a seed, so two policies face the same
+// shortage rather than two different ones.
+function isDepleted(unitNumber: number, shelfIndex: number, depletion: number): boolean {
+  if (depletion <= 0) return false;
+  return (shelfIndex + unitNumber) % 10 < Math.round(depletion * 10);
+}
+
+export function partsSnapshot(shape: FleetShape): PartsSnapshot {
+  const inService = new Set(
+    unitPlanEntries()
+      .slice(0, shape.unitCount)
+      .map((unit) => unit.unitId),
+  );
+
+  const shelfIndexByUnit = new Map<string, number>();
+  const stock: PartStockSnapshot[] = [];
+
+  for (const entry of unitStockPlanEntries()) {
+    if (!inService.has(entry.unitId)) continue;
+
+    const unitNumber = Number(entry.unitId.replace(/\D/g, ''));
+    const shelfIndex = shelfIndexByUnit.get(entry.unitId) ?? 0;
+    shelfIndexByUnit.set(entry.unitId, shelfIndex + 1);
+
+    stock.push({
+      unitId: entry.unitId,
+      sku: entry.sku,
+      quantity: isDepleted(unitNumber, shelfIndex, shape.stockDepletion) ? 0 : entry.quantity,
+      confidence: bandedConfidence(unitNumber),
+    });
+  }
+
+  return {
+    stock,
+    valuePaiseBySku: Object.fromEntries(PARTS.map((part) => [part.sku, part.pricePaise])),
+    depots: DEPOTS.map((depot) => ({
+      id: `depot-${depot.code.toLowerCase()}`,
+      code: depot.code,
+      lat: depot.lat,
+      lng: depot.lng,
+    })),
+  };
 }
 
 // Move a shift window onto the scenario's own day, preserving its hours.

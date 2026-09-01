@@ -50,6 +50,14 @@ export type NarrativeContext = {
   // is the single most alarming thing that can happen to a driver mid-job, so
   // it gets its own sentence rather than being hidden behind the old status.
   replanning: boolean;
+  // True when the crew on the way is diverting to collect a part they do not
+  // have on board — the PART_SOURCING branch, from the dispatch option the
+  // solver actually chose. Like `replanning` this is not a JobStatus, and like
+  // `replanning` it is the kind of thing a driver notices as an unexplained
+  // delay if nobody says it out loud. Saying it is also what stops the phrase
+  // "has the skills but needs a part" being an internal detail: it is the
+  // difference between waiting for the right person and waiting for nothing.
+  sourcingPart: boolean;
   // Whether intake finished asking questions. Also not a JobStatus: a job sits
   // at INTAKE from the last answer until the solver plans it, and during that
   // window "we are taking down the details" is stale — the browser
@@ -59,8 +67,21 @@ export type NarrativeContext = {
   intakeComplete: boolean;
 };
 
+// The statuses during which a part run is still ahead of the driver rather
+// than behind them. Once the crew is on site the detour is history and the
+// sentence would be a distraction.
+const STILL_ON_THE_WAY: ReadonlySet<JobStatus> = new Set<JobStatus>([
+  'PLANNED',
+  'OFFERED',
+  'COMMITTED',
+  'EN_ROUTE',
+]);
+
 export function headlineFor(context: NarrativeContext): string {
   if (context.replanning) return replanningSentence(context.helperName);
+  if (context.sourcingPart && STILL_ON_THE_WAY.has(context.status)) {
+    return partSourcingSentence(context.helperName);
+  }
 
   const who = context.helperName ?? 'Your technician';
 
@@ -100,6 +121,11 @@ export function headlineFor(context: NarrativeContext): string {
     case 'CANCELLED':
       return 'This request was cancelled.';
   }
+}
+
+function partSourcingSentence(helperName: string | null): string {
+  const who = helperName ?? 'Your technician';
+  return `${who} has the skills for this but needs a part. We are arranging it now.`;
 }
 
 function replanningSentence(helperName: string | null): string {

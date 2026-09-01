@@ -820,6 +820,12 @@ model DispatchOption {
   feasible                Boolean  @default(true)
   rejectionCode           String?  @map("rejection_code")
   rejectionDetail         String?  @map("rejection_detail")
+  // The sourcing decision candidate generation collapsed to, from Phase 19:
+  // status, detour minutes, part value, the depot, and the missing SKUs. Kept
+  // as JSON alongside the cost breakdown for the same reason — it is the audit
+  // of a decision, read whole by the "Why this technician?" panel, never
+  // queried a field at a time.
+  partSourcing            Json?    @map("part_sourcing")
   costBreakdown           Json?    @map("cost_breakdown")
   totalCost               Float?   @map("total_cost")
   createdAt               DateTime @default(now()) @map("created_at")

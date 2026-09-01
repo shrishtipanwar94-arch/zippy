@@ -197,6 +197,7 @@ consoleRouter.get(
           estimatedTravelMinutes: true,
           coveredFaultProbability: true,
           missingCapabilities: true,
+          partSourcing: true,
           costBreakdown: true,
           totalCost: true,
         },

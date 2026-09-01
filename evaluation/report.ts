@@ -35,8 +35,8 @@ function percent(value: number): string {
 
 export function metricsTable(rows: Row[]): string {
   const header = [
-    '| scenario | policy | resolved | stranded | 1st-visit | mean arrival | mean resolution | 2nd dispatch | SLA breach | utilisation | earnings Gini |',
-    '| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |',
+    '| scenario | policy | resolved | stranded | 1st-visit | mean arrival | mean resolution | 2nd dispatch | SLA breach | stockout fails | utilisation | earnings Gini |',
+    '| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |',
   ];
 
   const body = rows.map((row) => {
@@ -45,7 +45,8 @@ export function metricsTable(rows: Row[]): string {
       `| ${row.scenario} | ${row.policy} | ${m.resolvedCount}/${m.jobCount} | ${m.strandedCount} | ` +
       `${percent(m.firstVisitResolutionRate)} | ${fixed(m.meanTimeToArrivalMinutes)} min | ` +
       `${fixed(m.meanTimeToResolutionMinutes)} min | ${percent(m.secondDispatchRate)} | ` +
-      `${m.slaBreaches} | ${percent(m.unitUtilisation)} | ${fixed(m.earningsGini, 3)} |`
+      `${m.slaBreaches} | ${m.stockoutInducedFailures} | ${percent(m.unitUtilisation)} | ` +
+      `${fixed(m.earningsGini, 3)} |`
     );
   });
 
@@ -168,6 +169,12 @@ export function buildReport(input: {
     '  filter, so once a job is late every option for it is rejected and it can',
     '  never be dispatched at all. See "What this run found" below.',
     '- **1st-visit** — resolved by the first crew sent, with no second dispatch.',
+    '- **stockout fails** — visits where the crew had the skill and the van did',
+    '  not have the part. The three greedy baselines are stock-blind by',
+    '  construction (`evaluation/policies/greedy.ts`), so this column is what',
+    '  the parts layer buys: `capability-aware-global` reads van stock, treats',
+    '  an unverified count as absent, and prices a depot run when one is worth',
+    '  taking.',
     '- **mean arrival** — minutes from the call to the first crew reaching the',
     '  vehicle. The metric a nearest-unit policy optimises.',
     '- **mean resolution** — minutes from the call to the fault being fixed. The',
@@ -179,7 +186,7 @@ export function buildReport(input: {
     '## What this run found',
     '',
     'The harness exists to measure the system, including when the system is',
-    'wrong. Two findings from the current engine, neither of them fixed here:',
+    'wrong. Findings from the current engine, none of them fixed here:',
     '',
     '1. **`SLA_UNREACHABLE` permanently strands a late job.** It is a hard',
     '   filter (Phase 7), so the moment a job passes its promised window every',
@@ -206,6 +213,31 @@ export function buildReport(input: {
     '   where a job sits in a zone whose own units are busy while a neighbouring',
     '   zone has capacity, and the partitioned matrix cannot see across. It is',
     '   the single biggest reason global loses rows in the sweep below.',
+    '4. **The parts layer moves the number it was built to move, and the row',
+    '   the build plan predicted did not appear.** Stock-aware dispatch cuts',
+    '   stockout-induced failures hard — 10 against 70-105 at normal-day, 0',
+    '   against 127-149 at monsoon-surge, 0 against 50-124 at',
+    '   capability-scarcity, 27 against 52-54 at parts-stockout. What did NOT',
+    '   happen is `nearest-unit` > `skill-aware` > `global`. `skill-aware`',
+    '   posts MORE stockout failures than `nearest-unit` at normal-day (105 v',
+    '   97), monsoon-surge (149 v 136) and technician-dropout (81 v 74), ties',
+    '   at ambiguous-diagnosis and parts-stockout, and beats it only at',
+    '   capability-scarcity (122 v 124). The reason is in the definition: a',
+    '   stockout failure is a crew who HAD the skill and not the part, so a',
+    '   policy that maximises skill coverage moves failures INTO this column',
+    '   that `nearest-unit` records as capability failures instead. The column',
+    '   separates two kinds of wasted visit; it is not a ranking of how',
+    '   parts-aware a policy is, and reading it as one would be wrong.',
+    '5. **Failing closed costs service level, and it is the SLA filter that',
+    '   turns that cost into stranding.** At parts-stockout',
+    '   `capability-aware-global` dispatched 30 of 60 jobs and resolved 27 of',
+    '   them; the greedy baselines dispatched 58 and resolved 22, by sending',
+    '   crews who could not finish and sending them again. The 30 stranded',
+    '   jobs are NOT the parts filter: instrumenting a whole run counted 23',
+    '   `PART_UNAVAILABLE` rejections against 45,618 `CAPABILITY_MISSING`,',
+    '   10,120 `UNIT_UNAVAILABLE` and 277 `SLA_UNREACHABLE`. They are jobs',
+    '   whose promised window closed while every crew who could have finished',
+    '   them was busy — finding 1, reached by a different road.',
     '3. **First-visit resolution is 93-100% for every policy**, which makes the',
     '   escalation term in the cost function nearly inert. The capability',
     '   filter already requires a crew to cover the contending faults, so a',

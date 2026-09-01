@@ -6,6 +6,7 @@
 
 import { describe, expect, it } from 'vitest';
 import { generateCandidates } from '../src/engine/candidates.js';
+import { haversineTravelTimes } from '../src/infra/routing.js';
 import type { DispatchSnapshot, JobForDispatch, UnitSnapshot, TechnicianSnapshot } from '../src/engine/candidates.js';
 import { FAULT_CODES } from '../src/domain/faults.js';
 import type { FaultDistribution } from '../src/domain/faults.js';
@@ -55,6 +56,67 @@ function technician(overrides: Partial<TechnicianSnapshot> = {}): TechnicianSnap
 function snapshot(overrides: Partial<DispatchSnapshot> = {}): DispatchSnapshot {
   return { units: [], technicians: [], shifts: [], zones: [], ...overrides };
 }
+
+// THE ANSWER TO "DOESN'T THAT BLOW UP THE MATRIX?" — the question Phase 19
+// exists to be asked. Parts introduce a genuine choice per pair (van shelf, or
+// a depot run, or neither), and the naive way to model a choice is a candidate
+// per branch, which multiplies the assignment problem by the number of ways to
+// get a part. src/engine/partSourcing.ts resolves that choice INSIDE
+// generation and keeps only the winner, so the matrix the Hungarian algorithm
+// sees is the same size it was before parts existed. That is the claim, and
+// this is the test of it.
+describe('option count', () => {
+  const batteryJob = job({ faultDistribution: distribution({ FAILED_BATTERY: 1 }) });
+
+  const crew = ['BATTERY_REPLACEMENT'];
+  const fleet = snapshot({
+    units: [
+      unit({ id: 'stocked', currentTechnicianId: 't1', capabilityCodes: crew }),
+      unit({ id: 'empty', currentTechnicianId: 't2', capabilityCodes: crew }),
+      unit({ id: 'unverified', currentTechnicianId: 't3', capabilityCodes: crew }),
+    ],
+    technicians: [
+      technician({ id: 't1', capabilityCodes: crew }),
+      technician({ id: 't2', capabilityCodes: crew }),
+      technician({ id: 't3', capabilityCodes: crew }),
+    ],
+    parts: {
+      stock: [
+        { unitId: 'stocked', sku: 'BAT-45AH', quantity: 2, confidence: 'VERIFIED' },
+        { unitId: 'unverified', sku: 'BAT-45AH', quantity: 2, confidence: 'UNVERIFIED' },
+      ],
+      valuePaiseBySku: { 'BAT-45AH': 480_000 },
+      depots: [{ id: 'depot-near', code: 'DEP-NEAR', lat: 12.94, lng: 77.63 }],
+    },
+  });
+
+  it('still equals the pair count once parts are modelled', async () => {
+    const withParts = await generateCandidates(batteryJob, fleet, haversineTravelTimes);
+    const withoutParts = await generateCandidates(
+      batteryJob,
+      { ...fleet, parts: null },
+      haversineTravelTimes,
+    );
+
+    expect(withParts).toHaveLength(3);
+    expect(withParts.length).toBe(fleet.units.length);
+    expect(withParts.length).toBe(withoutParts.length);
+    expect(new Set(withParts.map((option) => option.unitId)).size).toBe(3);
+  });
+
+  it('makes each option richer instead: three pairs, three different sourcings', async () => {
+    const options = await generateCandidates(batteryJob, fleet, haversineTravelTimes);
+    const statusByUnit = new Map(
+      options.map((option) => [option.unitId, option.partSourcing.status]),
+    );
+
+    expect(statusByUnit.get('stocked')).toBe('IN_VAN');
+    expect(statusByUnit.get('empty')).toBe('WORKSHOP_RUN');
+    // Fails closed: the count is too old to act on, so the van is treated as
+    // empty and the crew is sent via the depot like anybody else.
+    expect(statusByUnit.get('unverified')).toBe('WORKSHOP_RUN');
+  });
+});
 
 describe('pair enumeration', () => {
   it('emits exactly one option per crewed (unit, technician) pair', async () => {

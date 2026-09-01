@@ -98,6 +98,21 @@ function hypothesisBlock(hypothesis) {
   return box;
 }
 
+// WHERE THE PART IS COMING FROM, when it is not already in the van. A dispatch
+// that quietly sends a crew across town to a depot first is a dispatch an
+// operator has to be able to see, or the arrival time on the card looks like a
+// mistake rather than a decision (invariant 8).
+function partSourcingLine(sourcing) {
+  if (!sourcing || sourcing.status !== 'WORKSHOP_RUN') return '';
+
+  const skus = (sourcing.missingSkus ?? []).join(', ');
+  return `
+    <div class="small mb-2 text-warning-emphasis">
+      collecting ${escapeHtml(skus)} on the way —
+      ${escapeHtml(formatNumber(sourcing.detourMinutes))} min detour
+    </div>`;
+}
+
 // The cost breakdown, term by term. Each term carries its own unit because
 // they are not commensurable — minutes, kilometres, two probabilities and
 // paise — and the weights are what convert them, so showing a bare number per
@@ -136,6 +151,7 @@ function chosenOption(option) {
         arrives in ${escapeHtml(formatNumber(option.estimatedTravelMinutes))} min ·
         covers ${escapeHtml(((option.coveredFaultProbability ?? 0) * 100).toFixed(0))}% of the fault distribution
       </div>
+      ${partSourcingLine(option.partSourcing)}
       <table class="table table-sm mb-0">
         <thead><tr><th>term</th><th class="text-end">value</th><th class="text-end">weighted</th><th></th></tr></thead>
         <tbody>${terms || '<tr><td colspan="4" class="text-muted">no breakdown recorded</td></tr>'}</tbody>

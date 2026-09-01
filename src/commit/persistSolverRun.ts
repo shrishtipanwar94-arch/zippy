@@ -95,6 +95,7 @@ async function writeRejectedOptions(
       estimatedTravelMinutes: rejection.option.estimatedTravelMinutes,
       coveredFaultProbability: rejection.option.coveredFaultProbability,
       missingCapabilities: rejection.option.missingCapabilities,
+      partSourcing: rejection.option.partSourcing satisfies Prisma.InputJsonValue,
       feasible: false,
       rejectionCode: rejection.code,
       rejectionDetail: rejection.detail,
@@ -136,6 +137,11 @@ async function writeFeasibleOptions(
       estimatedTravelMinutes: assignment.option.estimatedTravelMinutes,
       coveredFaultProbability: assignment.option.coveredFaultProbability,
       missingCapabilities: assignment.option.missingCapabilities,
+      // WHERE THE PART WAS COMING FROM. Without this the row records that a
+      // crew was chosen and priced but not that they were being sent via a
+      // depot first, which is the one fact a driver asking "why is this taking
+      // so long" is actually owed.
+      partSourcing: assignment.option.partSourcing satisfies Prisma.InputJsonValue,
       feasible: true,
       costBreakdown: assignment.cost satisfies Prisma.InputJsonValue,
       totalCost: assignment.cost.total,

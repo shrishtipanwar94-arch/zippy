@@ -108,6 +108,7 @@ describe('the message describes where the job ended up', () => {
         helperName: 'Priya',
         arrivingAt: null,
         replanning: false,
+        sourcingPart: false,
         intakeComplete: true,
       }),
     );

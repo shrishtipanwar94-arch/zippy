@@ -1,4 +1,4 @@
-// THE EIGHT METRICS, plus the two counts that stop the other eight lying.
+// THE NINE METRICS, plus the two counts that stop the others lying.
 //
 // UNRESOLVED JOBS ARE REPORTED, and this is not decoration. Every mean below
 // is taken over jobs that actually finished. A policy that strands a third of
@@ -33,6 +33,11 @@ export type Metrics = {
   meanTimeToResolutionMinutes: number;
   secondDispatchRate: number;
   slaBreaches: number;
+  // Wasted visits where the crew had the SKILL and not the PART. The number
+  // Phase 19 exists to move, and the only one that separates "we sent the
+  // wrong person" from "we sent the right person empty-handed". A policy with
+  // no inventory model cannot avoid these; it cannot even see them.
+  stockoutInducedFailures: number;
   unitUtilisation: number;
   earningsGini: number;
   solverWallClockP95Ms: number;
@@ -115,6 +120,7 @@ export function computeMetrics(run: RunResult, technicianIds: string[]): Metrics
         ? 0
         : dispatched.filter((job) => job.dispatchCount > 1).length / dispatched.length,
     slaBreaches,
+    stockoutInducedFailures: run.jobs.reduce((sum, job) => sum + job.stockoutFailures, 0),
     unitUtilisation: capacity === 0 ? 0 : busyTotal / capacity,
     earningsGini: gini(earnings),
     solverWallClockP95Ms: percentile95(run.decisionMillis),

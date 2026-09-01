@@ -2,6 +2,7 @@
 //
 //   cost = w1·expectedTimeToResolution + w2·travelDistance
 //        + w3·capabilityShortfallRisk  + w4·slaRisk + w5·operationalCost
+//        + w6·partSourcingCost
 //
 // EXPECTED TIME TO RESOLUTION IS THE WHOLE ARGUMENT. Every dispatch system
 // can send the nearest van. This one asks a different question: given what we
@@ -65,6 +66,7 @@ export type CostWeights = {
   capabilityShortfallRisk: number;
   slaRisk: number;
   operationalCost: number;
+  partSourcingCost: number;
 };
 
 export const WEIGHT_VECTORS = {
@@ -76,6 +78,11 @@ export const WEIGHT_VECTORS = {
     capabilityShortfallRisk: 30,
     slaRisk: 20,
     operationalCost: 0.0001,
+    // Almost indifferent to what a depot run costs: the detour's TIME is
+    // already inside the expected-resolution term above, which is the term
+    // this vector cares about, and the value of the part is not what a driver
+    // on a roadside is waiting for.
+    partSourcingCost: 0.00002,
   },
   // Optimise what the run costs to operate: fuel, wear, paid time. Will
   // happily send a nearer, less capable unit and accept the re-dispatch risk.
@@ -85,6 +92,9 @@ export const WEIGHT_VECTORS = {
     capabilityShortfallRisk: 15,
     slaRisk: 10,
     operationalCost: 0.001,
+    // The vector that most dislikes sending a van across town for a part it
+    // could have loaded this morning.
+    partSourcingCost: 0.0002,
   },
   // The default. Neither extreme; the vector a dispatcher sees first.
   BALANCED: {
@@ -93,6 +103,14 @@ export const WEIGHT_VECTORS = {
     capabilityShortfallRisk: 25,
     slaRisk: 20,
     operationalCost: 0.0004,
+    // A typical depot run — a mid-priced part plus twenty minutes of driving —
+    // comes to roughly 260,000 paise, so this weight makes it worth about
+    // thirteen points against a resolution term of forty or fifty. Enough to
+    // lose to a van that already has the part, nowhere near enough to act as a
+    // constraint: invariant 3 says a filter is a filter and a cost is a cost,
+    // and a weight tuned until an option can never win has quietly become the
+    // former.
+    partSourcingCost: 0.00005,
   },
 } as const satisfies Record<string, CostWeights>;
 
@@ -116,6 +134,7 @@ export type CostBreakdown = {
   capabilityShortfallRisk: CostTerm;
   slaRisk: CostTerm;
   operationalCost: CostTerm;
+  partSourcingCost: CostTerm;
   total: number;
   weightVector: WeightVectorName;
 };
@@ -134,7 +153,12 @@ export function expectedTimeToResolutionMinutes(
     if (probability <= 0) continue;
 
     const afterDiagnosis = resolvable.has(fault) ? resolveMinutes(fault) : escalationMinutes(fault);
-    expected += probability * (option.estimatedTravelMinutes + diagnoseMinutes(fault) + afterDiagnosis);
+    // The detour to collect a part is time the driver spends waiting, so it
+    // belongs in the term the project claims to optimise rather than only in
+    // the money term. It is a property of the option, so multiplying it by
+    // probabilities that sum to 1 adds it exactly once.
+    const travel = option.estimatedTravelMinutes + option.partSourcing.detourMinutes;
+    expected += probability * (travel + diagnoseMinutes(fault) + afterDiagnosis);
   }
 
   return expected;
@@ -179,6 +203,22 @@ export function operationalCostPaise(option: DispatchOption, job: JobForDispatch
   return drivingCost + labourCost;
 }
 
+// WHAT GETTING THE PART COSTS: the detour, priced as paid technician time,
+// plus the value of the stock the depot run draws down. Zero for a crew who
+// already has everything on board, which is the whole point — it is the term
+// that makes "the van three streets further away that is actually stocked"
+// beat "the nearest van plus a trip across town".
+//
+// THE PART VALUE IS IN HERE ON PURPOSE, even though the same part gets
+// consumed whichever crew fits it. What differs is WHOSE shelf it comes off:
+// stock already sitting on a van is committed, and a depot run pulls a fresh
+// unit out of inventory that some other job may need tomorrow. Pricing that
+// draw-down is what stops the solver treating the depot as infinite.
+export function partSourcingCostPaise(option: DispatchOption): number {
+  const detourCost = LABOUR_PAISE_PER_MINUTE * option.partSourcing.detourMinutes;
+  return detourCost + option.partSourcing.partValuePaise;
+}
+
 // ---------------------------------------------------------------------------
 function term(value: number, unit: CostTerm['unit'], weight: number): CostTerm {
   return { value, unit, weight, contribution: value * weight };
@@ -206,6 +246,7 @@ export function scoreOption(
     ),
     slaRisk: term(slaRisk(option, job, now), 'probability', weights.slaRisk),
     operationalCost: term(operationalCostPaise(option, job), 'paise', weights.operationalCost),
+    partSourcingCost: term(partSourcingCostPaise(option), 'paise', weights.partSourcingCost),
   };
 
   const total =
@@ -213,7 +254,8 @@ export function scoreOption(
     breakdown.travelDistance.contribution +
     breakdown.capabilityShortfallRisk.contribution +
     breakdown.slaRisk.contribution +
-    breakdown.operationalCost.contribution;
+    breakdown.operationalCost.contribution +
+    breakdown.partSourcingCost.contribution;
 
   return { ...breakdown, total, weightVector };
 }

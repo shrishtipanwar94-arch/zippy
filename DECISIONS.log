@@ -205,3 +205,255 @@ the script had in fact run to completion, which is why `unit-01` afterwards read
 as counted four minutes ago instead of the seeded five hours. Re-seeding put the
 staggering back. The lesson is the one already in CLAUDE.md about rejected Bash
 calls: check the disk before assuming a command did not land.
+
+## Phase 19 — Part-aware feasibility / 2026-09-02 / phase 19: part-aware feasibility
+
+### Built
+`src/engine/partSourcing.ts` — the new file the phase turns on. Types
+`PartStockSnapshot`, `DepotSnapshot`, `PartsSnapshot`, `PartSourcing`,
+`PartSourcingStatus` (`NOT_MODELLED | IN_VAN | WORKSHOP_RUN | UNAVAILABLE`);
+functions `believableSkus()`, `faultIsSourced()`, `sourcePartsForPairs()`,
+`measureDepotRuns()`, private `missingSkusFor()` / `decide()`; constants
+`MAX_PART_SOURCING_DETOUR_MINUTES = 45` and `NO_PARTS_MODELLED`.
+
+`src/engine/candidates.ts` — `DispatchSnapshot.parts`; `DispatchOption` gains
+`skillResolvableFaults` and `partSourcing`, and `resolvableFaults` now means
+skill AND part. `generateCandidates()` calls `sourcePartsForPairs()` once per
+job.
+
+`src/engine/feasibility.ts` — `checkPartAvailability()` is real:
+`PART_UNAVAILABLE` when sourcing came back `UNAVAILABLE`. New `arrivalMinutes()`
+adds the detour, used by the shift check and the SLA check.
+
+`src/engine/cost.ts` — sixth term `partSourcingCost` (paise) via
+`partSourcingCostPaise()`, weighted 0.00002 / 0.0002 / 0.00005 across
+FASTEST_RESOLUTION / LOWEST_COST / BALANCED. The detour also enters
+`expectedTimeToResolutionMinutes()`.
+
+`src/commit/dispatchSnapshot.ts` — reads `unit_stock` (confidence computed at
+the snapshot instant), the standard price list's `part_prices`, and `depots`;
+takes an optional `now`.
+
+Migration `20260902010000_phase19_part_sourcing`: `dispatch_options.part_sourcing
+JSONB`. Written by `persistSolverRun.ts` for both feasible and rejected options,
+selected by `GET /console/jobs/:id/decision`, rendered by
+`public/js/panels/inspector.js` (`partSourcingLine()`).
+
+`src/domain/driverNarrative.ts` — `NarrativeContext.sourcingPart`,
+`STILL_ON_THE_WAY`, `partSourcingSentence()`. `src/api/driver.ts` reads the
+assigned unit's stored sourcing through `isWorkshopRun()`.
+
+Evaluation: `prisma/seed/fleet.ts` exports `unitStockPlanEntries()`;
+`evaluation/scenarios/fleet.ts` gains `partsSnapshot()`, `bandedConfidence()`,
+`isDepleted()` and a `stockDepletion` knob; a sixth scenario `parts-stockout`;
+`evaluation/policies/greedy.ts` `stockBlind()`; `POLICY_ALIASES` for `nearest`
+and `global`; `JobRecord.stockoutFailures`, `Metrics.stockoutInducedFailures`
+and a `stockout fails` column; ground-truth van stock in `runner.ts` that
+decrements as repairs consume it.
+
+Tests: `tests/partSourcing.test.ts` (12), an `option count` block in
+`tests/candidates.test.ts`, a real `PART_UNAVAILABLE` block in
+`tests/feasibility.test.ts`, `partSourcingCost` in `tests/cost.test.ts`, and two
+harness-honesty tests in `tests/evaluation.test.ts`.
+
+### Decisions
+
+**Decision** Resolve part sourcing inside `generateCandidates`, collapsed to one
+`PartSourcing` per pair, and assert the option count still equals the pair count.
+**Why** The phase's own question. A part source is a genuine choice, and the
+naive way to model a choice is a candidate per branch — which multiplies the
+assignment matrix by the number of ways to get a part.
+**Alternative** A candidate per (unit, technician, source).
+**Why not** `jobs x units x technicians x sources` does not finish before the
+next call arrives, and the extra columns carry no information the collapse
+throws away: within a fixed pair and a fixed job, one source dominates.
+**Tradeoff** The collapse is made before the global assignment sees it, so the
+solver cannot trade a slightly worse source for one job against a better one for
+another. That trade does not exist here anyway — depots have no inventory.
+
+**Decision** UNVERIFIED stock counts as absent. AGEING counts as present.
+**Why** The asymmetry of the two mistakes. Believing a part is there when it is
+not produces a crew who drives out, opens an empty shelf and leaves; the driver
+then waits for a whole second dispatch. Believing it is missing when it is there
+costs a detour.
+**Alternative** Discount stock by confidence and let the cost function weigh it.
+**Why not** That is invariant 3's forbidden shape — a constraint disguised as a
+number, which some combination of other terms eventually outvotes.
+**Tradeoff** A van whose count is nine hours old is treated as empty even when it
+is full. A third of the seeded fleet is in that band by construction.
+
+**Decision** `resolvableFaults` now means skill AND part; the skill-only answer
+moved to `skillResolvableFaults`.
+**Why** `canResolve(option, fault) = hasSkill ∧ hasPart` is the phase's
+definition, and every downstream consumer — the cost function's escalation term,
+the harness's first-visit test — was asking "will this crew finish the job",
+which was never a question about skill alone.
+**Alternative** Leave `resolvableFaults` alone and add a parallel parts flag.
+**Why not** Two fields answering one question is how a cost function and a
+simulator start disagreeing about what a dispatch achieves.
+**Tradeoff** A silent semantic change to a field five files read. The rename of
+the old meaning is what makes it reviewable.
+
+**Decision** A sourcing detour longer than `MAX_PART_SOURCING_DETOUR_MINUTES`
+(45) is a rejection, not an expensive option.
+**Why** Past that line a depot run is a second dispatch wearing a costume, and a
+second dispatch is already priced by the escalation term — run by a crew who
+does not have to drive the wrong way first.
+**Alternative** No ceiling; let `partSourcingCost` sort it out.
+**Why not** The weight needed to make a two-hour detour lose reliably is a weight
+that acts as a filter, which is the thing invariant 3 forbids.
+**Tradeoff** A hand-set constant with no measurement behind it, like the
+durations. Measured consequence: 23 `PART_UNAVAILABLE` rejections across a whole
+`parts-stockout` run, against 45,618 `CAPABILITY_MISSING`.
+
+**Decision** One depot is priced per job — the one nearest the JOB — costing two
+extra road-matrix calls, and only when some pair is actually short of a part.
+**Why** Pricing every (van, depot) pair is one call per depot per job. The last
+leg is the one the driver waits through, so the depot closest to the vehicle is
+the right one to prefer.
+**Alternative** Nearest depot per van, or all depots for all vans.
+**Why not** Six zones and three depots make the difference small; the round trips
+are not.
+**Tradeoff** A van already parked beside a depot the job is far from does not get
+credit for it.
+
+**Decision** `snapshot.parts === null` means "this picture does not model parts"
+and never rejects anything — it is not "the vans are empty".
+**Why** Two real callers need it: everything written before this phase, and the
+harness's greedy baselines, which are stock-blind on purpose.
+**Alternative** Make `parts` required and fail closed on an empty array.
+**Why not** Fail-closed answers "we looked and found nothing". "Nobody looked" is
+a different fact and conflating them turns every pre-parts caller into a system
+that refuses to dispatch.
+**Tradeoff** A future caller could forget to fill `parts` in and silently get
+part-blind dispatch. Only `buildDispatchSnapshot` builds a production snapshot,
+and it always fills it in.
+
+**Decision** The three greedy baselines are blind to stock; the runner is not.
+**Why** Holding hard constraints identical across policies is what stops the
+comparison being rigged against the baselines. Handing them an inventory model
+an incumbent system does not have would rig it the other way.
+**Alternative** Give every policy the parts snapshot.
+**Why not** `stockoutInducedFailures` would then measure nothing — every policy
+would avoid the same stockouts and the parts layer would look free.
+**Tradeoff** The baselines are now weaker than they were at Phase 10 on a metric
+that did not exist then. Stated in `evaluation/policies/greedy.ts` and pinned by
+a test that would fail if somebody "tidied up" the blanking.
+
+**Decision** Part VALUE is in the cost term, not only the detour.
+**Why** The same part is consumed whichever crew fits it, but not off the same
+shelf: stock already on a van is committed, and a depot run draws a fresh unit
+out of inventory some other job may want. Pricing that stops the solver treating
+the depot as infinite.
+**Alternative** Detour time only.
+**Why not** Then a van two minutes from a depot is as good as a stocked van, and
+the fleet drains its depots.
+**Tradeoff** Double counting against the estimate, which also bills the part.
+Nothing reads both numbers, but they are two prices for one object.
+
+### Concurrency
+**Scenario** Two dispatchers solve at the same instant and both see the same van
+holding the last battery.
+**What races** Nothing new. The stock lines are read into the snapshot and the
+solver only reads them (invariant 2), so both plans may propose the same van.
+**Why dangerous** Both crews would be told to fit a battery that exists once.
+**How handled** Not by this phase, and that is worth being explicit about: the
+saga's version-checked hold (`src/commit/holds.ts`) means only one of the two
+acquires the unit, and one active job per unit (invariant 7) means the loser
+never reaches the shelf. Stock is not separately reserved.
+**Assumption relied on** One active job per unit. The moment a unit can hold two
+jobs, "one battery, two jobs" becomes a real race and `unit_stock.version` — the
+column Phase 18 added and this phase still does not use — is what would answer
+it.
+
+**Scenario** A technician declares a consumption while a solve is in flight.
+**What races** The decrement lands after the snapshot was read, so the plan was
+made against a shelf with one more battery on it than exists.
+**Why dangerous** A crew is dispatched expecting a part that has just been used.
+**How handled** The same way every other staleness in the snapshot is handled —
+it is a snapshot, not a live view, and the commit-time conditional update is
+what catches a world that moved. The cost of being wrong here is one wasted
+visit, which is exactly what `stockoutInducedFailures` measures.
+**Assumption relied on** Consumption is rare relative to the solve interval, and
+a wasted visit is recoverable.
+
+### Weaknesses introduced
+- **A depot has infinite stock.** `measureDepotRuns()` never asks whether the
+  depot has the part. Phase 18 made depots deliberately dumb and this phase
+  builds on that. At current scale it does not matter — three depots, one city —
+  but "the workshop run always succeeds" is the single most optimistic
+  assumption in the parts layer.
+- **`unit_stock.version` is still unread.** Phase 18 added it for optimistic
+  locking that nothing does. Correct today only because invariant 7 makes the
+  race impossible.
+- **The 45-minute detour ceiling is hand-set**, like the durations, with no data
+  behind it. It fires 23 times in a whole scenario, so it is nearly inert — which
+  is either the right calibration or an untested one.
+- **Part value is priced off the STANDARD list, not the job's pinned list.**
+  Deliberate — this is a dispatch input, not a bill — but it means a tenant with
+  its own price list is dispatched against somebody else's prices.
+- **A snapshot without `parts` silently dispatches part-blind.** Fail-open, in a
+  layer whose whole argument is fail-closed. Justified for the two callers that
+  need it and dangerous if a third appears.
+- **Every fixture that creates a unit now needs stock, or a depot within 45
+  minutes.** The re-dispatch tests broke on exactly this. It is a real coupling
+  between test setup and a filter, and it will bite again.
+- **`stockoutInducedFailures` is not a ranking.** It counts crews who had the
+  skill and not the part, so a policy that sends MORE qualified crews scores
+  worse on it while doing better work. Measured below.
+
+### Concepts now genuinely in use
+Fail-closed defaults under uncertainty, and the argument for why the two errors
+are not symmetric. Dimensionality collapse inside candidate generation — the
+answer to "doesn't that blow up the matrix?". A filter with a threshold
+(`MAX_PART_SOURCING_DETOUR_MINUTES`) standing in for a penalty large enough to be
+a constraint. Belief versus ground truth in a simulator: the policy sees
+confidence, the runner opens the shelf.
+
+### Interview angle
+"You added parts to a dispatch problem — why didn't the assignment matrix
+explode?" Because the choice of part source is resolved per (unit, technician)
+pair inside `generateCandidates` and collapsed to the single best one, so parts
+made every option richer and the matrix exactly the same size —
+`tests/candidates.test.ts`'s `option count` block asserts it.
+
+"Your evaluation predicted skill-aware would beat nearest on stockouts and it
+didn't. What happened?" A stockout-induced failure is defined as a crew who had
+the SKILL and not the part, so maximising skill coverage moves failures into that
+column that a nearest-unit policy books as capability failures instead — the
+metric separates two kinds of wasted visit rather than ranking parts-awareness,
+and `EVALUATION.md` finding 4 says so with the numbers.
+
+### What broke
+**Six test files went red the moment `PART_UNAVAILABLE` became real** — the
+re-dispatch suites most visibly, with a crew that had been feasible for two
+phases suddenly producing `WAIT` instead of `RELEASE_PENDING`. The cause was not
+the filter: `zippy_test` had been seeded before Phase 18 added depots, so it held
+27 parts, 198 stock rows and zero depots. A fixture van with no stock rows of its
+own and no depot to divert to is correctly `PART_UNAVAILABLE`. Re-seeding the
+test database fixed it. The lesson is the coupling, not the seed: a hard filter
+over data a fixture never had to think about turns "my fixture is incomplete"
+into "my unrelated test fails".
+
+**The build plan's predicted result did not appear.** It calls for
+`stockoutInducedFailures`: nearest > skill-aware > global. The second half holds
+everywhere and holds hard (global at 0-27 against baselines at 14-149); the first
+half does not — `skill-aware` is WORSE than `nearest-unit` at normal-day (105 v
+97), monsoon-surge (149 v 136) and technician-dropout (81 v 74), ties at two, and
+wins only at capability-scarcity (122 v 124). Reported in `EVALUATION.md` finding
+4 with the reason rather than quietly reweighted, per the phase's own "if it does
+not appear, report that too".
+
+**`capability-aware-global` strands 30 of 60 at `parts-stockout` against 2 for
+the baselines**, which looked at first like the parts filter refusing everything.
+Instrumenting a full run said otherwise: 23 `PART_UNAVAILABLE` against 45,618
+`CAPABILITY_MISSING`, 10,120 `UNIT_UNAVAILABLE` and 277 `SLA_UNREACHABLE`. It is
+finding 1 again — a job whose window closes can never be dispatched — reached
+this time because the stock-aware policy declines to send a crew who cannot
+finish while the baselines send them repeatedly (58 dispatched, 22 resolved,
+against 30 dispatched and 27 resolved).
+
+**Two long heredocs sent through the Bash tool failed with `unexpected EOF`** at
+around 180 lines, twice, writing nothing. Not a shell syntax problem — the same
+content written through the Write tool was fine. Anything long goes to a file
+first now.

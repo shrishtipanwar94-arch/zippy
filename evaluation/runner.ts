@@ -24,6 +24,7 @@
 // deliberately kept out of the reproducible output — see metrics.ts.
 
 import type { FaultCode } from '../src/domain/faults.js';
+import { partSkusForFault } from '../src/domain/faults.js';
 import { diagnoseMinutes, resolveMinutes, REDISPATCH_COORDINATION_MINUTES } from '../src/engine/durations.js';
 import type { DispatchSnapshot, UnitSnapshot } from '../src/engine/candidates.js';
 import type { Policy, PolicyDecision } from './policies/index.js';
@@ -48,6 +49,11 @@ export type JobRecord = {
   firstArrivalMinute: number | null;
   resolvedMinute: number | null;
   firstVisitResolved: boolean;
+  // Visits that failed because the shelf was empty, NOT because the crew
+  // lacked the skill. This is the number Phase 19 exists to move: a policy
+  // blind to stock sends crews who are perfectly qualified and then cannot
+  // finish, and no skill-based metric can see that happening.
+  stockoutFailures: number;
   // The technician who actually finished it, for the earnings distribution.
   resolvedBy: string | null;
 };
@@ -94,6 +100,7 @@ export async function runScenario(
       firstArrivalMinute: null,
       resolvedMinute: null,
       firstVisitResolved: false,
+      stockoutFailures: 0,
       resolvedBy: null,
     });
   }
@@ -101,6 +108,19 @@ export async function runScenario(
   const units = new Map<string, UnitState>();
   for (const unit of scenario.snapshot.units) {
     units.set(unit.id, { unit, freeAtMinute: 0, lat: unit.lat, lng: unit.lng });
+  }
+
+  // WHAT IS ACTUALLY IN EACH VAN, as opposed to what a policy believes. The
+  // quantities start from the scenario and go DOWN as repairs consume them, so
+  // a busy van runs itself out over a shift — a stockout the harness produces
+  // rather than one it was told about. Confidence is not tracked here: nobody
+  // in a simulated run walks out and counts a shelf, so a van's count only
+  // gets staler, which is the pessimistic direction and the honest one.
+  const vanStock = new Map<string, Map<string, number>>();
+  for (const line of scenario.snapshot.parts?.stock ?? []) {
+    const shelf = vanStock.get(line.unitId) ?? new Map<string, number>();
+    shelf.set(line.sku, line.quantity);
+    vanStock.set(line.unitId, shelf);
   }
 
   const unitBusyMinutes = new Map<string, number>();
@@ -120,7 +140,7 @@ export async function runScenario(
     const ready = pending.filter((item) => item.availableFrom <= clock);
 
     if (ready.length > 0) {
-      const snapshot = snapshotAt(scenario, units, clock);
+      const snapshot = snapshotAt(scenario, units, vanStock, clock);
       const now = new Date(SCENARIO_START.getTime() + clock * 60_000);
       const jobs = ready.map((item) => item.entry.job);
 
@@ -146,6 +166,7 @@ export async function runScenario(
           entry: item.entry,
           record: records.get(decision.jobId)!,
           unitState,
+          shelf: vanStock.get(decision.option.unitId) ?? null,
           unitBusyMinutes,
           technicianBusyMinutes,
           pending,
@@ -185,22 +206,39 @@ function applyDispatch(input: {
   entry: ScenarioJob;
   record: JobRecord;
   unitState: UnitState;
+  // What is really on this van, mutated as the repair consumes it. Null when
+  // the scenario models no parts at all.
+  shelf: Map<string, number> | null;
   unitBusyMinutes: Map<string, number>;
   technicianBusyMinutes: Map<string, number>;
   pending: Pending[];
 }): void {
-  const { clock, decision, entry, record, unitState } = input;
+  const { clock, decision, entry, record, unitState, shelf } = input;
   const option = decision.option;
 
-  const arrivesAt = clock + option.estimatedTravelMinutes;
+  // A crew diverting through a depot to collect a part is genuinely later.
+  // A stock-blind policy never plans one, so it never pays this — and never
+  // arrives with the part either.
+  const travelMinutes = option.estimatedTravelMinutes + option.partSourcing.detourMinutes;
+  const arrivesAt = clock + travelMinutes;
   record.dispatchCount += 1;
   if (record.firstArrivalMinute === null) record.firstArrivalMinute = arrivesAt;
 
-  // CAN THIS CREW ACTUALLY FIX IT? The option's `resolvableFaults` is what
-  // the production candidate generator worked out the pair can handle; the
-  // true fault is what the vehicle has. Everything downstream follows from
-  // this one comparison.
-  const canResolve = option.resolvableFaults.includes(entry.trueFault);
+  // CAN THIS CREW ACTUALLY FIX IT? Two separate questions from Phase 19 on,
+  // and keeping them apart is the point: `skillResolvableFaults` is what the
+  // pair is trained and equipped to do, and the shelf is what they have to do
+  // it WITH. A policy that ignored stock still meets the real shelf here — the
+  // world does not become stockless because a dispatcher was not looking.
+  const hasSkill = option.skillResolvableFaults.includes(entry.trueFault);
+  const needed = partSkusForFault(entry.trueFault);
+  const fromVan = needed.filter((sku) => (shelf?.get(sku) ?? 0) > 0);
+  const collected = needed.filter((sku) => collectedOnTheWay(option, sku));
+  const hasParts =
+    shelf === null || needed.every((sku) => fromVan.includes(sku) || collected.includes(sku));
+
+  const canResolve = hasSkill && hasParts;
+  // The crew turned up qualified and could not finish for want of a part.
+  if (hasSkill && !hasParts) record.stockoutFailures += 1;
 
   const workMinutes = canResolve
     ? resolveMinutes(entry.trueFault)
@@ -212,11 +250,14 @@ function applyDispatch(input: {
   unitState.lat = entry.job.lat;
   unitState.lng = entry.job.lng;
 
-  const busy = option.estimatedTravelMinutes + workMinutes;
+  const busy = travelMinutes + workMinutes;
   addMinutes(input.unitBusyMinutes, option.unitId, busy);
   addMinutes(input.technicianBusyMinutes, option.technicianId, busy);
 
   if (canResolve) {
+    // The repair used the parts up. Only what came off THIS van comes off this
+    // van — anything picked up at a depot never sat on the shelf.
+    for (const sku of fromVan) shelf!.set(sku, (shelf!.get(sku) ?? 0) - 1);
     record.resolvedMinute = releasedAt;
     record.resolvedBy = option.technicianId;
     if (record.dispatchCount === 1) record.firstVisitResolved = true;
@@ -231,6 +272,14 @@ function applyDispatch(input: {
   });
 }
 
+// A SKU the crew was sent to a depot for. The run collects exactly what it was
+// sent for, so a part nobody planned around is not magically in the van.
+function collectedOnTheWay(option: PolicyDecision['option'], sku: string): boolean {
+  return (
+    option.partSourcing.status === 'WORKSHOP_RUN' && option.partSourcing.missingSkus.includes(sku)
+  );
+}
+
 function addMinutes(into: Map<string, number>, key: string, minutes: number): void {
   into.set(key, (into.get(key) ?? 0) + minutes);
 }
@@ -241,6 +290,7 @@ function addMinutes(into: Map<string, number>, key: string, minutes: number): vo
 function snapshotAt(
   scenario: Scenario,
   units: Map<string, UnitState>,
+  vanStock: Map<string, Map<string, number>>,
   clock: number,
 ): DispatchSnapshot {
   // A technician who has dropped out is gone from the snapshot entirely, so
@@ -263,6 +313,8 @@ function snapshotAt(
     status: (state.freeAtMinute > clock ? 'ON_JOB' : 'AVAILABLE') as UnitSnapshot['status'],
   }));
 
+  const parts = scenario.snapshot.parts;
+
   return {
     units: availableUnits,
     technicians: scenario.snapshot.technicians.filter(
@@ -270,6 +322,18 @@ function snapshotAt(
     ),
     shifts: scenario.snapshot.shifts,
     zones: scenario.snapshot.zones,
+    // Quantities are re-read from the running totals, so a van that has used
+    // its last battery stops being offered for battery jobs — the same
+    // information a real consumption declaration writes back in production.
+    parts: parts
+      ? {
+          ...parts,
+          stock: parts.stock.map((line) => ({
+            ...line,
+            quantity: vanStock.get(line.unitId)?.get(line.sku) ?? line.quantity,
+          })),
+        }
+      : null,
   };
 }
 

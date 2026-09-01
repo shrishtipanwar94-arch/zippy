@@ -103,6 +103,7 @@ describe('the translation map — no enum reaches a driver', () => {
         helperName: 'Ravi',
         arrivingAt: new Date('2026-08-31T15:54:00.000Z'),
         replanning: false,
+        sourcingPart: false,
         intakeComplete: true,
       });
       expect(sentence.length).toBeGreaterThan(0);
@@ -117,6 +118,7 @@ describe('the translation map — no enum reaches a driver', () => {
       helperName: 'Ravi',
       arrivingAt: null,
       replanning: true,
+      sourcingPart: false,
       intakeComplete: true,
     });
     expect(sentence).toContain('Ravi');
@@ -130,6 +132,7 @@ describe('the translation map — no enum reaches a driver', () => {
       // 15:54 UTC is 21:24 in Bengaluru — the brief's own example.
       arrivingAt: new Date('2026-08-31T15:54:00.000Z'),
       replanning: false,
+      sourcingPart: false,
       intakeComplete: true,
     });
     expect(sentence).toBe('Ravi is on the way, arriving 21:24.');
@@ -141,6 +144,7 @@ describe('the translation map — no enum reaches a driver', () => {
       helperName: 'Ravi',
       arrivingAt: null,
       replanning: false,
+      sourcingPart: false,
       intakeComplete: true,
     });
     expect(sentence).toBe('Ravi is on the way to you now.');
@@ -155,6 +159,7 @@ describe('the translation map — no enum reaches a driver', () => {
       helperName: null,
       arrivingAt: null,
       replanning: false,
+      sourcingPart: false,
       intakeComplete: false,
     });
     const finished = headlineFor({
@@ -162,6 +167,7 @@ describe('the translation map — no enum reaches a driver', () => {
       helperName: null,
       arrivingAt: null,
       replanning: false,
+      sourcingPart: false,
       intakeComplete: true,
     });
     expect(asking).toBe('We are taking down the details of your breakdown.');

@@ -18,6 +18,12 @@
 // The first three are greedy: they take jobs one at a time and never revise.
 // The fourth solves all pending jobs as one assignment problem. That is the
 // difference the project exists to measure.
+//
+// FROM PHASE 19 THE FIRST THREE ARE ALSO STOCK-BLIND — see greedy.ts. Hard
+// constraints stay identical across all four, as above; what the baselines do
+// not get is the inventory model, because "dispatch on skill and forget about
+// parts" is the incumbent behaviour the parts layer is arguing against, and a
+// baseline handed the answer cannot demonstrate the gap.
 
 import type { DispatchOption, DispatchSnapshot, JobForDispatch } from '../../src/engine/candidates.js';
 import { greedyPolicy } from './greedy.js';
@@ -64,7 +70,7 @@ const nearestUnit: Policy = {
 // something other than capability coverage.
 const skillAware: Policy = {
   name: 'skill-aware',
-  description: 'the crew most likely to fix it in one visit, ties on arrival',
+  description: 'the crew most likely to fix it in one visit on SKILL alone, ties on arrival',
   decide: greedyPolicy(
     (option) => -option.coveredFaultProbability * 10_000 + option.estimatedTravelMinutes,
   ),
@@ -80,8 +86,17 @@ export const POLICIES: Policy[] = [fifo, nearestUnit, skillAware, capabilityAwar
 
 export const POLICY_NAMES = POLICIES.map((policy) => policy.name);
 
+// The short names the build plan and the README use on a command line. Two
+// spellings of one policy, never two policies — an alias resolves to the same
+// object, so nothing can drift between what is documented and what runs.
+const POLICY_ALIASES: Record<string, string> = {
+  nearest: 'nearest-unit',
+  global: 'capability-aware-global',
+};
+
 export function policyByName(name: string): Policy {
-  const policy = POLICIES.find((candidate) => candidate.name === name);
+  const resolved = POLICY_ALIASES[name] ?? name;
+  const policy = POLICIES.find((candidate) => candidate.name === resolved);
   if (!policy) {
     throw new Error(`unknown policy "${name}" — known: ${POLICY_NAMES.join(', ')}`);
   }

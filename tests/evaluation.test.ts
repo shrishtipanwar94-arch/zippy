@@ -115,8 +115,41 @@ describe('the harness measures the production engine', () => {
       'capability-scarcity',
       'monsoon-surge',
       'normal-day',
+      'parts-stockout',
       'technician-dropout',
     ]);
+  });
+
+  // THE COMPARISON HAS TO STAY HONEST IN BOTH DIRECTIONS. Holding hard
+  // constraints identical across all four policies is what stops the greedy
+  // baselines losing for a reason that is not the objective function; blanking
+  // their PARTS model is what stops them winning for a reason that is not
+  // either — namely being handed an inventory an incumbent system does not
+  // have. Both halves are deliberate, and the second is the one somebody
+  // "tidying up" would remove.
+  it('keeps the greedy baselines blind to stock, and only the greedy ones', () => {
+    const greedy = readFileSync(join('evaluation', 'policies', 'greedy.ts'), 'utf8');
+    const global = readFileSync(join('evaluation', 'policies', 'global.ts'), 'utf8');
+
+    expect(greedy).toMatch(/parts: null/);
+    expect(global).not.toMatch(/parts: null/);
+  });
+
+  // A stock-blind policy still meets the real shelf when the crew opens it.
+  // If the runner ever started reading `resolvableFaults` again instead of
+  // skills plus ground truth, this column would silently go to zero for every
+  // policy and the whole parts layer would look free.
+  it('measures stockout-induced failures against the real van, not the belief', async () => {
+    const scenario = buildScenario('parts-stockout', 4242);
+    const blind = await runScenario(scenario, policyByName('nearest'));
+    const stockAware = await runScenario(scenario, policyByName('global'));
+
+    const failures = (run: Awaited<ReturnType<typeof runScenario>>) =>
+      computeMetrics(run, scenario.snapshot.technicians.map((technician) => technician.id))
+        .stockoutInducedFailures;
+
+    expect(failures(blind)).toBeGreaterThan(0);
+    expect(failures(stockAware)).toBeLessThan(failures(blind));
   });
 });
 

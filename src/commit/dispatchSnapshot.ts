@@ -25,8 +25,11 @@ import type {
   UnitKindSnapshot,
   UnitStatusSnapshot,
 } from '../engine/candidates.js';
+import type { PartsSnapshot } from '../engine/partSourcing.js';
 import { FAULT_CODES } from '../domain/faults.js';
 import type { FaultDistribution } from '../domain/faults.js';
+import { stockConfidence } from '../domain/stockConfidence.js';
+import { STOCK_AGE_THRESHOLDS } from './vanStock.js';
 
 // Jobs the solver should be planning for: raised, diagnosed, and not yet
 // assigned to anyone.
@@ -68,9 +71,17 @@ export async function buildDispatchSnapshot(
   // is whether that crew should still be the answer. Without this the
   // diagnosis-change flow would ask the solver about a job the solver had
   // already been told to ignore, and get silence back.
-  options: { jobIds?: string[]; zoneId?: string; includeAssigned?: boolean } = {},
+  //
+  // `now` is the instant the picture is taken, and it exists for exactly one
+  // reason: stock confidence is a function of AGE, so "what is believably on
+  // this van" cannot be read without saying when. Defaults to the wall clock;
+  // a test passes its own so a shelf can be made stale without waiting.
+  options: { jobIds?: string[]; zoneId?: string; includeAssigned?: boolean; now?: Date } = {},
 ): Promise<SnapshotResult> {
-  const [jobRows, unitRows, technicianRows, shiftRows, zoneRows] = await Promise.all([
+  const now = options.now ?? new Date();
+
+  const [jobRows, unitRows, technicianRows, shiftRows, zoneRows, stockRows, priceRows, depotRows] =
+    await Promise.all([
     db.job.findMany({
       where: {
         ...(options.includeAssigned
@@ -119,6 +130,30 @@ export async function buildDispatchSnapshot(
     }),
     db.technicianShift.findMany({ select: { technicianId: true, startsAt: true, endsAt: true } }),
     db.zone.findMany({ select: { id: true, centroidLat: true, centroidLng: true } }),
+    db.unitStock.findMany({
+      select: { unitId: true, quantity: true, confirmedAt: true, part: { select: { sku: true } } },
+    }),
+    // What a part is worth, off the standard list in force right now. NOT the
+    // list a job was pinned to at creation — that pinning is a billing
+    // guarantee (src/pricing/rateCard.ts) and this is a dispatch input: the
+    // solver is asking what a depot run draws out of inventory today, which is
+    // one number for the whole fleet rather than one per job.
+    db.partPrice.findMany({
+      where: {
+        priceList: { active: true, tenantId: null },
+        validFrom: { lte: now },
+        OR: [{ validTo: null }, { validTo: { gt: now } }],
+      },
+      orderBy: { validFrom: 'asc' },
+      select: { unitPricePaise: true, part: { select: { sku: true } } },
+    }),
+    // A depot with no coordinates cannot have a detour measured to it, so it
+    // is not a place a crew can be sent — skipped here rather than defended
+    // against in the engine.
+    db.depot.findMany({
+      where: { lat: { not: null }, lng: { not: null } },
+      select: { id: true, code: true, lat: true, lng: true },
+    }),
   ]);
 
   const jobZone = new Map<string, string>();
@@ -171,6 +206,25 @@ export async function buildDispatchSnapshot(
       centroidLat: zone.centroidLat,
       centroidLng: zone.centroidLng,
     })),
+    parts: {
+      stock: stockRows.map((row) => ({
+        unitId: row.unitId,
+        sku: row.part.sku,
+        quantity: row.quantity,
+        confidence: stockConfidence(row.confirmedAt, now, STOCK_AGE_THRESHOLDS),
+      })),
+      valuePaiseBySku: Object.fromEntries(
+        // Ordered by validFrom ascending above, so a later revision of a price
+        // overwrites the earlier one it supersedes.
+        priceRows.map((row) => [row.part.sku, row.unitPricePaise]),
+      ),
+      depots: depotRows.map((depot) => ({
+        id: depot.id,
+        code: depot.code,
+        lat: depot.lat!,
+        lng: depot.lng!,
+      })),
+    } satisfies PartsSnapshot,
   };
 
   return { jobs, snapshot, jobZone };

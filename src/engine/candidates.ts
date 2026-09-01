@@ -3,14 +3,15 @@
 // would take to get there.
 //
 // THE ASSIGNMENT MATRIX MUST NEVER GROW PAST jobs x (unit, technician).
-// Parts sourcing (Phase 19) and destination selection (Phase 22) will be
-// resolved INSIDE this function, collapsing to a single best choice per pair.
-// If a future change would add a dimension to the matrix — a candidate per
-// (unit, technician, part-sourcing-option), say, or per possible destination
-// — that logic belongs HERE, folded down to one option per pair, not bolted
-// on as a new loop that multiplies the option count. A solver that reasons
-// over jobs x units x technicians x parts x destinations does not finish
-// before the next job arrives.
+// Parts sourcing (Phase 19, in partSourcing.ts) and destination selection
+// (Phase 22) are resolved INSIDE this function, collapsing to a single best
+// choice per pair. If a future change would add a dimension to the matrix — a
+// candidate per (unit, technician, part-sourcing-option), say, or per possible
+// destination — that logic belongs HERE, folded down to one option per pair,
+// not bolted on as a new loop that multiplies the option count. A solver that
+// reasons over jobs x units x technicians x parts x destinations does not
+// finish before the next job arrives. Parts made every option richer and the
+// matrix exactly the same size, and there is a test that says so.
 //
 // This module has ZERO imports from prisma or redis — invariant 2, the solver
 // never writes to the database, and this is the pure heart of it: a snapshot
@@ -24,6 +25,8 @@
 import { FAULT_CODES, capabilitiesForFault } from '../domain/faults.js';
 import type { FaultCode, FaultDistribution } from '../domain/faults.js';
 import { requiredCapabilities } from '../domain/capabilitySet.js';
+import { sourcePartsForPairs } from './partSourcing.js';
+import type { PartsSnapshot, PartSourcing } from './partSourcing.js';
 import { travelTimeMatrix } from '../infra/routing.js';
 import type { LatLng, TravelTimeSource } from '../infra/routing.js';
 
@@ -118,6 +121,15 @@ export type DispatchSnapshot = {
   technicians: TechnicianSnapshot[];
   shifts: ShiftSnapshot[];
   zones: ZoneSnapshot[];
+  // What is on each van, what a part is worth, and where the depots are.
+  //
+  // ABSENT OR NULL MEANS "THIS SNAPSHOT DOES NOT MODEL PARTS", which is not
+  // the same claim as "the vans are empty" and must not be read as one. The
+  // production snapshot (src/commit/dispatchSnapshot.ts) always fills it in.
+  // The evaluation harness's greedy baselines deliberately blank it, because
+  // dispatching with no idea what is on the van is precisely the behaviour
+  // they exist to measure against.
+  parts?: PartsSnapshot | null;
 };
 
 // ---------------------------------------------------------------------------
@@ -141,12 +153,21 @@ export type DispatchOption = {
   // other would mean assuming an average speed the road graph already knows
   // better than we do.
   estimatedTravelKm: number;
-  // Exactly which faults this pair could resolve outright. The scalar below
-  // is this list weighted by probability — but a duration model needs to know
-  // WHICH faults, not just how much probability mass, because diagnose and
-  // resolve times differ per fault. Kept as a list rather than recomputed
-  // downstream so the capability intersection is applied in exactly one place.
+  // Exactly which faults this pair would arrive able to resolve outright:
+  // SKILL and PART together, which is what Phase 19 made `canResolve` mean.
+  // The scalar below is this list weighted by probability — but a duration
+  // model needs to know WHICH faults, not just how much probability mass,
+  // because diagnose and resolve times differ per fault. Kept as a list rather
+  // than recomputed downstream so the intersection is applied in one place.
   resolvableFaults: FaultCode[];
+  // The same list BEFORE parts were considered — what the crew is trained and
+  // equipped to do. The difference between the two lists is the whole subject
+  // of the parts layer, and it is what lets the driver's screen say "has the
+  // skills but needs a part" instead of the much bleaker "cannot help you".
+  skillResolvableFaults: FaultCode[];
+  // Where the parts come from, already collapsed to one answer — see
+  // partSourcing.ts for why that collapse is the point.
+  partSourcing: PartSourcing;
   // What fraction of the job's ENTIRE fault-probability mass this pair could
   // resolve outright, across all twelve fault codes — not just the ones
   // intake narrowed the diagnosis to. A generalist technician who can fix
@@ -262,10 +283,28 @@ export async function generateCandidates(
 
   const required = requiredCapabilities(job.faultDistribution);
 
+  const skills = pairs.map((pair) => intersectedCapabilities(pair));
+  const skilled = skills.map((capabilities) => resolvableFaults(capabilities));
+
+  // PARTS ARE RESOLVED HERE, one answer per pair, and the result narrows what
+  // each pair can actually finish rather than adding options to choose from.
+  const sourced = await sourcePartsForPairs({
+    job,
+    parts: snapshot.parts ?? null,
+    pairs: pairs.map((pair, index) => ({
+      unitId: pair.unit.id,
+      skilledFaults: skilled[index]!,
+      from: origins[index]!,
+      travelMinutesToJob: travel[index]!.minutes,
+    })),
+    destination,
+    travelTimes,
+  });
+
   return pairs.map((pair, index) => {
-    const capabilities = intersectedCapabilities(pair);
+    const capabilities = skills[index]!;
     const estimate = travel[index]!;
-    const resolvable = resolvableFaults(capabilities);
+    const resolvable = sourced[index]!.sourcedFaults;
 
     return {
       unitId: pair.unit.id,
@@ -274,6 +313,8 @@ export async function generateCandidates(
       travelEstimateDegraded: estimate.degraded,
       estimatedTravelKm: estimate.kilometres,
       resolvableFaults: resolvable,
+      skillResolvableFaults: skilled[index]!,
+      partSourcing: sourced[index]!.sourcing,
       coveredFaultProbability: coveredFaultProbability(job.faultDistribution, resolvable),
       missingCapabilities: required.filter((code) => !capabilities.has(code)),
     };

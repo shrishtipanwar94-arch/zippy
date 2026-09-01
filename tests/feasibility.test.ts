@@ -15,6 +15,11 @@ import type {
   UnitSnapshot,
   UnitStatusSnapshot,
 } from '../src/engine/candidates.js';
+import {
+  MAX_PART_SOURCING_DETOUR_MINUTES,
+  NO_PARTS_MODELLED,
+} from '../src/engine/partSourcing.js';
+import type { PartSourcing } from '../src/engine/partSourcing.js';
 import { FAULT_CODES } from '../src/domain/faults.js';
 import type { FaultDistribution } from '../src/domain/faults.js';
 
@@ -91,6 +96,8 @@ function option(overrides: Partial<DispatchOption> = {}): DispatchOption {
     travelEstimateDegraded: false,
     estimatedTravelKm: 5,
     resolvableFaults: ['FLAT_BATTERY'],
+    skillResolvableFaults: ['FLAT_BATTERY'],
+    partSourcing: NO_PARTS_MODELLED,
     coveredFaultProbability: 1,
     missingCapabilities: [],
     ...overrides,
@@ -382,12 +389,83 @@ describe('SLA_UNREACHABLE', () => {
 // STUBS — Phase 19, 20 and 22's codes. Each is real, wired plumbing that
 // currently never fires, proved here by a scenario that would be a natural
 // place for it to fire if it existed, staying feasible instead.
-describe('stub codes — never fire yet, on purpose', () => {
-  it('PART_UNAVAILABLE does not exist until Phase 19', () => {
-    const result = checkFeasibility([option()], job(), snapshot(), NOW);
-    expect(result.rejected.find((rejection) => rejection.code === 'PART_UNAVAILABLE')).toBeUndefined();
+// PART_UNAVAILABLE — real from Phase 19. The sourcing decision was made in
+// candidate generation; this filter only reads the verdict, so these tests set
+// the verdict directly rather than building a fleet and a depot.
+describe('PART_UNAVAILABLE', () => {
+  function sourcing(overrides: Partial<PartSourcing> = {}): PartSourcing {
+    return {
+      status: 'UNAVAILABLE',
+      detourMinutes: 0,
+      partValuePaise: 0,
+      depotId: null,
+      missingSkus: ['BAT-45AH'],
+      ...overrides,
+    };
+  }
+
+  it('rejects a crew who has the skill and cannot get the part', () => {
+    const result = checkFeasibility([option({ partSourcing: sourcing() })], job(), snapshot(), NOW);
+
+    expect(result.feasible).toEqual([]);
+    expect(result.rejected).toHaveLength(1);
+    expect(result.rejected[0]!.code).toBe('PART_UNAVAILABLE');
+    expect(result.rejected[0]!.detail).toContain('BAT-45AH');
+    expect(result.rejected[0]!.detail).toContain(String(MAX_PART_SOURCING_DETOUR_MINUTES));
   });
 
+  // The ordering matters more than the code. A crew missing the SKILL and the
+  // part is a capability problem; saying PART_UNAVAILABLE would send a
+  // dispatcher looking for a battery when what they need is a technician.
+  it('yields to CAPABILITY_MISSING, so the code names the fundamental problem', () => {
+    const result = checkFeasibility(
+      [option({ partSourcing: sourcing(), missingCapabilities: ['BATTERY_REPLACEMENT'] })],
+      job(),
+      snapshot(),
+      NOW,
+    );
+
+    expect(result.rejected[0]!.code).toBe('CAPABILITY_MISSING');
+  });
+
+  it('lets a workshop run through — a detour is a cost, not a constraint', () => {
+    const result = checkFeasibility(
+      [
+        option({
+          partSourcing: sourcing({
+            status: 'WORKSHOP_RUN',
+            detourMinutes: 8,
+            partValuePaise: 480_000,
+            depotId: 'depot-near',
+          }),
+        }),
+      ],
+      job(),
+      snapshot(),
+      NOW,
+    );
+
+    expect(result.rejected).toEqual([]);
+    expect(result.feasible).toHaveLength(1);
+  });
+
+  // The detour is time the driver waits, so the SLA has to be measured against
+  // when the crew really turns up rather than against the drive alone.
+  it('counts the detour against the SLA deadline', () => {
+    const detouring = option({
+      estimatedTravelMinutes: 20,
+      partSourcing: sourcing({ status: 'WORKSHOP_RUN', detourMinutes: 20, depotId: 'depot-near' }),
+    });
+
+    const direct = checkFeasibility([option({ estimatedTravelMinutes: 20 })], job({ slaResponseMinutes: 30 }), snapshot(), NOW);
+    const viaDepot = checkFeasibility([detouring], job({ slaResponseMinutes: 30 }), snapshot(), NOW);
+
+    expect(direct.feasible).toHaveLength(1);
+    expect(viaDepot.rejected[0]!.code).toBe('SLA_UNREACHABLE');
+  });
+});
+
+describe('stub codes — never fire yet, on purpose', () => {
   it('NO_DESTINATION_AVAILABLE does not exist until Phase 22', () => {
     const result = checkFeasibility([option()], job(), snapshot(), NOW);
     expect(result.rejected.find((rejection) => rejection.code === 'NO_DESTINATION_AVAILABLE')).toBeUndefined();

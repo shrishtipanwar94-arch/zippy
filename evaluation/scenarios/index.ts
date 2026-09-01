@@ -1,4 +1,4 @@
-// THE FIVE SCENARIOS, fully determined by their seed.
+// THE SIX SCENARIOS, fully determined by their seed.
 //
 // A scenario is data, not behaviour: a fleet, a list of jobs with arrival
 // times, a hidden true fault per job, and any technician dropouts. The runner
@@ -135,7 +135,7 @@ function fleetShape(overrides: ScenarioOverrides | undefined, base: FleetShape):
 }
 
 // ---------------------------------------------------------------------------
-// The five scenarios.
+// The six scenarios.
 
 function normalDay(seed: number, overrides?: ScenarioOverrides): Scenario {
   const random = createRandom(seed);
@@ -273,12 +273,56 @@ function technicianDropout(seed: number, overrides?: ScenarioOverrides): Scenari
   };
 }
 
+// EVERY JOB HERE CONSUMES A PART, against a fleet that has run half its
+// shelves down. That combination is what makes the parts layer measurable: on
+// an ordinary day most callouts are jump starts, lockouts and tows, which
+// consume nothing at all (src/domain/faults.ts) and leave stock-awareness with
+// nothing to be right about.
+//
+// The scarce thing is no longer a certification, it is a box in the back of a
+// van, and the three greedy baselines cannot see it — they dispatch on skill
+// and distance and then discover the shelf. `capability-aware-global` reads
+// the same shelves the runner will open, treats an unverified count as absent,
+// and prices a depot run when one is worth taking. `stockoutInducedFailures`
+// is where the difference lands.
+function partsStockout(seed: number, overrides?: ScenarioOverrides): Scenario {
+  const random = createRandom(seed);
+  const count = overrides?.jobCount ?? 60;
+  const shape = fleetShape(overrides, { ...FULL_FLEET, stockDepletion: 0.5 });
+
+  // Beliefs whose contending faults all need parts: a battery, a belt, a
+  // starter, coolant, a key blank, brake pads. Nothing here can be finished
+  // with tools alone.
+  const partsHungry: Partial<Record<FaultCode, number>>[] = [
+    { FAILED_BATTERY: 0.8, FLAT_BATTERY: 0.2 },
+    { ALTERNATOR_FAILURE: 0.7, FAILED_BATTERY: 0.3 },
+    { ENGINE_OVERHEAT: 0.85, STARTER_MOTOR: 0.15 },
+    { BRAKE_FAILURE: 0.9, ENGINE_OVERHEAT: 0.1 },
+    { KEY_FAILURE: 0.8, KEYS_LOCKED_IN: 0.2 },
+    { STARTER_MOTOR: 0.75, FLAT_BATTERY: 0.25 },
+  ];
+
+  const jobs = arrivalMinutes(count, 480, random).map((minute, index) =>
+    makeJob(index, minute, partsHungry[random.nextInt(partsHungry.length)]!, random, 45),
+  );
+
+  return {
+    name: 'parts-stockout',
+    description: '60 parts-consuming jobs against a fleet with half its shelves empty.',
+    jobs,
+    snapshot: buildSnapshot(shape, SCENARIO_START),
+    horizonMinutes: 900,
+    dropouts: [],
+  };
+}
+
 const BUILDERS = {
   'normal-day': normalDay,
   'monsoon-surge': monsoonSurge,
   'capability-scarcity': capabilityScarcity,
   'ambiguous-diagnosis': ambiguousDiagnosis,
   'technician-dropout': technicianDropout,
+  'parts-stockout': partsStockout,
 } as const;
 
 export type ScenarioName = keyof typeof BUILDERS;

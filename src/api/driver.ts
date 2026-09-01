@@ -51,6 +51,14 @@ const REPLANNING_KINDS = ['REASSIGN_AFTER_DIAGNOSIS_CHANGE', 'REASSIGN_AFTER_TRI
 // to audit the incident — that is the dispatcher's timeline.
 const UPDATE_LIMIT = 12;
 
+// The stored sourcing decision is JSON, so it is read defensively rather than
+// cast — an option written before Phase 19 has no `part_sourcing` at all, and
+// a driver's screen is the last place that should throw over a null column.
+function isWorkshopRun(stored: unknown): boolean {
+  if (!stored || typeof stored !== 'object') return false;
+  return (stored as { status?: unknown }).status === 'WORKSHOP_RUN';
+}
+
 driverRouter.get(
   '/jobs/:id/driver-view',
   authenticate,
@@ -64,7 +72,13 @@ driverRouter.get(
 
     const job = await prisma.job.findFirst({
       where: { id },
-      select: { id: true, status: true, safetyLevel: true, createdAt: true },
+      select: {
+        id: true,
+        status: true,
+        safetyLevel: true,
+        createdAt: true,
+        assignedUnitId: true,
+      },
     });
     if (!job) {
       res.status(404).json({ error: 'not_found' });
@@ -74,8 +88,17 @@ driverRouter.get(
     // Everything below hangs off a job id the scoped read has already proved
     // the caller owns, so the unscoped client is correct here — the same
     // division intake.ts uses.
-    const [helper, hypothesis, eta, verification, estimate, events, replanning, approvedTotalPaise] =
-      await Promise.all([
+    const [
+      helper,
+      hypothesis,
+      eta,
+      verification,
+      estimate,
+      events,
+      replanning,
+      approvedTotalPaise,
+      sourcing,
+    ] = await Promise.all([
       assignedHelper(job.id),
       prismaBase.faultHypothesis.findFirst({
         where: { jobId: job.id },
@@ -112,10 +135,21 @@ driverRouter.get(
         where: { jobId: job.id, status: 'PENDING', kind: { in: REPLANNING_KINDS } },
       }),
       approvedTotalFor(prismaBase, job.id),
+      // The sourcing decision recorded for the crew this job was actually
+      // given. Still zero new backend: persistSolverRun wrote this row when it
+      // made the choice, and nothing is computed or decided here.
+      job.assignedUnitId
+        ? prismaBase.dispatchOption.findFirst({
+            where: { jobId: job.id, unitId: job.assignedUnitId, feasible: true },
+            orderBy: { createdAt: 'desc' },
+            select: { partSourcing: true },
+          })
+        : Promise.resolve(null),
     ]);
 
     const arrivingAt = eta ? new Date(eta.computedAt.getTime() + eta.etaSeconds * 1000) : null;
     const intakeComplete = events.some((event) => event.eventType === 'INTAKE_COMPLETED');
+    const sourcingPart = isWorkshopRun(sourcing?.partSourcing);
 
     res.json({
       jobId: job.id,
@@ -125,6 +159,7 @@ driverRouter.get(
         helperName: helper?.name ?? null,
         arrivingAt,
         replanning: replanning > 0,
+        sourcingPart,
         intakeComplete,
       }),
       detail: whatWeThinkItIs(contendersFrom(hypothesis?.distribution)),

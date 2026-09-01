@@ -26,6 +26,7 @@
 
 import { distanceKm } from '../domain/geo.js';
 import { requiredCapabilities } from '../domain/capabilitySet.js';
+import { MAX_PART_SOURCING_DETOUR_MINUTES } from './partSourcing.js';
 import { unitLocation } from './candidates.js';
 import type {
   DispatchOption,
@@ -128,13 +129,21 @@ function likelyOnWrongCarriageway(
   return option.estimatedTravelMinutes > directMinutes * HIGHWAY_DETOUR_RATIO_THRESHOLD;
 }
 
+// WHEN THE CREW WOULD ACTUALLY REACH THE VEHICLE. Driving straight there is
+// only the whole answer when they already have the part; a crew diverting
+// through a depot to collect one arrives later, and both the SLA promise and
+// the end of a shift care about the real number rather than the road time.
+function arrivalMinutes(option: DispatchOption): number {
+  return option.estimatedTravelMinutes + option.partSourcing.detourMinutes;
+}
+
 function hasShiftTimeToComplete(
   technicianId: string,
   option: DispatchOption,
   shifts: DispatchSnapshot['shifts'],
   now: Date,
 ): boolean {
-  const requiredMinutes = option.estimatedTravelMinutes + ASSUMED_SERVICE_DURATION_MINUTES;
+  const requiredMinutes = arrivalMinutes(option) + ASSUMED_SERVICE_DURATION_MINUTES;
   const completesAt = new Date(now.getTime() + requiredMinutes * 60_000);
 
   return shifts.some(
@@ -153,10 +162,25 @@ function slaDeadline(job: JobForDispatch): Date | null {
 // it teeth (named in its own comment) only has to fill in the condition, not
 // invent the plumbing, the code, or the place its test belongs.
 
-// STUB until Phase 19. Parts sourcing does not exist yet: no UnitStock check,
-// no restock lead time. Never rejects.
-function checkPartAvailability(_option: DispatchOption, _job: JobForDispatch): Rejection['detail'] | null {
-  return null;
+// PART_UNAVAILABLE — the crew has the skill and cannot get the part.
+//
+// Real from Phase 19. The sourcing decision itself was made in candidate
+// generation (src/engine/partSourcing.ts), which already tried the van and a
+// depot run and counted UNVERIFIED stock as absent; this filter only reads the
+// verdict. That split is what stops the same arithmetic existing twice.
+//
+// IT RUNS AFTER CAPABILITY_MISSING ON PURPOSE. By the time an option reaches
+// here it holds every skill the contending faults need, so this code means one
+// thing and one thing only — "Ravi can do this, and there is no belt" — which
+// is what makes the escalation card a sentence a dispatcher can act on rather
+// than a shrug.
+function checkPartAvailability(option: DispatchOption, _job: JobForDispatch): Rejection['detail'] | null {
+  if (option.partSourcing.status !== 'UNAVAILABLE') return null;
+
+  return (
+    `no source for ${option.partSourcing.missingSkus.join(', ')}: not believably on the van, ` +
+    `and no depot run within ${MAX_PART_SOURCING_DETOUR_MINUTES} minutes`
+  );
 }
 
 // STUB until Phase 22. Destination selection (a workshop to tow to) does not
@@ -247,7 +271,7 @@ function classify(
   // (src/commit/slaEscalation.ts), not by withholding a van.
   const deadline = slaDeadline(job);
   if (deadline && deadline > now) {
-    const arrivesAt = new Date(now.getTime() + option.estimatedTravelMinutes * 60_000);
+    const arrivesAt = new Date(now.getTime() + arrivalMinutes(option) * 60_000);
     if (arrivesAt > deadline) {
       return {
         code: 'SLA_UNREACHABLE',

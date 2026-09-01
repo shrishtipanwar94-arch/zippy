@@ -109,6 +109,9 @@ async function deliverReplanNotification(data: NotificationJobData): Promise<voi
     // By the time this fires the re-plan is over — that is what the wait was
     // for — so the message describes the settled state rather than the churn.
     replanning: false,
+    // Same reasoning: any part run the crew made is behind them by the time a
+    // coalesced notification goes out.
+    sourcingPart: false,
     intakeComplete: true,
   });
 

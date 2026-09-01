@@ -141,6 +141,28 @@ export type UnitPlanEntry = {
   zoneId: string;
 };
 
+// The same standard kit as plain data, for the evaluation harness — so the
+// fleet it measures carries what the seeded fleet carries, rather than an
+// inventory invented in evaluation/ that nobody ever loads into a van.
+export type UnitStockPlanEntry = { unitId: string; sku: string; quantity: number };
+
+export function unitStockPlanEntries(): UnitStockPlanEntry[] {
+  const entries: UnitStockPlanEntry[] = [];
+  let globalIndex = 0;
+
+  for (const plan of UNIT_PLAN) {
+    for (let withinKind = 0; withinKind < plan.count; withinKind++) {
+      const unitId = `unit-${String(globalIndex + 1).padStart(2, '0')}`;
+      for (const [sku, quantity] of Object.entries(stockFor(plan.kind, withinKind))) {
+        entries.push({ unitId, sku, quantity });
+      }
+      globalIndex++;
+    }
+  }
+
+  return entries;
+}
+
 export function unitPlanEntries(): UnitPlanEntry[] {
   const entries: UnitPlanEntry[] = [];
   let globalIndex = 0;
