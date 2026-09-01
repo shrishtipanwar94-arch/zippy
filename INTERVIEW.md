@@ -5,15 +5,18 @@ automatically: one structured entry per phase goes into DECISIONS.log, and at
 checkpoints (end of Phases 4, 9, 13, 17, 22) that log is consolidated in here
 and cleared.
 
-**State after Phase 13 (checkpoint).** The thesis is implemented, measured, and
-now actionable. A job goes from a symptom payload to three ranked, globally
-assigned plans through a pure engine; a dispatcher turns one into a real
-reservation through a three-leg saga with compensations; a technician who
-arrives and finds something different triggers a re-solve. An evaluation
-harness replays seeded scenarios through the production engine and reports
-where the approach loses as well as where it wins. What does not exist is most
-of the surface a human would use: the console, the driver and technician apps,
-money, chat.
+**State after Phase 17 (checkpoint — core complete).** The thesis is
+implemented, measured, surfaced and breakable on purpose. A job goes from free
+text (or a symptom picker) to three ranked, globally assigned plans through a
+pure engine; a dispatcher turns one into a real reservation through a three-leg
+saga; a technician who finds something different triggers a re-solve; the work
+is priced, approved, paid, booked to a double-entry ledger and paid out. Three
+browser surfaces exist and have been used. An LLM fills in the intake form and
+has been measured against a keyword control. Every failure mode has a rung on a
+degradation ladder, a switch that forces it, and a banner that names it.
+
+What does not exist: parts and inventory (18), the parts-aware feasibility that
+depends on it (19), and everything after.
 
 ---
 
@@ -270,6 +273,29 @@ runs if someone remembered to start a database is not a proof.
   a plan is a recommendation, and the version-checked hold at commit time is
   what validates a stale decision.
 
+**From Phases 14–17:**
+
+- **Two dispatchers select competing plans for the same job.** A unique index
+  on `(job_id, solver_run_id)` in `decision_records` arbitrates: the second
+  write fails rather than recording two decisions for one solve.
+- **A message arrives while a promotion is being confirmed.** Promotions are
+  FLAGGED proposals; confirming one is a conditional update on `status =
+  'FLAGGED'`, so two confirmers produce one job change and one no-op.
+- **A capture races the authorisation retry sweep.** Both are keyed on the
+  payment's idempotency key, so the second is a no-op that returns the first
+  one's result rather than charging twice.
+- **Two probes finish at once with different verdicts** (17). Last write wins
+  deliberately — the later reading is the more recent truth, and `since` only
+  moves on an actual state change, so "how long has it been down" survives a
+  burst of identical writes.
+- **A chaos switch flips mid-solve** (17). The switch is read once at the edge
+  and passed into the engine as a plain number, so a run finishes under the
+  deadline it started with. A solve is a pure function over a snapshot, and its
+  deadline is part of that snapshot.
+- **Two dispatchers decide the same escalation** (17). Read-then-create with no
+  unique index behind it: the worst case is two OPEN escalations with one
+  decision each rather than a lost decision. Named in §15.
+
 Assumption relied on throughout: **READ COMMITTED**, Postgres's default. At
 that level a blocked UPDATE re-reads the row rather than failing; the guarantee
 would be different under REPEATABLE READ.
@@ -291,6 +317,22 @@ would be different under REPEATABLE READ.
 - **A late job is still dispatched.** Phase 13 stopped `SLA_UNREACHABLE`
   applying once the window has closed: refusing to send a van to a job you are
   already late for converts a late arrival into no arrival.
+- **There is a degradation ladder** (17), six components and three modes, in
+  `src/domain/healthLadder.ts`. DEGRADED means something is doing a simpler job
+  — the symptom picker instead of the model, polling instead of pushes, the
+  best plan found instead of the best plan there is. CRITICAL means the system
+  is no longer deciding and a person is, through a defined manual workflow with
+  every write still audited. A component can never push the system past its own
+  worst case, so a broken symptom assistant cannot black out the console.
+- **The health loop is a bare timer in the worker, not a queued job** — the
+  queue runs on Redis, and Redis being down is one of the states the loop
+  exists to report. Fifteen seconds, every transition logged.
+- **Payment failure never blocks dispatch** (15c): the job dispatches, the
+  payment is PENDING_AUTHORISATION, and the operator sees the flag.
+- **UNSERVICEABLE is a handover, not an end state** (17). The escalation card
+  gives the dispatcher the feasibility reason code, the closest option a human
+  could actually clear and why it was refused, an alternative outside the
+  fleet, a recommendation, and three audited actions.
 
 ## 11. Security
 
@@ -400,6 +442,48 @@ filter. The breach escalation is **RECOMMEND, not APPROVE**: APPROVE blocks
 pending sign-off, so tiering an already-late job that way would make it wait
 longer for a human to acknowledge that it is late.
 
+**Console and surfaces (14–15).** The console renders the DECISION RECORD, not
+a re-solve — a screen that recomputes answers a slightly different question and
+quietly disagrees with the timeline beside it. Every sentence a driver reads is
+worded on the server (`GET /jobs/:id/driver-view`), so no status enum can leak
+into a browser; the test suite checks that rather than trusting the habit. A
+dispatcher picks between whole PLANS, not units one at a time, because picking
+units one at a time is exactly the greedy behaviour that strands jobs.
+
+**Chat and promotion (15b).** A message never changes a job. Classification
+produces a FLAGGED proposal and a human confirms it, so there is no code path
+from "a message arrived" to "the technician was sent somewhere else". Who may
+confirm which KIND is a separate question from who owns the job — a dispatcher
+may correct a location and may not confirm a safety change, because they cannot
+see the traffic.
+
+**Money (15c).** Integers in paise, never floats. A job pins its price list at
+creation and is never re-priced, because the customer agreed to one set of
+numbers. Every movement is double-entry and the suite asserts the books balance
+after every money test. Cash collection drives a technician's balance negative
+and the payout nets it rather than sending a negative transfer. The estimate
+re-approval tolerance is a configurable commercial policy, not a constant.
+
+**GenAI (16).** The model fills in the symptom FORM; the Phase 3 rule table
+still produces the probabilities. A distribution emitted by a model is a
+decision wearing a probability's clothes, and nothing downstream could tell a
+hallucinated 0.4 from a derived one. The driver confirms or corrects before
+anything dispatches, and `/describe` creates nothing. One retry, and only for a
+schema-invalid body — a refused connection will refuse again, and three failed
+calls is 24 seconds of a stranded driver watching a spinner. Two providers
+(Anthropic Messages API, OpenAI-compatible chat completions) behind one
+`SchemaCall` boundary.
+
+**Chaos and degradation (17).** The chaos switches live in Postgres because the
+API and the worker are two processes and Redis is one of the things the board
+can switch off. The chaos routes are ABSENT in production, not forbidden — a
+403 is a permission check and permission checks have bugs. WebSocket chaos
+refuses the handshake rather than dropping messages, because a client that
+believes it is connected and is silently missing events is a worse and less
+visible failure. The AI's health is read from the append-only attempt log
+rather than from its own summary row — the first version read the row it was
+about to write, refreshed its own timestamp every tick, and could never clear.
+
 ## 14. Interview Questions
 
 - *Why does "flat tyre" ask no questions and "my car will not start" ask three?*
@@ -476,6 +560,40 @@ longer for a human to acknowledge that it is late.
   replaced by a weighted sum, and a Phase 11 version check whose test was aimed
   at the wrong clause.
 
+- *Where is the AI, and what happens when it is gone?* At intake and in chat,
+  both edges, both behind a confirm-or-correct screen. With it gone the driver
+  answers the same structured picker the system has had since Phase 3,
+  `GET /health` reports the extractor DEGRADED, and no dispatch decision
+  changes — invariant 10 forbids an external call anywhere the solver can see.
+  Proven with a real invalid key: one attempt, a 401, no retry, straight to the
+  picker.
+
+- *How do you know the model is worth its network dependency?* `npm run
+  eval:ai` runs 108 hand-labelled Hindi/English breakdown descriptions through
+  the real path against a ninety-line keyword control. Measured: top-1 68.5%
+  against 59.3%, top-2 79.6% against 76.9%, schema-valid 99.1%, fallback 0%.
+  It is a real improvement and not a transformative one, and it made the
+  pipeline slightly WORSE calibrated (ECE 0.152 against 0.136).
+
+- *Did a measurement ever change a decision?* Yes, and against the design. The
+  correlation between hypothesis entropy and whether the dispatched capability
+  set would have covered the true fault is 0.156 on the model — weak. The
+  report prints "treat the entropy-driven hedging as unproven rather than
+  validated", because it is written to print whichever way the number falls.
+
+- *What does CRITICAL mean in your system?* Not a crash. The queue is still on
+  screen, assignments are made by hand, and every write is still audited. It is
+  reached by exactly one component — the solver queue being unreachable — and
+  it recovers on its own within one fifteen-second probe cycle once the queue
+  is back.
+
+- *Your planner is O(n³). What happens when it does not finish?* It is given a
+  deadline and checks it BEFORE candidate generation, because generation is the
+  routing call and a check after it saves nothing. Jobs it never reached keep
+  the assignment they had, the run is stored with `timed_out = true`, and the
+  ladder shows the planner DEGRADED. Measured under the forced switch: 96
+  options in 1.9s against 11,280 in 11s.
+
 ## 15. Things An Interviewer Can Attack
 
 The most valuable section. In rough order of severity:
@@ -528,7 +646,44 @@ The most valuable section. In rough order of severity:
 16. **Bull Board grants unaudited operator power** — retry, discard and promote,
     none of it RBAC-checked or logged.
 17. **`isBasementLevel` matches `/^b/i`**, tied to the simulator's format.
-18. **~45 of 83 tables have no reader**, and no browser has run any page.
+18. **The labelled AI set is hand-written by the person who wrote the prompt**
+    (16). 108 descriptions, invented, labelled by their author. Read
+    `top1Accuracy` as "can the pipeline recover a fault from a description that
+    contains it", never as field accuracy. Replacing it with call transcripts
+    is the single highest-value change available to that harness.
+19. **The second-dispatch figure in the AI evaluation is a label-derived
+    proxy** (16) — "would the capability set implied by this prediction have
+    covered the labelled fault" — not an observed second callout. It cannot see
+    a technician who arrived with the right skill and the wrong part.
+20. **Only one of the two model providers has ever completed a call** (16).
+    Everything measured came from Groq's `gpt-oss-120b`; the Anthropic path is
+    typechecked and has returned a real 401, nothing more.
+21. **Sending a chat message waits on a model call** (16) when a key is set,
+    bounded by `LLM_TIMEOUT_MS`. It degrades to the rule table correctly, but
+    it is latency on a path that had none. A queue is the right answer.
+22. **The escalation race has no unique index behind it** (17). Two
+    dispatchers deciding at once can produce two OPEN escalations for one job.
+    The fix is a partial unique index Postgres supports and Prisma does not
+    model.
+23. **"Nearest feasible for unreached jobs" is not implemented** (17). The
+    ladder's promise is narrower than the phase text: best incumbent and a
+    flag. Computing a fallback assignment for an unreached job needs exactly
+    the work the deadline just stopped.
+24. **The manual dispatcher workflow is the existing console minus automatic
+    re-planning** (17), not a purpose-built screen. It satisfies what CRITICAL
+    promises — visible queue, audited writes — and it is not comfortable.
+25. **The GPS probe is fleet-wide, not per-unit** (17). "Nothing has reported
+    in fifteen minutes" cannot see one unit with a dead phone, and the
+    job-level "last known position, flagged" behaviour the ladder describes is
+    not something one component reading can express.
+26. **`HUMANLY_CLEARABLE` is hand-ordered judgement** (17). It decides which
+    refused option a dispatcher sees first and has never been checked against
+    what dispatchers actually clear.
+27. **No cost or rate-limit accounting on the model** (16). Nothing counts
+    tokens or caps spend per driver; a retry-loop bug would be discovered on a
+    bill.
+28. **~45 of 83 tables have no reader.** Three pages have now been used in a
+    browser (14–17), so the older blanket claim that none had is retired.
 
 ## 16. How I Would Improve It
 
@@ -574,8 +729,35 @@ machine:
 - Implemented **three-layer read authorisation** failing closed on missing
   scope, with cross-tenant reads audited.
 
+- Built an **LLM intake extractor and measured it against a control** rather
+  than asserting it: 108 hand-labelled mixed Hindi/English breakdown
+  descriptions through the production path, reporting top-1, top-2, expected
+  calibration error, schema-valid rate, fallback rate and the correlation
+  between hypothesis entropy and a wasted second dispatch. Measured 68.5% top-1
+  against a keyword control's 59.3%, at 99.1% schema-valid with one retry
+  recovering the only invalid reply. The same harness reported that the
+  entropy-driven hedging it was meant to validate is **not** supported by the
+  model's own numbers (r = 0.156).
+- Designed the AI as a **degradable edge**: with the model unavailable the
+  driver answers the structured picker, `/health` reports it, and no dispatch
+  decision changes. Proven end to end with a deliberately invalid key.
+- Built a **degradation ladder with eight chaos controls** — six components,
+  three modes, persisted and re-probed every fifteen seconds, with every
+  transition logged. Each control degrades visibly and recovers on its own
+  within one probe cycle; the forced planner timeout cut a 470-job solve from
+  11,280 options in 11s to 96 in 1.9s and flagged the run as incomplete.
+- Turned **UNSERVICEABLE into a handover**: a card carrying the specific
+  feasibility reason code, the closest option a human could actually clear
+  (ranked by clearability, not distance), an alternative, a recommendation and
+  three audited actions.
+- Built a **double-entry ledger** for a marketplace's money — estimates,
+  approvals with a re-approval tolerance, authorisation/capture, cash
+  collection, commission and payouts — with a balance assertion that runs after
+  every money test.
+
 Not claimable: dispatch quality against real breakdowns, latency under load,
-throughput.
+throughput, and anything about the Anthropic provider path beyond "it
+compiles".
 
 ## 18. Technical Vocabulary
 
@@ -611,48 +793,65 @@ throughput.
 
 ## 19. Current Project State
 
-**Phases 0–13 complete.** 293 fast tests across 22 files, plus 9 concurrency
-tests across 2 files against a real Postgres container. `npm test` runs both.
-`tsc --noEmit` (src, tests, evaluation, prisma) and `eslint src evaluation`
-clean.
+**Phases 0–17 complete — the build plan's "core complete" marker.** 643 fast
+tests across 45 files, plus the concurrency suite against a real Postgres
+container. `tsc --noEmit` (src, tests, evaluation, prisma) and `eslint src
+evaluation` clean.
 
-Working:
+Working, in the order it was built:
 
-- **Foundation, schema and seed** — two processes, Zod-validated env, pino with
-  request ids, real dependency health checks; 83 tables with append-only
-  triggers; an idempotent seed producing 6 zones, 24 units and 31 technicians
-  with a deliberately uneven capability matrix.
-- **Auth and tenancy** — JWT pair, argon2id, permission table, tenant-scope and
-  row-ownership extensions, audited cross-tenant reads.
+- **Foundation** — two processes, Zod-validated env, pino with request ids,
+  real dependency health checks; 84 tables with append-only triggers; an
+  idempotent seed of 6 zones, 24 units, 31 technicians with an uneven
+  capability matrix.
+- **Auth and tenancy** — JWT pair, argon2id, a permission table, tenant-scope
+  and row-ownership Prisma extensions, audited cross-tenant reads.
 - **Intake** — naive-Bayes classification, entropy-driven questioning with four
-  stop conditions, safety triage, and a deterministic simulator.
+  stop conditions, safety triage, a deterministic simulator.
 - **Realtime** — Socket.IO with handshake JWT, three room types, one fan-out
-  point, transactional outbox, Redis adapter, per-job reconnect replay.
+  point, transactional outbox, Redis adapter, per-job reconnect replay, and a
+  polling fallback when the socket cannot connect.
 - **Queues** — four BullMQ queues, capped backoff, dead-letter, idempotent
   processors, BullMQ-native debouncing, a repeatable cleanup sweep.
 - **Routing** — self-hosted OSRM (MLD) with per-origin haversine fallback and a
   degraded flag.
 - **The solver** — candidates, ten feasibility reason codes, a per-fault
   duration model, a five-term cost function, three weight vectors, a
-  lexicographic safety comparator, and a hand-written Hungarian assignment with
-  zone partitioning.
+  lexicographic safety comparator, a hand-written Hungarian assignment with
+  zone partitioning, and a deadline that returns the best plan found.
 - **The evaluation harness** — five scenarios, four policies, eight metrics, a
-  sweep across six operating points, and `EVALUATION.md`.
+  sweep, and `EVALUATION.md`.
 - **Holds, offers and the saga** — version-checked holds with TTL, technician
-  offers with a real expiry, a three-leg reservation saga with compensations,
-  and crash recovery at worker startup.
+  offers with real expiry, a three-leg reservation saga with compensations,
+  crash recovery at worker startup.
 - **Re-dispatch and action tiers** — the trigger list in one place, thrash
-  control, the AUTO/RECOMMEND/APPROVE table, the on-site diagnosis flow, and
-  the action queue that turns a recommendation into a reservation.
-- **Frontend** — `/driver`, `/technician`, `/dispatcher` on one state object;
-  the dispatcher board shows three plan cards.
+  control, AUTO/RECOMMEND/APPROVE, on-site diagnosis, the action queue.
+- **The dispatch console** — live timeline, the "why this technician?"
+  inspector rendering the stored decision record, scarcity, three competing
+  plan cards, the priority queue, a live map.
+- **Driver and technician surfaces** — every sentence worded by the server, the
+  technician's status ladder, offline queueing on the technician's phone.
+- **Chat and event promotion** — a message becomes a FLAGGED proposal, never a
+  job change; a human confirms, and who may confirm depends on the kind.
+- **Money** — price lists pinned at creation, estimates with a re-approval
+  tolerance, authorisation and capture, cash collection, commission, a
+  double-entry ledger that is asserted to balance, payout batches, coverage
+  caps with a covered/payable split.
+- **GenAI intake** — free text in Hindi, English or both becomes a filled-in
+  symptom form the driver confirms; two providers behind one boundary; every
+  attempt stored; `npm run eval:ai` measures it against a keyword control.
+- **Chaos and degradation** — a six-component ladder, a fifteen-second health
+  loop, eight chaos controls absent from production builds, the escalation
+  card, and `CHAOS_TESTING.md` written from a real walkthrough.
 
-Not started: the dispatch console (14), driver and technician surfaces (15),
-chat and event promotion (15b), money (15c), the LLM (16), chaos and
-degradation (17), and everything after.
+**Verified in a browser:** the driver's page — sign-in, free-text description,
+the DEGRADED banner, the symptom picker, safety, location, job creation and the
+live status panel. The dispatcher and technician pages have been exercised over
+HTTP but not clicked through end to end.
 
-**Unverified:** no browser has run any page. The Phase 4 acceptance check —
-three windows, three roles, an offline/online replay test — has never been
-performed, and neither has Phase 13's three-window diagnosis check. Every
-frontend claim in this document is a claim about code that has been read, not
-about a page that has been used.
+**Not started:** parts and inventory (18), parts-aware feasibility (19), and
+everything after.
+
+**Known-stale data:** the development database carries ~460 INTAKE jobs left by
+earlier phases, which compete with any new job for 24 units. A demo should run
+against a fresh seed, or the queue should be aged first.
