@@ -76,7 +76,7 @@ src/realtime/publish.ts     THE fan-out point — Server or Redis emitter, nothi
 src/realtime/server.ts      handshake JWT, rooms, suppressLiveUpdates for chaos
 evaluation/runner.ts        the discrete-event loop; a hidden trueFault drives re-dispatch
 evaluation/ai/              108 labelled descriptions, a keyword control, six metrics
-prisma/                     84 tables, append-only triggers, version columns; the seed
+prisma/                     85 tables, append-only triggers, version columns; the seed
 tests/concurrency/          REAL Postgres via testcontainers — holds, offers, mutation
 public/js/                  one state object; panels render(state); per-role page wiring
 ```

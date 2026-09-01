@@ -104,10 +104,12 @@ Money, chat, and the completion ladder: **not implemented**.
 
 ## 4. Database
 
-83 tables from Phase 1. Actually exercised after Phase 13: the intake and auth
-tables from earlier phases, plus `job_processing_log`, `solver_runs`,
-`dispatch_options`, `plan_variants`, `unit_holds`, `technician_offers`,
-`dispatch_offers`, `destination_offers`, `action_requests`, `approval_records`.
+**85 tables** (`grep -c '^model ' prisma/schema.prisma`), 83 of them from
+Phase 1's schema and two added since: `chaos_switches` at Phase 17, and one
+earlier phase's addition the Phase 13 count had already missed. Exercised after
+Phase 17: everything the intake, auth, solver, commit, chat, money, AI and
+health paths touch — roughly forty of the eighty-five still have no reader, and
+that is item 28 in §15.
 
 Four patterns carry the design:
 
@@ -570,7 +572,7 @@ about to write, refreshed its own timestamp every tick, and could never clear.
 
 - *How do you know the model is worth its network dependency?* `npm run
   eval:ai` runs 108 hand-labelled Hindi/English breakdown descriptions through
-  the real path against a ninety-line keyword control. Measured: top-1 68.5%
+  the real path against a 72-line keyword control. Measured: top-1 68.5%
   against 59.3%, top-2 79.6% against 76.9%, schema-valid 99.1%, fallback 0%.
   It is a real improvement and not a transformative one, and it made the
   pipeline slightly WORSE calibrated (ECE 0.152 against 0.136).
@@ -682,7 +684,7 @@ The most valuable section. In rough order of severity:
 27. **No cost or rate-limit accounting on the model** (16). Nothing counts
     tokens or caps spend per driver; a retry-loop bug would be discovered on a
     bill.
-28. **~45 of 84 tables have no reader.** Three pages have now been used in a
+28. **~40 of 85 tables have no reader.** Three pages have now been used in a
     browser (14–17), so the older blanket claim that none had is retired.
 29. **Two whole-database test races hid in the money suites for two phases**,
     and only surfaced at Phase 17 when more test files widened the
@@ -814,7 +816,7 @@ evaluation` clean.
 Working, in the order it was built:
 
 - **Foundation** — two processes, Zod-validated env, pino with request ids,
-  real dependency health checks; 84 tables with append-only triggers; an
+  real dependency health checks; 85 tables with append-only triggers; an
   idempotent seed of 6 zones, 24 units, 31 technicians with an uneven
   capability matrix.
 - **Auth and tenancy** — JWT pair, argon2id, a permission table, tenant-scope

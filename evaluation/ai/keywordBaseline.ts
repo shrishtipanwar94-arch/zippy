@@ -3,7 +3,7 @@
 //
 // WHY IT EXISTS. "The model gets 71% of these right" is not a finding, because
 // nobody knows what a stupid program gets. This is the stupid program: a
-// substring table, no cleverness, no learning, about eighty lines. If the
+// substring table, no cleverness, no learning, 72 lines of code. If the
 // model cannot beat it by a distance worth paying per call for, that is the
 // most useful thing this evaluation could tell anybody.
 //
