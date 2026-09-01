@@ -2,7 +2,7 @@ import { Router } from 'express';
 import { prisma } from '../infra/db.js';
 import { redis } from '../infra/redis.js';
 import { prismaBase } from '../infra/prismaBase.js';
-import { currentAiHealth } from '../ai/health.js';
+import { readSystemHealth } from '../health/state.js';
 
 /**
  * GET /health actually checks the dependencies it claims to check: a real
@@ -54,17 +54,21 @@ healthRouter.get('/health', async (_req, res) => {
   const [db, redisOk] = await Promise.all([checkDatabase(), checkRedis()]);
   const healthy = db && redisOk;
 
-  // Read only when the database answered — asking it for the AI's row while it
-  // is down would turn one failed probe into a failed handler.
-  const ai = db ? await currentAiHealth(prismaBase) : null;
+  // Read only when the database answered — asking it for the ladder while
+  // Postgres is down would turn one failed probe into a failed handler.
+  const ladder = db ? await readSystemHealth(prismaBase) : null;
 
   res.status(healthy ? 200 : 503).json({
     status: healthy ? 'ok' : 'degraded',
     db,
     redis: redisOk,
-    ai: ai
-      ? { state: ai.state, detail: ai.detail, since: ai.since?.toISOString() ?? null }
-      : null,
+    // THE LADDER (Phase 17), as the console renders it: the system mode, the
+    // sentence an operator reads, and every component with its fallback. The
+    // banner is worded here rather than in the browser for the same reason the
+    // driver's panel is — one translation table, on the server.
+    mode: ladder?.mode ?? null,
+    message: ladder?.message ?? null,
+    components: ladder?.components ?? [],
     uptime: Math.floor((Date.now() - processStartedAt) / 1000),
   });
 });

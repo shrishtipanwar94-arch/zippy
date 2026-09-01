@@ -18,6 +18,8 @@ import { driverRouter } from './driver.js';
 import { chatRouter } from './chat.js';
 import { estimatesRouter } from './estimates.js';
 import { consoleRouter } from './console.js';
+import { escalationRouter } from './escalation.js';
+import { mountChaosRoutes } from './chaos.js';
 import { authenticate, requirePermission } from './middleware/authenticate.js';
 import { createQueueAdminRouter, BULL_BOARD_PATH } from '../queues/board.js';
 import { errorHandler } from './middleware/errors.js';
@@ -83,6 +85,9 @@ export function createApp(): Express {
   app.use(chatRouter);
   app.use(estimatesRouter);
   app.use(consoleRouter);
+  app.use(escalationRouter);
+  // Registers nothing in a production build — see src/api/chaos.ts.
+  mountChaosRoutes(app);
 
   // Bull Board — dispatcher-only. Mounted with explicit `authenticate` +
   // `requirePermission`, the same pattern jobs.ts and intake.ts use, and for

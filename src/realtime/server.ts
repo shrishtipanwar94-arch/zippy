@@ -72,10 +72,29 @@ export async function closeRealtimeAdapter(): Promise<void> {
   adapterConnections = null;
 }
 
+// Whether this process is refusing socket connections on purpose. A module
+// flag rather than a database read per handshake: the chaos route flips it in
+// the same process, and a demo control is not worth a query on every connect.
+let liveUpdatesSuppressed = false;
+
+// The server this process created, so the chaos route can reach it without
+// index.ts having to thread the instance through app.ts. Same registry pattern
+// as setRealtimeServer in publish.ts, for the same reason.
+let currentServer: Server | null = null;
+
+export function suppressLiveUpdates(suppressed: boolean): void {
+  liveUpdatesSuppressed = suppressed;
+  // Existing sockets are dropped too, or the switch would only affect people
+  // who arrive after it — and the whole point is to watch a connected console
+  // fall back to polling.
+  if (suppressed && currentServer) currentServer.disconnectSockets(true);
+}
+
 export function createRealtimeServer(httpServer: HttpServer): Server {
   const io = new Server(httpServer, {
     cors: { origin: config.corsOrigins, credentials: true },
   });
+  currentServer = io;
 
   // THE REDIS ADAPTER — what makes a room span more than one process.
   // Socket.IO's default adapter keeps room membership in the memory of the
@@ -93,6 +112,21 @@ export function createRealtimeServer(httpServer: HttpServer): Server {
   const subClient = createRealtimeRedisConnection('adapter-sub');
   adapterConnections = { pubClient, subClient };
   io.adapter(createAdapter(pubClient, subClient));
+
+  // CHAOS FIRST, AUTH SECOND (Phase 17). When live updates are switched off,
+  // the handshake is refused before anything else is checked, and the client's
+  // own reconnect loop then falls back to polling — which is exactly what
+  // happens when the fan-out really is unreachable. Simulating this by
+  // silently dropping messages instead would leave a client that believes it
+  // is connected and is quietly missing events: a worse failure than the one
+  // being demonstrated, and an invisible one.
+  io.use((socket, next) => {
+    if (liveUpdatesSuppressed) {
+      next(new Error('live_updates_unavailable'));
+      return;
+    }
+    next();
+  });
 
   io.use((socket, next) => {
     const token = tokenFrom(socket);

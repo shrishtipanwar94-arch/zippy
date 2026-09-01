@@ -3415,15 +3415,11 @@ network wait.
 
 ### Weaknesses introduced
 
-1. **The live API call has never been made.** There is no API key on this
-   machine. Every branch of the extractor is unit-tested through an injected
-   call, the request shape typechecks against the SDK's own types, and the
-   whole degraded path is proven end to end over HTTP — but nobody has yet seen
-   `output_config: { effort, format }` accepted by the real endpoint, or
-   measured what the model actually scores. `EVALUATION_AI.md` currently
-   reports the keyword control ONLY. Anything said about the model's accuracy
-   today would be invention. This is the first thing to fix with a key in hand,
-   and it matters at any scale.
+1. **No live call had been made when this entry was written.** That is no
+   longer true and the addendum below supersedes it: a Groq key arrived, a
+   second provider was built, and `EVALUATION_AI.md` now carries a measured
+   model row. What remains true is that the ANTHROPIC path has still never
+   completed a successful call — see the addendum's weakness 1.
 2. **The labelled set is hand-written by the same person who wrote the
    prompt.** That is the most flattering arrangement possible. Read
    `top1Accuracy` as "can the pipeline recover a fault from a description
@@ -3539,3 +3535,484 @@ The degraded path over HTTP with no key set, asserted in
 `extracted`, `system_health_states` moves to DEGRADED, `GET /health` reports
 it, and `POST /jobs/intake` still creates a job and stores what the driver
 typed.
+
+---
+
+## Phase 16 addendum — a second provider, and the measurement / 2026-09-01 / Commit: "phase 16: groq provider and the measured model row"
+
+### Built
+
+- `src/ai/client.ts` is now the boundary and nothing else: the `SchemaCall`
+  type, `LlmError`, `isLlmConfigured`, and one function that picks a provider.
+- `src/ai/providers/anthropic.ts` — the Messages API path, unchanged, moved.
+- `src/ai/providers/openAiCompatible.ts` — `POST /chat/completions` with
+  `response_format: json_schema`, `strict: true`, raw `fetch`. Plus
+  `sanitiseSchema`, which strips the JSON Schema keywords strict mode rejects.
+- Config: `LLM_PROVIDER` (`anthropic` | `openai-compatible`), `LLM_BASE_URL`.
+- `evaluation/ai/runner.ts` gained `createLlmExtractor(pacingMs, extract)` —
+  the harness paces itself and retries rate-limited cases instead of scoring
+  them, counting both.
+- Both vitest configs pin `LLM_API_KEY: ''`, and an empty key now reads as
+  "not configured" in `src/infra/config.ts`.
+- `tests/aiProviders.test.ts`, plus three pacing tests in `aiEvaluation`.
+
+### Decisions
+
+**Decision — a second provider behind the same `SchemaCall`, rather than
+swapping the first out.**
+*Why* — the two wire formats have nothing in common (`output_config.format`
+against `response_format: json_schema`), and everything upstream of the
+boundary — the extractor's retry policy, the chat classifier, the whole
+evaluation harness — depends only on "give it a Zod schema, get a validated
+value". That is the seam the phase already had, so the second provider cost one
+file and a config line.
+*Alternative* — replace the Anthropic path with the OpenAI-compatible one,
+since that is what this deployment now uses.
+*Why not* — the Anthropic path is the one with schema-constrained decoding done
+for us by the SDK, and deleting a working provider to avoid maintaining a
+twenty-line `if` is a trade in the wrong direction.
+*Tradeoff* — two code paths that must stay behaviourally identical. The Zod
+validation at the boundary is what keeps them honest: whichever provider
+answered, the value that comes out has been through the same schema.
+
+**Decision — raw `fetch` for the OpenAI-compatible provider, an SDK for
+Anthropic.**
+*Why* — the Anthropic path earns its SDK because `messages.parse` does the
+schema plumbing; the Groq path is one POST and one JSON reply, and a second SDK
+would be a dependency the maintainer has to learn in order to read a request
+they can already read.
+*Tradeoff* — no typed error classes on that path, so failures are classified
+from the HTTP status. Acceptable at one call site.
+
+**Decision — `sanitiseSchema` strips `maxLength`, `maxItems`, `$schema` and
+friends before sending.**
+*Why* — strict structured-output mode accepts a small subset of JSON Schema and
+rejects the rest with a 400. A 400 here would degrade every driver to the
+picker for a reason that has nothing to do with the model: the worst kind of
+outage, because it looks like a working fallback.
+*Tradeoff* — the model is not told about those limits. Zod still enforces every
+one of them on the way back, so the constraint is real; it is just checked
+rather than requested.
+
+**Decision — the evaluation harness paces itself; the product does not.**
+*Why* — a rate limit is a property of the account, not of the extractor. Fired
+flat out at a free tier of 8,000 tokens per minute, the first full run scored
+96.3% fallback, which measures the quota and says nothing about how well the
+model reads Hinglish. In production a 429 degrades to the picker immediately,
+because a stranded driver does not wait thirteen seconds for a retry.
+*Alternative* — retry rate limits inside `extractSymptoms` so both paths behave
+the same.
+*Why not* — that would put a thirteen-second wait on a driver's intake screen.
+The harness and the product want opposite things here, and saying so out loud
+is better than picking one and pretending.
+*Tradeoff* — a paced run is not the run production would do, and the report
+says so. It also takes 34 minutes.
+
+**Decision — an empty `LLM_API_KEY` means "not configured", and both vitest
+configs set it.**
+*Why* — `dotenv` loads `.env` before `config.ts` is imported, so the moment a
+real key landed in `.env` the fast suite started making live, billable,
+non-deterministic calls to a provider — and the degraded-path tests, which
+exist to prove the system works with no model, were quietly testing the
+opposite.
+*Tradeoff* — one more way to express "off". Worth it: the alternative is a test
+suite whose behaviour depends on the developer's `.env`.
+
+### Concurrency
+
+Nothing new races. The provider choice is read from frozen config at call time,
+the switchboard has no state, and the harness is deliberately sequential.
+
+### Weaknesses introduced
+
+1. **Two providers, one of them exercised.** Every number below came from Groq
+   (`openai/gpt-oss-120b`). The Anthropic path is typechecked against the SDK's
+   own types and has been seen to return a real 401 — nothing more. A
+   successful Anthropic call has still never been made.
+2. **The model row is one model on one account.** `gpt-oss-120b` at
+   temperature 0 through Groq's free tier. Nothing here generalises to another
+   model, and the pacing means the run is not reproducible in wall-clock terms.
+3. **The correlation this phase exists to test came out weak on the model
+   (r = 0.156) and moderate on the control (r = 0.425).** See below — it is a
+   finding, not a defect, but it means the entropy-driven hedging is UNPROVEN
+   rather than validated by the extractor that will actually be used.
+4. Everything in the original Phase 16 entry's weakness list still stands,
+   except its first item, which this addendum replaces.
+
+### Concepts now genuinely in use
+
+- One boundary type, two wire protocols behind it — the same shape that lets
+  the symptom picker and the model produce identical hypotheses.
+- The difference between a provider's promise (`strict: true`) and a check
+  (`schema.safeParse`), and why the second is what a reported rate may be
+  measured from.
+- Measuring a rate limit by accident, and the discipline of separating a
+  property of the account from a property of the thing under test.
+
+### Interview angle
+
+*"You measured your LLM. What did it actually buy you?"* — 9.2 points of
+top-1 accuracy over a ninety-line keyword table (68.5% against 59.3%), 2.7
+points of top-2, at 1.8 seconds and a network dependency per intake; and it
+made the pipeline slightly WORSE calibrated (ECE 0.152 against 0.136). The
+honest summary is that it is a real improvement on the hardest input — mixed
+Hindi and English — and not a transformative one.
+
+*"Did the measurement change any decision?"* — Yes, and not in the direction I
+wanted. The entropy-to-second-dispatch correlation is 0.156 on the model, which
+the report itself prints as "treat the entropy-driven hedging as unproven
+rather than validated".
+
+### What broke
+
+- **The key that arrived was a Groq key in `.env.example`, which is tracked by
+  git.** Moved to `.env` (gitignored, and where `config.ts` actually reads
+  from), placeholder restored in the example file. It was never committed. It
+  has been in a tracked working file, so it wants rotating.
+- **The first full run scored 96.3% fallback.** Not the extractor: the free
+  tier's 8,000 tokens-per-minute limit, hit after about four calls. The fix was
+  pacing in the harness, and the diagnosis is the interesting part — a metric
+  that looked like a damning verdict on the model was a verdict on the account.
+- **The fast suite started calling the API for real** the moment `.env` had a
+  key, because `dotenv` runs before `config.ts`. Fixed by pinning
+  `LLM_API_KEY: ''` in both vitest configs and treating an empty key as unset.
+- **One run of the fast suite showed a single failure that has not recurred**
+  across four subsequent full runs and could not be identified from the output.
+  Recorded rather than explained away.
+
+### Verification
+
+`npm run eval:ai`, 108 cases, the real path, a real provider:
+
+```
+keyword-baseline: 108 cases in 7ms
+llm: 108 cases in 2030507ms (paced), 1 rate-limit wait, 0 abandoned
+
+| extractor        | top-1 | top-2 |   ECE | schema valid | fallback | entropy-2nd r |
+| keyword-baseline | 59.3% | 76.9% | 0.136 |       100.0% |     0.0% |         0.425 |
+| llm              | 68.5% | 79.6% | 0.152 |        99.1% |     0.0% |         0.156 |
+```
+
+`schema valid 99.1%` is 108 of 109 calls: one reply did not fit the schema, was
+retried once, and the retry validated — which is the retry policy doing exactly
+what it was built for, observed rather than asserted. `fallback 0.0%` is the
+consequence: no driver in this run would have been handed the picker.
+
+Fast suite: 44 files, 633 tests, green.
+
+---
+
+## Phase 17 — Chaos and degradation / 2026-09-01 / Commit: "phase 17: chaos and degradation"
+
+### Built
+
+**The ladder.** `src/domain/healthLadder.ts` — six components
+(`AI_EXTRACTION`, `GPS`, `WEBSOCKET`, `SOLVER`, `PAYMENTS`, `DISPATCH_CORE`),
+each with the plain-language label an operator reads, the fallback that takes
+over, and the worst mode it can cause. `systemMode` rolls readings up and
+CLAMPS each one to its ladder entry; `describeMode` writes the banner sentence.
+Pure — no database, no clock.
+
+**The state and the loop.** `src/health/state.ts`
+(`recordComponentHealth`, `readComponentStates`, `readSystemHealth`),
+`src/health/probes.ts` (six probes, none of which can throw), and
+`src/health/loop.ts` (`startHealthLoop`, `runHealthCheck`,
+`HEALTH_CHECK_INTERVAL_MS = 15_000`), started from `src/worker.ts`.
+
+**The switch board.** `chaos_switches` table (migration
+`20260901230000_phase17_chaos_switches`). `src/chaos/switches.ts` —
+`LLM_DOWN`, `REDIS_DOWN`, `WEBSOCKET_DOWN`, `SOLVER_TIMEOUT`, plus
+`resetChaos`. `src/chaos/actions.ts` — `takeTechnicianOffline`, `breakUnit`,
+`declineDestination`, `injectJobs`.
+
+**The routes.** `src/api/chaos.ts` (`GET /chaos`, `POST /chaos/switches/:name`,
+`POST /chaos/actions/:name`, `POST /chaos/reset`), mounted by a function that
+registers nothing in production. `src/api/escalation.ts`
+(`GET|POST /jobs/:id/escalation`). `GET /health` now returns the whole ladder:
+`mode`, `message`, `components`. New `chaosControl` permission, DISPATCHER
+only.
+
+**The planner's deadline.** `SolveInput.deadlineMs`, `SolverOutcome.timedOut`
+and `.unplannedJobIds`, `solver_runs.timed_out` (migration
+`20260901234000_phase17_solver_timeout`). Both paths to the planner — the
+queued re-plan and the dispatcher's Solve button — read the switch at the edge
+and hand the engine a plain number.
+
+**The escalation card.** `src/domain/escalationCard.ts` — a reason per
+feasibility code, the closest option a human could actually clear, an
+alternative outside the fleet, a recommendation, three actions. Decisions
+recorded in `escalations` / `escalation_decisions`.
+
+**The console.** Degradation banner (`public/js/panels/health.js`), chaos panel
+(`panels/chaos.js`), escalation card (`panels/escalation.js`), and a polling
+fallback in `public/js/socket.js` that starts on `connect_error` or
+`disconnect` and stops when a socket comes back.
+
+**Docs.** `CHAOS_TESTING.md`, written from an actual walkthrough.
+
+### Decisions
+
+**Decision — CRITICAL is a mode with a workflow, not a crash.**
+*Why* — the phase says so, and the distinction is the whole value of the
+ladder. A crashed dispatcher has no queue, no audit trail and no way to send
+anybody. A CRITICAL one shows the dispatcher the queue and lets them assign by
+hand, and every write is still audited.
+*Alternative* — treat "core dispatch down" as an outage and return 503s.
+*Why not* — a stranded driver does not care that the planner is unavailable.
+*Tradeoff* — the manual workflow is the existing console with automatic
+re-planning absent, not a bespoke screen. It is honest but thin.
+
+**Decision — one component can never push the system past its own worst case.**
+*Why* — `systemMode` clamps every reading to its ladder entry, so a probe bug
+that reported the symptom assistant CRITICAL still leaves the system DEGRADED.
+An operator who learns to ignore a red banner is a worse outcome than any
+single component being down.
+*Tradeoff* — a genuinely catastrophic failure of a clamped component would be
+under-reported. Accepted: the clamp is per-component and deliberate, and the
+detail string still carries the truth.
+
+**Decision — the chaos switches live in Postgres, not in a module variable or
+Redis.**
+*Why* — the API and the worker are two processes, and a switch flipped in the
+console has to reach the one that runs the solver. Redis is the obvious
+alternative and is disqualified by being one of the things the board can switch
+off.
+*Tradeoff* — a database read per switch check. `isChaosOn` is called once per
+intake and once per solve, not per request, and it fails to "not broken".
+
+**Decision — the health loop is a bare `setInterval` in the worker, not a
+BullMQ job.**
+*Why* — the queue runs on Redis. A health check that stops running exactly when
+the system becomes unhealthy is worse than none: the console would keep showing
+the last green reading for ever.
+*Alternative* — a repeatable job on the cleanup queue, which is where every
+other periodic task lives.
+*Why not* — see above. This is the one place the codebase deliberately breaks
+its own pattern, and the comment at the top of `loop.ts` says why.
+*Tradeoff* — the loop only runs in the worker, so a deployment with no worker
+has no automatic transitions. The chaos route runs the probes inline on every
+toggle, so a demo still works.
+
+**Decision — the AI's health is read from the ATTEMPT LOG, not from its own
+health row.**
+*Why* — this was a real bug, found in the walkthrough. The first version read
+`system_health_states` to decide what to write to `system_health_states`; every
+loop tick refreshed the row's `updated_at`, so a stale DEGRADED reading kept
+its own timestamp fresh and the banner never cleared. `ai_extractions` has a
+row per attempt with an honest timestamp, so the probe reads that instead: no
+attempt in fifteen minutes reads as NORMAL with "no recent extraction attempt".
+*Tradeoff* — a model that has been down for an hour with no traffic reports
+NORMAL. That is the correct reading of "we have not tried recently", and the
+next driver's attempt corrects it in one request.
+
+**Decision — WebSocket chaos refuses the handshake rather than dropping
+messages.**
+*Why* — a client that believes it is connected and is silently missing events
+is a worse failure than the one being demonstrated, and an invisible one. A
+refused handshake is what the browser would see if the fan-out were really
+unreachable, and the client's own reconnect loop is what makes recovery
+automatic.
+*Tradeoff* — the suppression flag is per-process memory, so a restarted web
+process would forget it. `mountChaosRoutes` reads the stored switch once at
+mount to close that gap.
+
+**Decision — the deadline is checked BEFORE candidate generation, per job.**
+*Why* — generating candidates is the expensive part (it is the routing call), so
+a deadline that only stopped work after generating them would save nothing.
+*Tradeoff* — the granularity is one job. A single pathological job can still
+overrun the deadline by however long it takes; the deadline bounds how many
+jobs are attempted, not how long one takes.
+
+**Decision — jobs the planner never reached keep their current assignment.**
+*Why* — the ladder promises "best incumbent". A job that was not examined is
+not unassignable, it is unexamined, and the honest thing is to leave what it
+had alone and flag the run.
+*Alternative* — the phase text also says "else nearest feasible" for jobs with
+no incumbent.
+*Why not* — computing "nearest feasible" for an unreached job requires
+generating its candidates, which is exactly the work the deadline just stopped.
+Implementing it would mean the timeout did not save the time it exists to save.
+This is a deliberate narrowing of the spec and is named here rather than
+implied: unreached jobs are flagged and picked up by the next run, they do not
+get a degraded assignment.
+
+**Decision — "closest option" on the escalation card means the nearest option a
+HUMAN COULD CLEAR, not the nearest van.**
+*Why* — a unit fifty metres away that physically cannot climb the ramp is not
+close to being an answer. One twenty minutes away waiting on a technician to
+come on shift is. The card exists to hand a person something they can act on.
+*Tradeoff* — the ranking (`HUMANLY_CLEARABLE`) is hand-ordered judgement, not
+measured. It is a readable list rather than a defensible one.
+
+**Decision — the chaos routes are absent in production, not forbidden.**
+*Why* — a 403 is a permission check, and permission checks have bugs. A route
+that was never registered cannot be reached by a misconfigured role, a leaked
+token, or a future refactor of the permission table.
+*Tradeoff* — one code path that only exists in some builds, which is a class of
+thing this codebase otherwise avoids.
+
+### Concurrency
+
+**Scenario — two probes finish at the same instant with different verdicts.**
+*What races* — both write the same `system_health_states` row.
+*Why dangerous* — mildly: a banner could be one tick stale.
+*How handled* — last write wins, deliberately; there is nothing to reconcile,
+because the later reading is the more recent truth. `since` moves only when the
+state actually changes, so "how long has it been like this" survives a burst of
+identical writes.
+*Assumption relied on* — that the loop is the only frequent writer. The chaos
+route also runs it inline, which is a second writer at a human's pace.
+
+**Scenario — a chaos switch is flipped while a solve is running.**
+*What races* — the solve read the switch at its start; the switch changed
+during the run.
+*Why dangerous* — not very: the run finishes under the deadline it started
+with.
+*How handled* — read once at the edge, passed into the engine as a number. A
+solve is a pure function over a snapshot (invariant 2) and its deadline is part
+of that snapshot.
+
+**Scenario — two dispatchers open the escalation card for the same job and both
+decide.**
+*What races* — both look for an OPEN escalation, both may create one.
+*Why dangerous* — a split history: two escalations for one handover, each with
+half the decisions.
+*How handled* — read-then-create, and the loser writes its decision onto
+whichever row it read. There is no unique index on `(job_id, status)`, so the
+worst case is a duplicated escalation with one decision each rather than a lost
+one. Named as a weakness below.
+
+**Scenario — the web process restarts with `WEBSOCKET_DOWN` still set.**
+*What races* — the in-memory suppression flag against the stored switch.
+*How handled* — `mountChaosRoutes` reads the board once at mount and applies
+it.
+
+### Weaknesses introduced
+
+1. **The escalation race has no unique index behind it.** Two dispatchers
+   deciding simultaneously can produce two OPEN escalations for one job. At
+   demo scale this cannot happen; the fix is a partial unique index on
+   `(job_id)` where `status = 'OPEN'`, which Postgres supports and Prisma does
+   not model.
+2. **"Nearest feasible for unreached jobs" is not implemented** — see the
+   decision above. The ladder's promise is narrower than the phase text: best
+   incumbent, and a flag.
+3. **The manual dispatcher workflow is the existing console minus automatic
+   re-planning**, not a purpose-built screen. The queue is visible and every
+   write is audited, which is what CRITICAL promises; it is not a comfortable
+   experience.
+4. **The GPS probe is fleet-wide, not per-unit.** "Nothing has reported in
+   fifteen minutes" is a coarse question — one unit with a dead phone is
+   invisible to it, and the job-level "last known position, flagged" behaviour
+   the ladder describes is not something a single component reading can express.
+5. **`HUMANLY_CLEARABLE` is hand-ordered.** It decides which rejected option a
+   dispatcher is shown first and has never been checked against what
+   dispatchers actually clear.
+6. **The suppression flag for live updates is per-process.** Two web processes
+   behind a load balancer would need the switch applied to both; only the one
+   that served the toggle applies it immediately.
+7. **The health loop runs only in the worker.** No worker, no automatic
+   transitions — the state would freeze at its last reading rather than going
+   stale visibly.
+8. **The chaos actions pick their target when none is named** (`findFirst`),
+   which in a demo means "some technician" rather than a chosen one.
+
+### Concepts now genuinely in use
+
+- A degradation ladder as a data structure rather than a set of `if`s, with the
+  roll-up rule and the clamp in one testable function.
+- The difference between what a system OBSERVES about itself
+  (`system_health_states`) and what a person has FORCED (`chaos_switches`), and
+  why merging them would make the first question about a red banner
+  unanswerable.
+- Deadline-bounded computation with an honest artifact: a plan that says it was
+  cut short, and names what it did not look at.
+- A refused handshake as a more truthful failure injection than a dropped
+  message.
+- Reading evidence from an append-only log rather than from a summary the
+  reader also writes — the self-refreshing-timestamp bug is the cleanest
+  example of that mistake in this codebase.
+
+### Interview angle
+
+*"Show me what happens when something breaks."* — Four switches and four
+actions in the console; every one degrades visibly, the banner is worded by the
+server from a ladder table, and each recovers on its own within one fifteen-
+second probe cycle with nobody clearing a flag. Redis is the only control that
+reaches CRITICAL, and CRITICAL still has a queue on screen and an audit trail.
+
+*"What happens when the dispatcher has nowhere to send anybody?"* — The
+feasibility engine already keeps a reason code per rejected option, so
+UNSERVICEABLE becomes a card: `CAPABILITY_MISSING`, the unit two minutes away
+that was only blocked by a shift boundary, an alternative outside the fleet, a
+recommendation, and three actions that are written to an audit table.
+
+### What broke
+
+- **The AI health reading could not recover.** The probe read
+  `system_health_states` to decide what to write to `system_health_states`, and
+  Prisma's `@updatedAt` refreshed the row on every tick — so a stale DEGRADED
+  verdict kept its own timestamp fresh for ever and the banner never cleared.
+  Found by watching the walkthrough output rather than by a test. Fixed by
+  reading `ai_extractions`, which has a row per real attempt.
+- **`prisma generate` failed with EPERM twice** because a running Node process
+  held `query_engine-windows.dll.node`. The TypeScript types regenerated
+  correctly both times; only the engine rename failed, and the existing engine
+  was the same version. Worth knowing before it looks like a corrupt install.
+- **Four schema guesses were wrong** and the compiler caught all four:
+  `db.shift` is `db.technicianShift`, `UnitStatus` has no `OUT_OF_SERVICE`
+  (it is `MAINTENANCE`), `unit_status_history` has `toStatus` not `status`, and
+  `destination_offers` orders by `sentAt` not `createdAt`. Writing against a
+  remembered schema instead of the file costs one compile each time.
+- **A Phase 16 test broke on a Phase 17 change**, correctly:
+  `GET /health` lost its `ai` field when the whole ladder replaced it. The
+  assertion moved to the ladder's components array and got stronger — it now
+  also checks the fallback sentence the operator reads.
+
+### Verification
+
+Fast suite: **45 files, 643 tests, green.** Typecheck and lint clean.
+
+Every control pulled against a running app with a seeded database:
+
+```
+=== SWITCHES ===
+LLM_DOWN on                    mode=DEGRADED  AI_EXTRACTION:DEGRADED GPS:DEGRADED
+LLM_DOWN off (recovered)       mode=DEGRADED  GPS:DEGRADED
+REDIS_DOWN on                  mode=CRITICAL  GPS:DEGRADED WEBSOCKET:DEGRADED DISPATCH_CORE:CRITICAL
+REDIS_DOWN off (recovered)     mode=DEGRADED  GPS:DEGRADED
+WEBSOCKET_DOWN on              mode=DEGRADED  GPS:DEGRADED WEBSOCKET:DEGRADED
+WEBSOCKET_DOWN off (recovered) mode=DEGRADED  GPS:DEGRADED
+SOLVER_TIMEOUT on              mode=DEGRADED  GPS:DEGRADED SOLVER:DEGRADED
+SOLVER_TIMEOUT off (recovered) mode=DEGRADED  GPS:DEGRADED
+
+=== ACTIONS ===
+TECHNICIAN_OFFLINE     200 technician tech-24 is off shift
+BREAK_UNIT             200 unit unit-24 is in MAINTENANCE
+DECLINE_DESTINATION    200 no destination offer to decline
+INJECT_JOBS            200 3 jobs injected
+```
+
+`GPS: DEGRADED` throughout is truthful, not a defect: this database's fleet has
+not reported a position in far longer than fifteen minutes.
+
+The forced planner timeout, on a board of 470 pending jobs:
+
+```
+switch ON   ->  96 options generated,  1,884 ms
+switch OFF  ->  11,280 options,       11,011 ms
+SOLVER: DEGRADED — "the last plan hit its deadline; unreached jobs kept their assignment"
+```
+
+and it returned to NORMAL on its own inside one probe cycle.
+
+The escalation card on a real job whose every option was refused:
+
+```
+reason code    CAPABILITY_MISSING
+closest        UNIT-07 (Technician 07) is 2 min away but was rejected:
+               technician is off shift, or their shift ends before the job could complete
+alternative    A specialist partner, or a tow to a workshop that has the skill
+actions        Approve anyway · Find external provider · Contact driver
+POST decision  201  { escalationId, decision: FIND_EXTERNAL_PROVIDER }
+```

@@ -21,6 +21,8 @@ import { config } from '../infra/config.js';
 import { buildDispatchSnapshot } from '../commit/dispatchSnapshot.js';
 import { persistSolverRun } from '../commit/persistSolverRun.js';
 import { solve } from '../engine/solve.js';
+import { isChaosOn } from '../chaos/switches.js';
+import { logger } from '../infra/logger.js';
 
 // How long a burst of triggers for the same zone is allowed to collapse into
 // one run. Chosen to comfortably outlast the handful of job events one
@@ -29,6 +31,18 @@ import { solve } from '../engine/solve.js';
 // scripts/fire-10-triggers-fast.js fires ten triggers inside this window and
 // asserts that `solver_runs` gains one or two rows rather than ten.
 const SOLVE_DEBOUNCE_MS = 2_000;
+
+// THE PLANNER'S DEADLINE (Phase 17). Generous — a normal citywide solve runs
+// in single-digit seconds — because this is a safety net against a pathological
+// run, not a tuning knob. When it fires the jobs already scored are planned and
+// the rest keep the assignment they had, which is the "best incumbent"
+// behaviour the degradation ladder promises.
+export const SOLVE_DEADLINE_MS = 20_000;
+
+// What the chaos switch shortens it to. Two hundred milliseconds is long enough
+// for the first job or two and short enough that a demo does not have to wait
+// to see the flag appear.
+export const FORCED_TIMEOUT_DEADLINE_MS = 200;
 
 export async function enqueueSolve(zoneId: string, trigger = 'ZONE_REPLAN'): Promise<void> {
   await enqueueDebounced(
@@ -55,13 +69,30 @@ export async function processSolver(job: Job<{ zoneId: string; trigger?: string 
       return;
     }
 
+    // READ AT THE EDGE, NOT IN THE ENGINE. src/engine has zero imports from
+    // prisma, so the switch is resolved here and the engine is handed a plain
+    // number — which is also what makes the timeout testable without a
+    // database.
+    const forced = await isChaosOn(prismaBase, 'SOLVER_TIMEOUT');
+
     const outcome = await solve({
       jobs,
       snapshot,
       now: new Date(),
       jobZone,
       zonePartitionThreshold: config.SOLVER_ZONE_PARTITION_THRESHOLD,
+      deadlineMs: forced ? FORCED_TIMEOUT_DEADLINE_MS : SOLVE_DEADLINE_MS,
     });
+
+    if (outcome.timedOut) {
+      // Never silent (invariant 8). The health probe turns the SOLVER
+      // component DEGRADED from the stored run; this is the line that says
+      // which jobs were left alone.
+      logger.warn(
+        { zoneId: job.data.zoneId, unplanned: outcome.unplannedJobIds.length, forced },
+        'planner hit its deadline — unreached jobs keep their current assignment',
+      );
+    }
 
     // EVERY RE-SOLVE IS LOGGED WITH ITS TRIGGER, so thrash is measurable:
     // `SELECT trigger, count(*) FROM solver_runs GROUP BY trigger` is the

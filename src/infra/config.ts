@@ -117,7 +117,25 @@ const envSchema = z.object({
   // required key would make an external service a startup dependency of a
   // system whose whole claim is that no external service sits on the decision
   // path (invariant 10).
-  LLM_API_KEY: z.string().min(1).optional(),
+  //
+  // AN EMPTY STRING MEANS UNSET. `.env` is loaded before the test suite runs,
+  // so a developer with a real key in it would otherwise have the fast suite
+  // making live calls to a model provider — non-deterministic, billable, and
+  // exactly what the degraded-path tests are there to prove does not happen.
+  // The vitest configs pin this to '' for that reason.
+  LLM_API_KEY: z
+    .string()
+    .optional()
+    .transform((value) => (value && value.length > 0 ? value : undefined)),
+  // WHICH WIRE PROTOCOL the key above speaks. Anthropic's Messages API, or the
+  // OpenAI-compatible `POST /chat/completions` that Groq and most other
+  // providers expose. Declared rather than sniffed from the key's prefix: a
+  // provider guessed from a string is a provider that changes silently when
+  // somebody rotates a credential.
+  LLM_PROVIDER: z.enum(['anthropic', 'openai-compatible']).default('anthropic'),
+  // Only read by the openai-compatible provider. Defaults to Groq because that
+  // is what this deployment uses; any OpenAI-shaped endpoint works.
+  LLM_BASE_URL: urlString('LLM_BASE_URL').default('https://api.groq.com/openai/v1'),
   LLM_MODEL: z.string().min(1).default('claude-opus-5'),
   // Short on purpose. A driver standing at the roadside waits on this call, so
   // a slow answer is worth less than a fast picker: past this we give up and

@@ -18,6 +18,7 @@ import { CASES } from './cases.js';
 import type { LabelledCase } from './cases.js';
 import type { CaseOutcome } from './metrics.js';
 import { extractSymptoms } from '../../src/ai/extractSymptoms.js';
+import type { ExtractionOutcome } from '../../src/ai/extractSymptoms.js';
 import { toSymptomPayload } from '../../src/ai/extraction.js';
 import type { SymptomExtraction } from '../../src/ai/extraction.js';
 import { buildHypothesisView } from '../../src/domain/hypothesisView.js';
@@ -42,17 +43,79 @@ export const keywordBaselineExtractor: Extractor = {
   run: async (text) => ({ extraction: keywordExtraction(text), calls: 0, validCalls: 0 }),
 };
 
-export const llmExtractor: Extractor = {
-  name: 'llm',
-  run: async (text) => {
-    const outcome = await extractSymptoms(text);
-    return {
-      extraction: outcome.status === 'EXTRACTED' ? outcome.extraction : null,
-      calls: outcome.attempts.length,
-      validCalls: outcome.attempts.filter((attempt) => attempt.validated).length,
-    };
-  },
+// THE MODEL, PACED.
+//
+// A RATE LIMIT IS A PROPERTY OF THE ACCOUNT, NOT OF THE EXTRACTOR, and the
+// difference decides whether this harness measures anything. The free tier
+// this runs against allows 8,000 tokens per minute — about four calls — so
+// firing 108 cases at it as fast as they will go produces a 96% fallback rate
+// that says nothing whatsoever about how well the model reads Hinglish.
+//
+// So the harness waits between calls, and retries a case that is refused for
+// rate limiting rather than scoring it. Both numbers are counted and reported,
+// because a paced run IS a different thing from an unpaced one and hiding that
+// would be the same dishonesty in the other direction.
+//
+// THIS IS THE HARNESS, NOT THE PRODUCT. In production a 429 degrades to the
+// symptom picker immediately and deliberately (src/ai/extractSymptoms.ts) — a
+// stranded driver does not wait thirteen seconds for a retry. Nothing here
+// changes that.
+export type PacedExtractor = Extractor & {
+  rateLimitWaits(): number;
+  rateLimitFailures(): number;
 };
+
+const RATE_LIMIT_RETRIES = 3;
+
+export function createLlmExtractor(
+  pacingMs: number,
+  // Injected for the same reason the extractor injects its own model call: a
+  // test has to be able to drive the rate-limit path without a network.
+  extract: (text: string) => Promise<ExtractionOutcome> = extractSymptoms,
+): PacedExtractor {
+  let waits = 0;
+  let failures = 0;
+
+  return {
+    name: 'llm',
+    rateLimitWaits: () => waits,
+    rateLimitFailures: () => failures,
+    run: async (text) => {
+      let calls = 0;
+      let validCalls = 0;
+
+      for (let attempt = 0; attempt <= RATE_LIMIT_RETRIES; attempt++) {
+        const outcome = await extract(text);
+        calls += outcome.attempts.length;
+        validCalls += outcome.attempts.filter((one) => one.validated).length;
+
+        if (outcome.status === 'EXTRACTED') {
+          await sleep(pacingMs);
+          return { extraction: outcome.extraction, calls, validCalls };
+        }
+        if (!isRateLimit(outcome.detail)) {
+          return { extraction: null, calls, validCalls };
+        }
+
+        waits++;
+        await sleep(pacingMs * 2);
+      }
+
+      // Still refused after four goes. Counted, reported, and scored as a
+      // fallback — which at that point it honestly is.
+      failures++;
+      return { extraction: null, calls, validCalls };
+    },
+  };
+}
+
+function isRateLimit(detail: string): boolean {
+  return detail.includes('HTTP 429');
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
 
 export async function runCases(extractor: Extractor, cases = CASES): Promise<CaseOutcome[]> {
   const outcomes: CaseOutcome[] = [];

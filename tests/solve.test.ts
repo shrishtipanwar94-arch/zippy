@@ -591,3 +591,86 @@ describe('the solver writes nothing', () => {
     expect(await countTraces()).toEqual(before);
   });
 });
+
+// ---------------------------------------------------------------------------
+// PHASE 17 — THE PLANNER'S DEADLINE.
+//
+// A plan produced under a deadline is a different artifact from a plan
+// produced to completion: it is the best one FOUND, not the best one there is.
+// Two things have to be true or the degradation ladder is lying — the run has
+// to STOP, and it has to SAY it stopped, naming the jobs nobody looked at.
+
+describe('solve — the deadline (Phase 17)', () => {
+  const snapshot = {
+    units: [
+      {
+        id: 'u1',
+        zoneId: 'z1',
+        currentTechnicianId: 't1',
+        capabilityCodes: ['JUMP_START'],
+        lat: 12.94,
+        lng: 77.63,
+        kind: 'VAN' as const,
+        status: 'AVAILABLE' as const,
+      },
+    ],
+    technicians: [{ id: 't1', capabilityCodes: ['JUMP_START'] }],
+    shifts: [{ technicianId: 't1', ...allDayShift }],
+    zones: [{ id: 'z1', centroidLat: 12.94, centroidLng: 77.63 }],
+  };
+
+  const jobZone = new Map([
+    ['j1', 'z1'],
+    ['j2', 'z1'],
+    ['j3', 'z1'],
+  ]);
+
+  it('plans nothing and says so when the deadline has already passed', async () => {
+    const outcome = await solve({
+      jobs: [job('j1'), job('j2'), job('j3')],
+      snapshot,
+      now: NOW,
+      jobZone,
+      zonePartitionThreshold: HUGE_THRESHOLD,
+      // Zero: every job is past the deadline before the loop starts.
+      deadlineMs: 0,
+    });
+
+    expect(outcome.timedOut).toBe(true);
+    expect(outcome.unplannedJobIds).toEqual(['j1', 'j2', 'j3']);
+    // Nothing was even generated, which is the point — the deadline is checked
+    // BEFORE the expensive part, not after.
+    expect(outcome.optionCount).toBe(0);
+    expect(outcome.plans.every((plan) => plan.assignments.length === 0)).toBe(true);
+  });
+
+  it('says it ran to completion when it did', async () => {
+    const outcome = await solve({
+      jobs: [job('j1')],
+      snapshot,
+      now: NOW,
+      jobZone,
+      zonePartitionThreshold: HUGE_THRESHOLD,
+      deadlineMs: 60_000,
+    });
+
+    expect(outcome.timedOut).toBe(false);
+    expect(outcome.unplannedJobIds).toEqual([]);
+    expect(outcome.plans[0]?.assignments).toHaveLength(1);
+  });
+
+  it('leaves the flag off entirely when no deadline was given', async () => {
+    // Every caller before Phase 17, and the evaluation harness still: a
+    // measurement whose result depended on how busy the machine was would not
+    // be a measurement.
+    const outcome = await solve({
+      jobs: [job('j1')],
+      snapshot,
+      now: NOW,
+      jobZone,
+      zonePartitionThreshold: HUGE_THRESHOLD,
+    });
+
+    expect(outcome.timedOut).toBe(false);
+  });
+});

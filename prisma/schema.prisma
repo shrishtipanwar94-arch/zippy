@@ -792,6 +792,10 @@ model SolverRun {
   rejected        Json     @default("[]")
   wallClockMs     Int      @map("wall_clock_ms")
   zonePartitioned Boolean  @default(false) @map("zone_partitioned")
+  // Phase 17. True when the planner hit its deadline and returned the best
+  // plan it had rather than the best plan there is. The jobs it never reached
+  // keep whatever assignment they already had — see src/engine/solve.ts.
+  timedOut        Boolean  @default(false) @map("timed_out")
   createdAt       DateTime @default(now()) @map("created_at")
 
   job             Job?             @relation(fields: [jobId], references: [id])
@@ -1655,6 +1659,30 @@ model EscalationDecision {
 
   @@index([escalationId])
   @@map("escalation_decisions")
+}
+
+// WHAT A DEMO HAS BROKEN ON PURPOSE (Phase 17).
+//
+// SEPARATE FROM system_health_states, and the separation is the point: that
+// table is what the system OBSERVES about itself, this one is what a person
+// has FORCED. Merging them would make "the AI is down" and "somebody switched
+// the AI off" the same row, and the first question an operator asks about a
+// red banner is which of the two it is.
+//
+// IN POSTGRES rather than in a module variable, because the web process and
+// the worker process are two processes: a switch flipped in the console has to
+// reach the worker that runs the solver. Redis would be the other candidate
+// and is disqualified by being one of the things this table can switch off.
+//
+// The routes that write it refuse to exist in a production build — see
+// src/api/chaos.ts.
+model ChaosSwitch {
+  name      String   @id
+  enabled   Boolean  @default(false)
+  detail    String?
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  @@map("chaos_switches")
 }
 
 // One row per component. state is NORMAL | DEGRADED | CRITICAL. Every degraded

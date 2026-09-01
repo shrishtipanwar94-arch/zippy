@@ -20,10 +20,14 @@ import {
   setQueue,
   setPlanSelection,
   setOverrideReasonDraft,
+  setHealth,
+  setChaos,
+  setEscalation,
+  setEscalationDecision,
   getState,
 } from '../state.js';
 import * as api from '../api.js';
-import { connect } from '../socket.js';
+import { connect, onPoll } from '../socket.js';
 import { render as renderSession } from '../panels/session.js';
 import { render as renderJobsTable } from '../panels/jobsTable.js';
 import { render as renderPlans } from '../panels/plans.js';
@@ -33,6 +37,9 @@ import { render as renderScarcity } from '../panels/scarcity.js';
 import { render as renderQueue } from '../panels/queue.js';
 import { renderSelectionError } from '../panels/plans.js';
 import { render as renderMap } from '../panels/map.js';
+import { render as renderHealth } from '../panels/health.js';
+import { render as renderChaos } from '../panels/chaos.js';
+import { render as renderEscalation } from '../panels/escalation.js';
 
 registerPanel(renderSession);
 registerPanel(renderJobsTable);
@@ -43,6 +50,9 @@ registerPanel(renderScarcity);
 registerPanel(renderQueue);
 registerPanel(renderSelectionError);
 registerPanel(renderMap);
+registerPanel(renderHealth);
+registerPanel(renderChaos);
+registerPanel(renderEscalation);
 
 function value(selector) {
   return document.querySelector(selector).value.trim();
@@ -58,8 +68,9 @@ document.querySelector('[data-action="login"]').addEventListener('click', async 
     // polling is the Phase 17 fallback, not the mechanism.
     const jobs = await api.listJobs();
     setJobs(jobs.jobs);
-    await Promise.all([refreshTimeline(), refreshBoard()]);
+    await Promise.all([refreshTimeline(), refreshBoard(), refreshHealth(), loadChaosPanel()]);
     connect();
+    startHealthPolling();
   } catch (error) {
     setError(error.message);
   }
@@ -161,8 +172,136 @@ async function inspect(jobId) {
   } catch (error) {
     setError(error.message);
   }
+  await loadEscalation(jobId);
   render();
 }
+
+// A job with a plan has a decision record and no card; a job without one has
+// no decision to show, which is precisely when the dispatcher needs to be
+// told why and what they can do about it.
+async function loadEscalation(jobId) {
+  try {
+    const response = await api.getEscalation(jobId);
+    // A job with at least one FEASIBLE option had a plan available, whether or
+    // not anybody committed to it — that is not an escalation. The card is for
+    // the job where every option was refused.
+    const feasible = getState().inspector.decision?.chosen ?? [];
+    setEscalation(feasible.length > 0 ? null : { ...response.card, jobId });
+  } catch {
+    setEscalation(null);
+  }
+}
+
+// ---------------------------------------------------------------------------
+// THE DEGRADATION LADDER (Phase 17).
+//
+// POLLED, NOT PUSHED, and deliberately: the banner has to be able to tell the
+// operator that the push channel is down, which it cannot do over the push
+// channel. Fifteen seconds matches the server's health loop, so the console is
+// never more than two ticks behind the truth.
+
+const HEALTH_POLL_MS = 15000;
+let healthTimer = null;
+
+async function refreshHealth() {
+  try {
+    setHealth(await api.getHealth());
+  } catch {
+    // A failed health read is itself information, but not the kind worth an
+    // error banner over the top of the degradation banner. The next tick tries
+    // again.
+  }
+}
+
+function startHealthPolling() {
+  if (healthTimer) return;
+  healthTimer = setInterval(async () => {
+    await refreshHealth();
+    render();
+  }, HEALTH_POLL_MS);
+}
+
+// THE POLLING FALLBACK'S CALLBACK. Registered here rather than in socket.js
+// because what is worth refetching is a property of this page: the board, the
+// timeline and the ladder.
+onPoll(async () => {
+  await Promise.all([refreshTimeline(), refreshBoard(), refreshHealth()]);
+  render();
+});
+
+// ---------------------------------------------------------------------------
+// THE CHAOS PANEL. Absent unless the server offers it.
+
+async function loadChaosPanel() {
+  try {
+    const chaos = await api.getChaos();
+    setChaos({ available: true, switches: chaos.switches, note: null });
+  } catch {
+    // A 404 is the expected answer in a production build. Not an error.
+    setChaos({ available: false, switches: [] });
+  }
+}
+
+const chaosPanel = document.querySelector('[data-panel="chaos"]');
+
+chaosPanel.addEventListener('change', async (changed) => {
+  const input = changed.target.closest('[data-chaos-switch]');
+  if (!input) return;
+  try {
+    const result = await api.setChaosSwitch(input.dataset.chaosSwitch, input.checked);
+    setHealth(result.health);
+    setChaos({ note: `${input.dataset.chaosSwitch} ${input.checked ? 'on' : 'off'}` });
+    await loadChaosPanel();
+  } catch (error) {
+    setError(error.message);
+  }
+  render();
+});
+
+chaosPanel.addEventListener('click', async (clicked) => {
+  const action = clicked.target.closest('[data-chaos-action]');
+  const reset = clicked.target.closest('[data-action="chaos-reset"]');
+  if (!action && !reset) return;
+
+  try {
+    if (reset) {
+      const result = await api.resetChaos();
+      setHealth(result.health);
+      setChaos({ note: 'everything reset' });
+    } else {
+      const result = await api.runChaosAction(action.dataset.chaosAction, { count: 5 });
+      setChaos({ note: result.detail });
+    }
+    await Promise.all([loadChaosPanel(), refreshBoard()]);
+    setError(null);
+  } catch (error) {
+    setError(error.message);
+  }
+  render();
+});
+
+// ---------------------------------------------------------------------------
+// THE ESCALATION CARD. Fetched alongside the decision record: a job with no
+// plan has no decision to show, and that is exactly when this card matters.
+
+const escalationPanel = document.querySelector('[data-panel="escalation"]');
+
+escalationPanel.addEventListener('click', async (clicked) => {
+  const button = clicked.target.closest('[data-escalation]');
+  if (!button) return;
+
+  const jobId = getState().escalation?.jobId;
+  if (!jobId) return;
+
+  try {
+    await api.decideEscalation(jobId, button.dataset.escalation, null);
+    setEscalationDecision(`Recorded: ${button.textContent.trim()}.`);
+    setError(null);
+  } catch (error) {
+    setError(error.message);
+  }
+  render();
+});
 
 // ---------------------------------------------------------------------------
 // SELECTING A PLAN.

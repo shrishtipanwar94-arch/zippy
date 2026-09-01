@@ -56,6 +56,7 @@ export async function persistSolverRun(
         feasibleCount: outcome.feasibleCount,
         wallClockMs: outcome.wallClockMs,
         zonePartitioned: outcome.zonePartitioned,
+        timedOut: outcome.timedOut,
         // Kept on the run as well as expanded into dispatch_options below:
         // this is the summary an operator reads first, and it survives even
         // if the per-option rows are ever pruned.

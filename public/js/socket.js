@@ -9,6 +9,14 @@
 // THE TOKEN GOES IN `auth`, NOT THE URL. It is verified on the handshake, so a
 // bad token never becomes a socket, and it stays out of proxy logs and browser
 // history.
+//
+// POLLING IS THE FALLBACK, NOT THE DESIGN (Phase 17). When the socket cannot
+// connect — the server refused the handshake, the network is gone, the fan-out
+// cache is down — this file starts a timer that refetches instead, and stops
+// it the moment a socket comes back. The console keeps working; it just finds
+// out later. Socket.IO's own reconnect loop is what makes the recovery
+// automatic: nobody has to press anything, which is the phase's actual
+// requirement.
 
 import {
   applyJobEvent,
@@ -42,6 +50,7 @@ export function connect() {
 
   socket.on('connect', () => {
     setConnection('connected');
+    stopPolling();
     // On a RECONNECT this resubscribes every job with the cursor it reached,
     // which is what makes a dropped connection recoverable rather than a
     // reload. On a first connect the cursors are 0 and it replays everything.
@@ -53,6 +62,16 @@ export function connect() {
 
   socket.on('disconnect', () => {
     setConnection('disconnected');
+    startPolling();
+    render();
+  });
+
+  // A refused handshake is the interesting case: the server is up and saying
+  // no (live updates switched off, or the fan-out cache unreachable). It looks
+  // identical to a network failure from here, and gets the same answer.
+  socket.on('connect_error', () => {
+    setConnection('disconnected');
+    startPolling();
     render();
   });
 
@@ -118,6 +137,33 @@ export function connect() {
     if (replay.events.length > 0) notifyJobEvent(replay.jobId);
     if (changed) render();
   });
+}
+
+// --- the polling fallback ---------------------------------------------------
+//
+// Five seconds: slow enough that a console left open on a broken connection is
+// not a load test, fast enough that a dispatcher does not think the board has
+// frozen. The callback is registered by the page, because what is worth
+// refetching differs between the dispatcher's board and the driver's panel and
+// this file has no business knowing either.
+
+const POLL_INTERVAL_MS = 5000;
+let pollTimer = null;
+let pollCallback = null;
+
+export function onPoll(callback) {
+  pollCallback = callback;
+}
+
+function startPolling() {
+  if (pollTimer || !pollCallback) return;
+  pollTimer = setInterval(() => void pollCallback(), POLL_INTERVAL_MS);
+}
+
+function stopPolling() {
+  if (!pollTimer) return;
+  clearInterval(pollTimer);
+  pollTimer = null;
 }
 
 function sendSubscribe(jobId) {

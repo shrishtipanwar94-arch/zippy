@@ -12,7 +12,8 @@ import { CASES } from '../evaluation/ai/cases.js';
 import { computeAiMetrics, pearson } from '../evaluation/ai/metrics.js';
 import type { CaseOutcome } from '../evaluation/ai/metrics.js';
 import { keywordExtraction } from '../evaluation/ai/keywordBaseline.js';
-import { keywordBaselineExtractor, runCases } from '../evaluation/ai/runner.js';
+import { createLlmExtractor, keywordBaselineExtractor, runCases } from '../evaluation/ai/runner.js';
+import { toSafetyReport, toSymptomPayload } from '../src/ai/extraction.js';
 import { FAULT_CODES } from '../src/domain/faults.js';
 import type { FaultCode } from '../src/domain/faults.js';
 
@@ -133,5 +134,81 @@ describe('the keyword control', () => {
     const outcomes = await runCases(keywordBaselineExtractor, CASES.slice(0, 12));
     expect(outcomes).toHaveLength(12);
     expect(outcomes.every((row) => row.predicted)).toBe(true);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// PACING. A rate limit is a property of the account, not of the extractor, so
+// a case the provider refused for quota reasons must not be scored as the
+// model failing to read a sentence. These two tests are the difference between
+// a 96% fallback rate that means "the free tier throttled us" and one that
+// means "the extractor does not work".
+
+describe('the paced model extractor', () => {
+  const extraction = {
+    primaryComplaint: 'FLAT_TYRE' as const,
+    engineCranks: 'NOT_STATED' as const,
+    warningLights: [],
+    unusualSound: 'NOT_STATED' as const,
+    vehicleMoves: 'NOT_STATED' as const,
+    urgencySignals: [],
+    vehicleContext: { make: null, model: null, fuel: 'UNKNOWN' as const },
+    evidence: 'test',
+  };
+
+  function fallback(detail: string) {
+    return {
+      status: 'FALLBACK' as const,
+      reason: 'UNAVAILABLE' as const,
+      detail,
+      attempts: [{ validated: false, latencyMs: 1, rawText: null, failure: detail }],
+      totalLatencyMs: 1,
+    };
+  }
+
+  it('retries a rate-limited case instead of scoring it, and counts the wait', async () => {
+    let calls = 0;
+    const extractor = createLlmExtractor(0, async () => {
+      calls++;
+      if (calls === 1) return fallback('HTTP 429: rate limit reached');
+      return {
+        status: 'EXTRACTED' as const,
+        extraction,
+        symptoms: toSymptomPayload(extraction),
+        safety: toSafetyReport(extraction),
+        model: 'test-model',
+        attempts: [{ validated: true, latencyMs: 1, rawText: '{}', failure: null }],
+        totalLatencyMs: 1,
+      };
+    });
+
+    const attempted = await extractor.run('tyre punctured hai');
+
+    expect(attempted.extraction).not.toBeNull();
+    expect(extractor.rateLimitWaits()).toBe(1);
+    expect(extractor.rateLimitFailures()).toBe(0);
+  });
+
+  it('does not retry a failure that is not a rate limit', async () => {
+    let calls = 0;
+    const extractor = createLlmExtractor(0, async () => {
+      calls++;
+      return fallback('HTTP 401: invalid key');
+    });
+
+    const attempted = await extractor.run('anything');
+
+    expect(calls).toBe(1);
+    expect(attempted.extraction).toBeNull();
+    expect(extractor.rateLimitWaits()).toBe(0);
+  });
+
+  it('gives up after four goes and says so', async () => {
+    const extractor = createLlmExtractor(0, async () => fallback('HTTP 429: rate limit reached'));
+
+    const attempted = await extractor.run('anything');
+
+    expect(attempted.extraction).toBeNull();
+    expect(extractor.rateLimitFailures()).toBe(1);
   });
 });

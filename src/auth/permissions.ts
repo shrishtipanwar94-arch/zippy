@@ -65,7 +65,12 @@ export type Resource =
   // the one console action that WRITES — everything else the console does is a
   // read, and being allowed to look at plans is not the same as being allowed
   // to commit the board to one.
-  | 'planSelection';
+  | 'planSelection'
+  // The chaos controls (Phase 17). Its own resource because breaking the
+  // system on purpose is not "updating a job" — and because the route that
+  // uses it does not exist in a production build at all, so this permission is
+  // the second lock rather than the only one.
+  | 'chaosControl';
 
 type PermissionTable = Record<Role, Partial<Record<Resource, Action[]>>>;
 
@@ -106,6 +111,8 @@ const PERMISSIONS: PermissionTable = {
     // reassignment and signs off an escalation; nobody else sees either.
     actionRequest: ['read', 'update'],
     planSelection: ['update'],
+    // Dispatcher-only, and only in a dev or demo build.
+    chaosControl: ['read', 'update'],
     chatMessage: ['read', 'create'],
     eventPromotion: ['read', 'update'],
     // A dispatcher reads estimates and may answer one on the driver's behalf —

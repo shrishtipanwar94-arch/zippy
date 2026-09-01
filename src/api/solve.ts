@@ -22,6 +22,8 @@ import { authenticate, requirePermission } from './middleware/authenticate.js';
 import { buildDispatchSnapshot } from '../commit/dispatchSnapshot.js';
 import { persistSolverRun } from '../commit/persistSolverRun.js';
 import { solve } from '../engine/solve.js';
+import { isChaosOn } from '../chaos/switches.js';
+import { FORCED_TIMEOUT_DEADLINE_MS, SOLVE_DEADLINE_MS } from '../workers/solver.js';
 
 export const solveRouter = Router();
 
@@ -37,13 +39,28 @@ solveRouter.post('/solve', authenticate, requirePermission('read', 'solverRun'),
     return;
   }
 
+  // THE SAME DEADLINE THE QUEUED PATH USES (Phase 17). Both roads to the
+  // planner have to behave the same under the chaos switch, or a demo would
+  // show a timeout on one and not the other — and an operator pressing Solve
+  // during a real slowdown would get different behaviour from the automatic
+  // re-plan happening beside it.
+  const forcedTimeout = await isChaosOn(prismaBase, 'SOLVER_TIMEOUT');
+
   const outcome = await solve({
     jobs,
     snapshot,
     now: new Date(),
     jobZone,
     zonePartitionThreshold: config.SOLVER_ZONE_PARTITION_THRESHOLD,
+    deadlineMs: forcedTimeout ? FORCED_TIMEOUT_DEADLINE_MS : SOLVE_DEADLINE_MS,
   });
+
+  if (outcome.timedOut) {
+    logger.warn(
+      { unplanned: outcome.unplannedJobIds.length, forced: forcedTimeout },
+      'planner hit its deadline — unreached jobs keep their current assignment',
+    );
+  }
 
   if (outcome.zonePartitioned) {
     logger.info(

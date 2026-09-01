@@ -27,6 +27,12 @@ export default defineConfig({
       JWT_REFRESH_SECRET: 'test-refresh-secret-1111111111111111',
       JWT_ACCESS_TTL: '15m',
       JWT_REFRESH_TTL: '7d',
+      // NO MODEL CALLS FROM THE TEST SUITE. dotenv has already loaded the
+      // developer's .env by the time config.ts is imported, so this is what
+      // stops a real key there from turning the fast suite into a billable,
+      // non-deterministic integration test against a provider. An empty value
+      // reads as "not configured" (src/infra/config.ts).
+      LLM_API_KEY: '',
     },
   },
 });

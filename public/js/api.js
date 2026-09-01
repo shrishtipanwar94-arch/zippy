@@ -27,6 +27,37 @@ async function request(method, path, body) {
   return payload;
 }
 
+// THE LADDER. Unauthenticated on purpose — /health is the endpoint a load
+// balancer hits, and a console that could only see the system's state once
+// signed in would show a blank page during exactly the outage it exists for.
+export function getHealth() {
+  return request('GET', '/health');
+}
+
+export function getChaos() {
+  return request('GET', '/chaos');
+}
+
+export function setChaosSwitch(name, enabled) {
+  return request('POST', `/chaos/switches/${name}`, { enabled });
+}
+
+export function runChaosAction(name, body) {
+  return request('POST', `/chaos/actions/${name}`, body ?? {});
+}
+
+export function resetChaos() {
+  return request('POST', '/chaos/reset');
+}
+
+export function getEscalation(jobId) {
+  return request('GET', `/jobs/${jobId}/escalation`);
+}
+
+export function decideEscalation(jobId, decision, note) {
+  return request('POST', `/jobs/${jobId}/escalation`, { decision, note: note ?? null });
+}
+
 export function login(email, password) {
   return request('POST', '/auth/login', { email, password });
 }

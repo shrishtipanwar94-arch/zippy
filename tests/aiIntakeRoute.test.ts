@@ -95,8 +95,15 @@ describe('POST /jobs/intake/describe with no model configured', () => {
     expect(health?.state).toBe('DEGRADED');
     expect(health?.detail).toContain('NOT_CONFIGURED');
 
+    // Phase 17 replaced the single `ai` field with the whole degradation
+    // ladder. The claim is unchanged — an operator can see it from /health —
+    // and the row it is read from is the same one.
     const probe = await request(app).get('/health');
-    expect(probe.body.ai.state).toBe('DEGRADED');
+    const ai = probe.body.components.find(
+      (component: { component: string }) => component.component === 'AI_EXTRACTION',
+    );
+    expect(ai.state).toBe('DEGRADED');
+    expect(ai.fallback).toContain('symptom picker');
   });
 });
 

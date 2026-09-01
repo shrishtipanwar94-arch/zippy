@@ -112,6 +112,22 @@ const state = {
     safetyTouched: false,
   },
 
+  // THE DEGRADATION LADDER (Phase 17), as GET /health reports it. Null until
+  // the first poll answers. `mode`, `message` and every component's wording
+  // come from the server — see public/js/panels/health.js.
+  health: null,
+
+  // The chaos panel. `available` stays false until the server answers GET
+  // /chaos, which a production build never does, so the panel cannot appear
+  // where it must not exist.
+  chaos: { available: false, switches: [], note: null },
+
+  // The escalation card for the job in the inspector, when it has no plan.
+  escalation: null,
+  // What the dispatcher decided about it, once they have. A sentence, not a
+  // code — it is read by the person who just pressed the button.
+  escalationDecision: null,
+
   // WHAT THE DRIVER SEES, AS THE SERVER WORDED IT. The whole panel is one
   // server response (GET /jobs/:id/driver-view) rather than a status the
   // browser translates, which is what makes "no enum ever reaches a driver" a
@@ -297,6 +313,25 @@ export function setActiveJob(jobId) {
 
 export function setRequestField(patch) {
   state.request = { ...state.request, ...patch };
+}
+
+export function setHealth(health) {
+  state.health = health;
+}
+
+export function setChaos(patch) {
+  state.chaos = { ...state.chaos, ...patch };
+}
+
+export function setEscalation(card) {
+  state.escalation = card;
+  // A new card is a new question; whatever was decided about the last job is
+  // not an answer to it.
+  state.escalationDecision = null;
+}
+
+export function setEscalationDecision(sentence) {
+  state.escalationDecision = sentence;
 }
 
 export function setChatMessages(messages) {

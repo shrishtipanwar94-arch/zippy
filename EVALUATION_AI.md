@@ -11,10 +11,13 @@ Free-text breakdown descriptions in English, romanised Hindi and a mixture of bo
 | extractor | cases | predicted | top-1 | top-2 | ECE | schema valid | fallback | mean entropy | 2nd dispatch | entropy↔2nd r |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
 | keyword-baseline | 108 | 108 | 59.3% | 76.9% | 0.136 | 100.0% | 0.0% | 2.15 bits | 14.8% | 0.425 |
+| llm | 108 | 108 | 68.5% | 79.6% | 0.152 | 99.1% | 0.0% | 1.84 bits | 12.0% | 0.156 |
 
 ## Is the entropy-driven hedging justified?
 
 **keyword-baseline: supported (r = 0.425).** Uncertain hypotheses really were the ones whose dispatched capability set failed to cover the true fault, which is the assumption the hedging in src/domain/capabilitySet.ts rests on.
+
+**llm: weak support (r = 0.156).** The relationship points the right way but is small enough that this set cannot carry it. Treat the entropy-driven hedging as unproven rather than validated.
 
 ## Calibration
 
@@ -31,6 +34,19 @@ Free-text breakdown descriptions in English, romanised Hindi and a mixture of bo
 | 0.8–0.9 | 11 | 0.847 | 1.000 | 0.153 |
 | 0.9–1.0 | 7 | 0.950 | 1.000 | 0.050 |
 
+**Calibration — llm**
+
+| confidence bin | cases | mean confidence | accuracy | gap |
+| --- | ---: | ---: | ---: | ---: |
+| 0.2–0.3 | 5 | 0.256 | 0.600 | 0.344 |
+| 0.3–0.4 | 9 | 0.341 | 0.444 | 0.103 |
+| 0.4–0.5 | 29 | 0.431 | 0.345 | 0.086 |
+| 0.5–0.6 | 20 | 0.530 | 0.750 | 0.220 |
+| 0.6–0.7 | 15 | 0.646 | 0.933 | 0.287 |
+| 0.7–0.8 | 6 | 0.748 | 0.833 | 0.085 |
+| 0.8–0.9 | 15 | 0.830 | 0.933 | 0.104 |
+| 0.9–1.0 | 9 | 0.947 | 1.000 | 0.053 |
+
 ## Language
 
 **By language — keyword-baseline**
@@ -40,6 +56,14 @@ Free-text breakdown descriptions in English, romanised Hindi and a mixture of bo
 | EN | 47 | 59.6% | 76.6% |
 | HI | 48 | 56.3% | 75.0% |
 | MIX | 13 | 69.2% | 84.6% |
+
+**By language — llm**
+
+| language | cases | top-1 | top-2 |
+| --- | ---: | ---: | ---: |
+| EN | 47 | 70.2% | 83.0% |
+| HI | 48 | 66.7% | 79.2% |
+| MIX | 13 | 69.2% | 69.2% |
 
 ## What these numbers may not be used to claim
 
