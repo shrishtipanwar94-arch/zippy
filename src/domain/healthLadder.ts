@@ -58,7 +58,12 @@ const LADDER: Record<HealthComponent, LadderEntry> = {
   GPS: {
     component: 'GPS',
     label: 'Vehicle positions',
-    fallback: 'Last known position is used and flagged; a dispatcher can enter one by hand.',
+    // Precisely what exists, not what sounds good: the manual path is a
+    // dispatcher CONFIRMING a corrected position that came from the driver
+    // (src/commit/eventPromotions.ts), not typing coordinates into a box.
+    // A fallback sentence promising a screen that does not exist would be a
+    // silent degraded state wearing a banner.
+    fallback: "Last known position is used and flagged; a dispatcher can confirm a corrected one from the driver's chat.",
     worstCase: 'DEGRADED',
   },
   WEBSOCKET: {

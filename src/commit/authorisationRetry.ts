@@ -31,12 +31,20 @@ import type { PaymentProvider } from '../payments/provider.js';
 // transaction open across hundreds of provider calls.
 const RETRY_BATCH = 25;
 
+// `jobIds` NARROWS THE SWEEP, and exists for one honest reason: two test files
+// each calling a GLOBAL sweep against one shared database steal each other's
+// rows — whichever runs first authorises the other's payment, and the loser
+// then asserts against a backlog somebody else cleared. Production passes
+// nothing and sweeps everything, which is what the cleanup schedule wants.
 export async function retryPendingAuthorisations(
   db: PrismaClient,
-  options: { provider?: PaymentProvider } = {},
+  options: { provider?: PaymentProvider; jobIds?: string[] } = {},
 ): Promise<number> {
   const pending = await db.payment.findMany({
-    where: { status: 'PENDING_AUTHORISATION' },
+    where: {
+      status: 'PENDING_AUTHORISATION',
+      ...(options.jobIds ? { jobId: { in: options.jobIds } } : {}),
+    },
     orderBy: { createdAt: 'asc' },
     take: RETRY_BATCH,
     select: { id: true, jobId: true },

@@ -153,12 +153,28 @@ describe('a daily run', () => {
         select: { id: true },
       })
     ).id;
-    const before = await prismaBase.payout.count({ where: { batchId } });
+    // SCOPED TO THIS FILE'S FOUR TECHNICIANS. The batch's reference is the DAY,
+    // so every suite running a payout on 2034-04-01 shares this row — counting
+    // all of its payouts would count theirs.
+    const ours = { batchId, technicianId: { in: [RICH, SMALL, INDEBTED, EMPTY] } };
+    const before = await prismaBase.payout.count({ where: ours });
 
     const again = await runPayoutBatch(prismaBase, { runAt: DAY_ONE, minimumPaise: MINIMUM });
-    expect(again.paid).toBe(0);
 
-    expect(await prismaBase.payout.count({ where: { batchId } })).toBe(before);
+    // NOT `expect(again.paid).toBe(0)`, and not a count over the whole batch.
+    // Both were assertions about the whole shared database: the run pays every
+    // technician above the minimum and the batch is keyed by the DAY, so a
+    // suite booking earnings in parallel changes either number for a reason
+    // that has nothing to do with idempotency. Both failed exactly that way,
+    // roughly one run in ten, once Phase 17 added enough test files to widen
+    // the interleaving.
+    //
+    // The claim under test is that running the same DAY twice does not pay
+    // THESE technicians twice, and the three assertions below say precisely
+    // that: the batch gained no rows for the four technicians this file
+    // created, the rich one's balance is still zero rather than negative, and
+    // the ledger holds exactly one pair of entries for their payout.
+    expect(await prismaBase.payout.count({ where: ours })).toBe(before);
     expect(await technicianBalance(prismaBase, RICH)).toBe(0);
     expect(
       await prismaBase.ledgerEntry.count({

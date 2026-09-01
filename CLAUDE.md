@@ -122,6 +122,21 @@ The scoped version is usually the STRONGER claim too: counting rows that cannot
 exist unless the code under test created them proves something about that code
 specifically, rather than about the database being quiet.
 
+**A globally side-effecting FUNCTION is the same hazard as a raw count.** The
+rule above is usually read as being about assertions, and it is not: it is
+about scope. `retryPendingAuthorisations` sweeps every pending payment in the
+database, and two suites called it — so whichever ran first authorised the
+other's row, and the loser asserted against a backlog somebody else had
+cleared. `runPayoutBatch` pays every technician above the minimum, and its
+batch reference is the DAY, so two suites running a payout on the same
+simulated date share one batch row. Both failed roughly one run in ten and both
+had passed for two phases; adding test files at Phase 17 widened the
+interleaving enough to expose them. If a test calls something that operates on
+"everything", either scope the call (an optional `jobIds` filter the production
+caller does not pass) or scope every assertion about its effects to the rows
+the file created. Asserting on the function's own return count is the trap:
+that number is always about the whole database.
+
 The same rule applies to fixtures competing for a shared row. Once
 `decision_records` gained a unique index on `(job_id, solver_run_id)`, every
 selection test sharing one solver run made the first test to run the only one

@@ -682,8 +682,21 @@ The most valuable section. In rough order of severity:
 27. **No cost or rate-limit accounting on the model** (16). Nothing counts
     tokens or caps spend per driver; a retry-loop bug would be discovered on a
     bill.
-28. **~45 of 83 tables have no reader.** Three pages have now been used in a
+28. **~45 of 84 tables have no reader.** Three pages have now been used in a
     browser (14–17), so the older blanket claim that none had is retired.
+29. **Two whole-database test races hid in the money suites for two phases**,
+    and only surfaced at Phase 17 when more test files widened the
+    interleaving. The payout suite proved idempotency by counting what a
+    GLOBAL run did (`again.paid`, then every row in a batch keyed by the day),
+    so any suite booking earnings in parallel broke it for a reason unrelated
+    to idempotency. Worse, `invariant8` and `money` each called the global
+    authorisation-retry sweep, so whichever ran first authorised the other's
+    pending payment and the loser asserted against a backlog somebody else had
+    cleared. Both are the mistake `CLAUDE.md` already records from Phase 14,
+    in a new shape: not a raw count this time, but a globally side-effecting
+    FUNCTION shared by two suites. Fixed by scoping both — the assertions to
+    the rows each file created, and `retryPendingAuthorisations` with an
+    optional `jobIds` filter that production does not pass.
 
 ## 16. How I Would Improve It
 

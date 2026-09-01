@@ -256,7 +256,14 @@ describe('a retry worker attempts it later', () => {
   it('recovers the authorisation once the gateway is back', async () => {
     const jobId = `${PREFIX}-${RUN}-job-unreachable`;
 
-    const recovered = await retryPendingAuthorisations(prismaBase, { provider: new StubProvider() });
+    // SCOPED TO THIS FILE'S JOBS. The sweep is global in production and global
+    // in another suite that also calls it, so an unscoped call here races that
+    // one for the same rows: whichever runs first authorises the other's
+    // payment, and the loser asserts against a backlog somebody else cleared.
+    const recovered = await retryPendingAuthorisations(prismaBase, {
+      provider: new StubProvider(),
+      jobIds: [jobId],
+    });
     expect(recovered).toBeGreaterThanOrEqual(1);
 
     const payment = await prismaBase.payment.findFirstOrThrow({
@@ -276,7 +283,7 @@ describe('a retry worker attempts it later', () => {
 
   it('places one hold, not two, because the key is derived from the job', async () => {
     const jobId = `${PREFIX}-${RUN}-job-unreachable`;
-    await retryPendingAuthorisations(prismaBase, { provider: new StubProvider() });
+    await retryPendingAuthorisations(prismaBase, { provider: new StubProvider(), jobIds: [jobId] });
 
     expect(await prismaBase.payment.count({ where: { jobId } })).toBe(1);
   });

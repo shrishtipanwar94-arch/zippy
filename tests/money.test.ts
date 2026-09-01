@@ -265,7 +265,14 @@ describe('commit authorises the callout fee only', () => {
     const { jobId } = await createJobFor(WALKIN, 'walkin-vehicle');
     await authoriseCallout(prismaBase, { jobId, provider: new FailingStubProvider('UNREACHABLE') });
 
-    const recovered = await retryPendingAuthorisations(prismaBase, { provider: new StubProvider() });
+    // SCOPED TO THIS TEST'S JOB. The sweep is global in production and another
+    // suite calls it too, so an unscoped call here would authorise their
+    // pending payment and leave them asserting against a backlog this file
+    // cleared.
+    const recovered = await retryPendingAuthorisations(prismaBase, {
+      provider: new StubProvider(),
+      jobIds: [jobId],
+    });
     expect(recovered).toBeGreaterThanOrEqual(1);
 
     const payment = await prismaBase.payment.findFirstOrThrow({

@@ -23,7 +23,7 @@ DISPATCHER's `chaosControl` permission.
 | Component | Degraded behaviour | Worst it can cause |
 | --- | --- | --- |
 | Symptom assistant | Drivers answer the structured symptom picker. | DEGRADED |
-| Vehicle positions | Last known position, flagged; manual entry available. | DEGRADED |
+| Vehicle positions | Last known position, flagged; a dispatcher can confirm a corrected one from the driver's chat. | DEGRADED |
 | Live updates | Consoles poll every five seconds. | DEGRADED |
 | Planner | Best plan found before the deadline, flagged as incomplete. | DEGRADED |
 | Payments | Authorisations pending and retried; dispatch never blocked. | DEGRADED |
