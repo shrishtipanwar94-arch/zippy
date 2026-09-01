@@ -21,6 +21,7 @@
     "eval": "tsx evaluation/cli.ts",
     "eval:sweep": "tsx evaluation/cli.ts --sweep",
     "eval:scenario": "tsx evaluation/cli.ts --scenario",
+    "eval:ai": "tsx evaluation/ai/cli.ts",
     "test": "npm run test:fast && npm run test:concurrency",
     "test:fast": "vitest run",
     "test:watch": "vitest",
@@ -33,6 +34,7 @@
     "db:studio": "prisma studio"
   },
   "dependencies": {
+    "@anthropic-ai/sdk": "^0.122.0",
     "@bull-board/api": "^9.5.0",
     "@bull-board/express": "^9.5.0",
     "@node-rs/argon2": "^2.1.0",

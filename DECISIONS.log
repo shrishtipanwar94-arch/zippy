@@ -3240,3 +3240,302 @@ FLEET OVER THE CAP
 ```
 
 Every transaction balances, and `expectLedgerBalances` runs across all of them.
+
+---
+
+## Phase 16 — GenAI intake / 2026-09-01 / Commit: "phase 16: genai intake"
+
+### Built
+
+**The model layer — `src/ai/`, six files, and nothing else in the repo imports
+the SDK.**
+
+- `client.ts` — the only place this process talks to a language model.
+  `callModel` uses `client.messages.parse` with `zodOutputFormat`, so the reply
+  is schema-constrained on the way out and Zod-validated on the way in. Two
+  failure kinds, `UNAVAILABLE` and `INVALID_OUTPUT`, because they mean
+  different things and get different policies. SDK retries are OFF
+  (`maxRetries: 0`); the retry policy is ours.
+- `extraction.ts` — `symptomExtractionSchema`, the form the model fills in, and
+  `toSymptomPayload` / `toSafetyReport` / `signalsFromSafetyReport`, which turn
+  it into the two structured objects intake already took.
+- `prompt.ts` — `EXTRACTION_SYSTEM_PROMPT` and `MESSAGE_SYSTEM_PROMPT`, with
+  the romanised-Hindi vocabulary written out.
+- `extractSymptoms.ts` — the policy: no key -> fallback, call failed ->
+  fallback, schema-invalid -> one retry then fallback.
+- `health.ts` — `AI_EXTRACTION` in `system_health_states`, moved on every
+  attempt; `recordOutcomeHealth`, `currentAiHealth`.
+- `store.ts` — `storeExtraction` (every attempt, including the failures) and
+  `linkExtractionToJob` (the driver's confirm-or-correct verdict).
+- `classifyMessage.ts` — the second, smaller job: the chat classifier, which
+  ADDS to `src/domain/messageClassifier.ts` and never replaces it.
+
+**Domain.** `src/domain/hypothesisView.ts` — `buildHypothesisView`,
+`normaliseToOne`, `towProbability`. One shape produced by both paths:
+`faultDistribution`, `rankedFaults`, `topFault`, `entropyBits`,
+`requiredCapabilities`, `requiredParts`, `towProbability`, `urgencySignals`,
+`vehicleContext`, `renormalised`.
+
+**Endpoints.** `POST /jobs/intake/describe` (free text -> a proposed form, no
+job); `POST /jobs/intake` now takes `extractionId` and `rawText`; `GET /health`
+reports `ai.state`. `POST /jobs/:id/messages` classifies with the model before
+the write.
+
+**Evaluation — `evaluation/ai/`, `npm run eval:ai` -> `EVALUATION_AI.md`.**
+`cases.ts` (108 labelled descriptions, nine per fault, 56% romanised Hindi or
+mixed), `keywordBaseline.ts` (the control), `runner.ts`, `metrics.ts`,
+`report.ts`, `cli.ts`.
+
+**Frontend.** A `describe` step in front of the driver's three, the
+"We understood: ..." confirmation line above the same complaint buttons, the
+DEGRADED banner, and safety checkboxes pre-ticked from the urgency signals
+until the driver touches that step.
+
+**Tables.** No migration. `ai_extractions` and `system_health_states` were
+created in the Phase 1 schema and are used for the first time here.
+`symptom_reports.source` takes a new value, `AI_ASSISTED`.
+
+**Config.** `LLM_API_KEY` (optional), `LLM_MODEL` (`claude-opus-5`),
+`LLM_TIMEOUT_MS` (8000).
+
+### Decisions
+
+**Decision — the model fills in the symptom form; the rule table still
+produces the probabilities.**
+*Why* — the phase brief says "replace the input to Phase 3, not its structure",
+and invariant 5 says the LLM extracts and never decides. A distribution emitted
+by a model is a decision wearing a probability's clothes: nothing downstream
+could tell a hallucinated 0.4 from a derived one, and the evaluation harness
+would be measuring a black box.
+*Alternative* — have the model emit `fault_distribution` directly, as the
+brief's OUT block literally shows.
+*Why not* — it would delete the only auditable thing in the diagnosis path.
+`faultRules.ts` can be read aloud in an interview; a model's output cannot.
+*Tradeoff* — the pipeline's accuracy is now capped by the rule table. If the
+table is wrong about clicking implying a flat battery, a perfect extraction
+still lands on the wrong fault, and the evaluation cannot separate the two
+error sources. The brief's OUT shape is still what comes out of `/describe` —
+`buildHypothesisView` assembles all six fields — it is just assembled from the
+table rather than asserted by the model.
+
+**Decision — `/describe` creates nothing.**
+*Why* — the driver confirms before dispatch. An endpoint that created a job
+from an unconfirmed extraction would put a model's reading on the critical
+path in the one way that cannot be undone.
+*Alternative* — extract and create in one call, with a correction screen after.
+*Why not* — a correction after the fact is a second write and a job event
+saying the machine was wrong; a confirmation before it is one tap.
+*Tradeoff* — two round trips at intake, and an `ai_extractions` row for every
+description a driver abandons.
+
+**Decision — one retry, and only for a schema-invalid body.**
+*Why* — a stochastic decoder that produced malformed output once may not do so
+twice; a refused connection will refuse again. The brief asks for exactly one
+retry, and this splits the two cases so the retry is spent where it can help.
+*Alternative* — retry everything twice, the SDK default.
+*Why not* — three failed calls at an 8s timeout is 24 seconds of a stranded
+driver watching a spinner before the picker they could have had immediately.
+*Tradeoff* — a genuinely transient 429 or 503 degrades where a retry would
+have worked. The degraded path is good, so this is cheap.
+
+**Decision — the chat classifier's model call happens in the route, before
+`postMessage`, not inside it.**
+*Why* — `postMessage` runs in a Postgres transaction. A network call inside it
+holds a connection open for the model's latency, and under load that is how a
+connection pool dies.
+*Alternative* — classify inside `classificationsFor`, where the rule table
+runs.
+*Why not* — see above. `PostMessageInput` gained an optional `classifications`
+field instead, and the rule table is still the default when nothing is passed.
+*Tradeoff* — sending a chat message now waits on the model when a key is set.
+Bounded by `LLM_TIMEOUT_MS` and degrading to the rule table, but it is real
+added latency on a hot path, and is listed as a weakness.
+
+**Decision — a keyword baseline ships alongside the model in the evaluation.**
+*Why* — "the model gets 71%" is not a finding without knowing what a stupid
+program gets, and `npm run eval:ai` has to produce real numbers with no API key
+or nobody will ever run it.
+*Alternative* — evaluate the model only, and skip the run when no key is set.
+*Why not* — a report that costs money to produce is a report that gets produced
+once.
+*Tradeoff* — about ninety lines of substring table that is not used in
+production and could rot. It is covered by tests and is explicitly labelled a
+control, not the fallback path, in the report itself.
+
+**Decision — the model is asked for urgency signals that map onto the six
+safety checkboxes, and nothing else.**
+*Why* — the brief lists `urgency_signals` in the output. A free-text list of
+worries would be decoration; a list where every code is one boolean on
+`safetyReportSchema` pre-ticks the form the driver is about to confirm.
+*Alternative* — free-text urgency phrases shown to the dispatcher.
+*Why not* — nothing would consume them, and safety triage would still be blind
+to what the driver said.
+*Tradeoff* — a hazard outside those six cannot be expressed. It ends up in
+`evidence` and nowhere structured.
+
+**Decision — `vehicleContext` is stored and displayed, and consumed by
+nothing.**
+*Why* — fuel type is the obvious future feasibility input (an EV with a
+high-voltage fault needs a certified technician), and wiring a model's guess
+into a hard filter is exactly what invariant 5 forbids.
+*Tradeoff* — a field that looks load-bearing and is not. Named here and in the
+file so nobody wires it in by accident.
+
+### Concurrency
+
+**Scenario — two intake requests finish at the same instant with opposite
+verdicts about the model.**
+*What races* — both write `system_health_states` for `AI_EXTRACTION`.
+*Why dangerous* — mildly: an operator could see NORMAL while the extractor is
+down, or the reverse, for as long as it takes the next request to arrive.
+*How handled* — last write wins, deliberately. There is nothing to reconcile:
+the later request is the more recent truth about the service. `since` moves
+only when the state actually changes, so "how long has it been down" stays
+correct across a burst of same-verdict writes.
+*Assumption relied on* — that intake requests are frequent enough for a stale
+row to be corrected quickly. At demo volumes that is not always true; Phase
+17's health-check loop is what makes it true, and this row is written to be
+picked up by it.
+
+**Scenario — the same `extractionId` is posted to `/jobs/intake` twice.**
+*What races* — two job creations both claiming one extraction row.
+*Why dangerous* — an audit record pointing at the wrong job is worse than one
+pointing at nothing.
+*How handled* — `linkExtractionToJob` reads the row, returns early if it has a
+`jobId`, and its `updateMany` is scoped `WHERE id = ? AND job_id IS NULL`. The
+read-then-write is not atomic, but the conditional update is: the loser updates
+zero rows and the first job keeps the record. Tested.
+*Assumption relied on* — that a lost link is acceptable. It is: the job is
+created either way, and the extraction simply stays unclaimed.
+
+**Scenario — the model call is slow while a Postgres transaction is open.**
+*What races* — nothing, and that is the design. The call is made in the route
+before `postMessage` opens its transaction, so no connection is held across the
+network wait.
+
+### Weaknesses introduced
+
+1. **The live API call has never been made.** There is no API key on this
+   machine. Every branch of the extractor is unit-tested through an injected
+   call, the request shape typechecks against the SDK's own types, and the
+   whole degraded path is proven end to end over HTTP — but nobody has yet seen
+   `output_config: { effort, format }` accepted by the real endpoint, or
+   measured what the model actually scores. `EVALUATION_AI.md` currently
+   reports the keyword control ONLY. Anything said about the model's accuracy
+   today would be invention. This is the first thing to fix with a key in hand,
+   and it matters at any scale.
+2. **The labelled set is hand-written by the same person who wrote the
+   prompt.** That is the most flattering arrangement possible. Read
+   `top1Accuracy` as "can the pipeline recover a fault from a description
+   containing it", never as field accuracy. Replacing `cases.ts` with real call
+   transcripts is the highest-value change available to this harness.
+3. **The second-dispatch figure is a label-derived proxy**, not an observed
+   second callout, so the entropy correlation — currently r = 0.425 on the
+   control, which supports the hedging — is evidence about the model of the
+   world, not about the world. A technician who arrived with the right skill
+   and the wrong part is invisible to it.
+4. **Sending a chat message now waits on a model call** when a key is set, up
+   to `LLM_TIMEOUT_MS`. It degrades correctly, but it is latency on a path that
+   had none. A queue is the right answer, and Phase 17's machinery is the place
+   for it.
+5. **The pipeline is under-confident in the middle of its range.** The
+   control's calibration table shows the 0.5-0.6 bin scoring 0.85 accuracy — a
+   0.315 gap — because the naive Bayes table treats correlated evidence as
+   independent in both directions. It matters less than over-confidence would,
+   but the entropy that drives question selection and capability hedging is
+   computed from these same numbers.
+6. **No cost or rate-limit accounting.** Nothing counts tokens, nothing caps
+   spend per driver, and a retry-loop bug would be discovered on a bill. At
+   demo volume this is fine; at any real volume it is not.
+7. **`vehicleContext` is a display-only field** that looks like a dispatch
+   input. See the decision above.
+8. **The health row is a singleton written by every request.** Two suites
+   asserting on it would race; only one does today.
+
+### Concepts now genuinely in use
+
+- Schema-constrained decoding (`output_config.format`) with an independent Zod
+  validation at the boundary — belt and braces, and the braces are what make
+  `schemaValidRate` a measurement rather than a claim.
+- Expected calibration error over ten confidence bins, and the difference
+  between "this model is accurate" and "this model's 0.7 means 70%".
+- Point-biserial correlation as the test of a design assumption, with a report
+  that prints the verdict invalidating the design if that is how the numbers
+  fall.
+- A control condition, so that an accuracy figure has something to be compared
+  to.
+- Degradation as a first-class path rather than an error path: the fallback IS
+  the Phase 3 product, and the only thing that changes is a banner.
+- Human-in-the-loop confirmation as a database fact (`ai_extractions.accepted`)
+  rather than an assumption — including a measurable correction rate.
+
+### Interview angle
+
+*"Where is the AI in this system, and what happens when it is down?"* — At
+intake and in chat, both edges, both behind a confirm-or-correct screen; with
+it down the driver answers the same structured picker the system has had since
+Phase 3, `GET /health` says `DEGRADED`, and no dispatch decision changes,
+because invariant 10 forbids an external call anywhere the solver can see.
+
+*"How do you know the probabilities mean anything?"* — `npm run eval:ai` runs
+108 labelled descriptions through the real path and reports top-1, top-2, ECE,
+schema-valid rate, fallback rate, and the correlation between hypothesis
+entropy and whether the dispatched capability set would have covered the true
+fault — and the report is written to print "the hedging policy is NOT justified
+by this data" if that correlation comes out at or below zero.
+
+### What broke
+
+- **The SDK is a new dependency in a stack the project calls locked.** Adding
+  `@anthropic-ai/sdk` was a deliberate exception: the alternative was
+  hand-rolling HTTP against an API whose request shape I would then be guessing
+  at. One dependency, one import site (`src/ai/client.ts`), and nothing under
+  `src/engine` can reach it.
+- **`Prisma` cannot be a type-only import when `Prisma.JsonNull` is a value.**
+  Caught by the first typecheck of `src/ai/store.ts`; split into a value import
+  and a type import.
+- **A hand-worked correlation in a test was wrong and the code was right.** I
+  asserted r = 0.7746 for `pearson([1,2,3,4],[0,0,1,1])`; it is 2/sqrt(5) =
+  0.8944. The fix was to the test, and the arithmetic is now written into the
+  comment so the next reader can check it rather than trust it.
+- **`extractSymptoms` could not be tested at all at first.** It called
+  `isLlmConfigured()` directly, which reads config, which has no key under
+  vitest — so every test hit the NOT_CONFIGURED branch and the retry policy was
+  unreachable. Both the call and the configured-check are now parameters with
+  real defaults, which is the same shape the rest of the codebase uses to keep
+  the clock out of pure functions.
+
+### Verification
+
+Full fast suite: **42 files, 613 tests, green** (up 35 across three new files —
+`aiIntake`, `aiEvaluation`, `aiIntakeRoute`). Typecheck and lint clean.
+
+`npm run eval:ai` with no key, reporting the control honestly:
+
+```
+LLM_API_KEY is not set - running the keyword control only.
+| extractor        | cases | predicted | top-1 | top-2 |   ECE | schema valid | fallback | mean entropy | 2nd dispatch | entropy-2nd r |
+| keyword-baseline |   108 |       108 | 59.3% | 76.9% | 0.136 |       100.0% |     0.0% |    2.15 bits |        14.8% |         0.425 |
+```
+
+And the phase's own broken-key check, against the real API over the real
+network — one attempt, no retry, straight to the picker:
+
+```
+LLM_API_KEY=sk-ant-invalid-key ... extractSymptoms(...)
+{ "status": "FALLBACK", "reason": "UNAVAILABLE",
+  "detail": "Error: 401 {\"type\":\"authentication_error\", ... }",
+  "attempts": [ { "validated": false, "latencyMs": 420 } ] }
+```
+
+That proves the client wiring, the error classification and the degradation on
+a real round trip. It does NOT prove the request BODY is valid: a 401 is
+answered before parameters are looked at, so `output_config` is still
+unverified against the live API. See weakness 1.
+
+The degraded path over HTTP with no key set, asserted in
+`tests/aiIntakeRoute.test.ts`: `/jobs/intake/describe` answers 200 with
+`degraded: true`, the failed attempt is written to `ai_extractions` with a null
+`extracted`, `system_health_states` moves to DEGRADED, `GET /health` reports
+it, and `POST /jobs/intake` still creates a job and stores what the driver
+typed.

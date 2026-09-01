@@ -68,6 +68,11 @@ export function selectPlan(planVariantId, overrideReasonCode) {
   );
 }
 
+// Free text in, a proposed form out. Creates nothing — see src/api/intake.ts.
+export function describeSymptoms(text) {
+  return request('POST', '/jobs/intake/describe', { text });
+}
+
 export function createIntake(payload) {
   return request('POST', '/jobs/intake', payload);
 }

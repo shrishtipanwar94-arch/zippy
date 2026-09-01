@@ -53,10 +53,44 @@
     <div data-panel="workspace" hidden>
       <!-- ================= THE REQUEST FLOW — three steps ================= -->
       <div data-panel="request">
+        <!-- STEP 0 — say it in your own words. Optional, and skippable in one
+             tap: the picker underneath is the whole product when the assistant
+             is unavailable, so it can never become the only way in. -->
+        <section data-step="describe" class="mb-3" hidden>
+          <h2 class="h5">Tell us what happened</h2>
+          <p class="text-muted">
+            In your own words, in English or Hindi. Or skip this and answer a few
+            questions instead.
+          </p>
+          <textarea
+            id="describeText"
+            class="form-control mb-2"
+            rows="4"
+            placeholder="Gaadi start nahi ho rahi, dashboard pe battery ka light aa raha hai"
+          ></textarea>
+          <div class="d-grid gap-2">
+            <button class="btn btn-primary" data-action="describe">Continue</button>
+            <button class="btn btn-outline-light" data-action="skip-describe">
+              Skip — I will answer questions
+            </button>
+          </div>
+          <p data-field="describing" class="text-muted mt-2" hidden>Reading what you wrote…</p>
+        </section>
+
         <!-- STEP 1 — what is happening. -->
         <section data-step="symptoms" class="mb-3" hidden>
           <h2 class="h5">What has happened to your vehicle?</h2>
           <p class="text-muted">Pick whichever is closest. We can ask more in a moment.</p>
+          <!-- WHAT THE ASSISTANT READ, for the driver to confirm or correct. It
+               is a sentence above the same buttons they would have used anyway,
+               never a screen of its own: confirming is one tap, and correcting
+               is one tap on a different button. -->
+          <div data-field="ai-note" class="alert alert-info" hidden></div>
+          <!-- INVARIANT 8 — the degraded state is never silent. -->
+          <div data-field="ai-degraded" class="alert alert-warning" hidden>
+            Our assistant is unavailable right now, so we will ask you a few
+            questions instead. This does not delay anyone reaching you.
+          </div>
           <div class="d-grid gap-2" data-field="complaints">
             <button class="btn btn-outline-light btn-lg text-start" data-complaint="WONT_START">
               It will not start

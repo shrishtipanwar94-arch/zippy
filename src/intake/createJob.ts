@@ -6,9 +6,12 @@
 // location a unit can actually be routed to, and the whole thing becomes a
 // job row with an event trail.
 //
-// There is no AI in this path (Phase 3 has none anywhere). The distribution
-// comes from a hand-written rule table. Phase 16 replaces only the INPUT to
-// that table — free text through an LLM extractor — never this structure.
+// THE DISTRIBUTION IS STILL THE RULE TABLE'S, and always will be. Phase 16
+// added a model at the edge, and all it does is fill in the symptom payload
+// this function is handed — which the driver confirms first. By the time
+// execution reaches here there is no difference between a job described in
+// Hindi to a model and a job tapped into the picker, except one column on the
+// symptom report saying which happened.
 //
 // Everything is written in one transaction: a job whose symptom report or
 // first hypothesis is missing is not a partially-created job, it is a job the
@@ -25,6 +28,7 @@ import { nearestZone } from '../domain/geo.js';
 import { priceListInForce } from '../pricing/priceList.js';
 import { settlementPathFor } from '../commit/settlement.js';
 import { logger } from '../infra/logger.js';
+import { linkExtractionToJob } from '../ai/store.js';
 import { appendJobEvent } from './events.js';
 import { recordHypothesis } from './hypothesis.js';
 import { runIntakeTransaction } from './transaction.js';
@@ -47,6 +51,12 @@ export type IntakeRequest = {
   // words and an LLM fills in `symptoms`. Stored verbatim so the extraction can
   // be audited against what was actually said.
   rawText?: string | null;
+  // The AiExtraction this job is the driver's answer to, when they came in
+  // through /jobs/intake/describe. Linking it here — inside the same
+  // transaction that creates the job — is what makes "the driver confirmed
+  // what the model read" a fact in the database rather than an inference from
+  // two timestamps.
+  extractionId?: string | null;
   actor: IntakeActor;
   // The simulator passes simulated time so a seeded replay produces the same
   // night/day triage every run. The API passes the real clock.
@@ -158,11 +168,24 @@ export async function createIntakeJob(db: PrismaClient, request: IntakeRequest):
     await tx.symptomReport.create({
       data: {
         jobId: job.id,
-        source: 'STRUCTURED',
+        // WHERE THE PAYLOAD CAME FROM, which is the only trace of the AI in
+        // this table: an AI_ASSISTED report is one the driver confirmed after
+        // a model filled it in, and its fields are otherwise identical to a
+        // STRUCTURED one. Nothing downstream reads this column — it is there
+        // so that a question about a job's diagnosis can be answered.
+        source: request.extractionId ? 'AI_ASSISTED' : 'STRUCTURED',
         payload: request.symptoms,
         rawText: request.rawText ?? null,
       },
     });
+
+    if (request.extractionId) {
+      await linkExtractionToJob(tx, {
+        extractionId: request.extractionId,
+        jobId: job.id,
+        symptoms: request.symptoms,
+      });
+    }
 
     // The position as reported, kept as its own event as well as job columns:
     // the columns are "where it is now", this is "what we were told, when".
@@ -194,7 +217,10 @@ export async function createIntakeJob(db: PrismaClient, request: IntakeRequest):
     await appendJobEvent(tx, {
       ...common,
       eventType: 'SYMPTOMS_CAPTURED',
-      payload: { primaryComplaint: request.symptoms.primaryComplaint },
+      payload: {
+        primaryComplaint: request.symptoms.primaryComplaint,
+        source: request.extractionId ? 'AI_ASSISTED' : 'STRUCTURED',
+      },
     });
     await appendJobEvent(tx, {
       ...common,

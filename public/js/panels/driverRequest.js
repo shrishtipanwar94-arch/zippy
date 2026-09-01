@@ -15,7 +15,31 @@
 // keeps its own value across a re-render and mirroring six of them on every
 // keystroke would be more code for no gain.
 
-const STEPS = ['symptoms', 'safety', 'location'];
+const STEPS = ['describe', 'symptoms', 'safety', 'location'];
+
+// The complaint buttons carry enum values in data attributes; a driver never
+// reads one. This is the one place the value has to be turned back into words,
+// because the confirmation sentence names what the assistant understood.
+const COMPLAINT_WORDS = {
+  WONT_START: 'it will not start',
+  FLAT_TYRE: 'a flat tyre',
+  LOCKED_OUT: 'you are locked out',
+  WARNING_LIGHT: 'a warning light',
+  NOISE_OR_SMELL: 'an odd noise or smell',
+  STUCK_OR_DAMAGED: 'the car is stuck or damaged',
+  UNKNOWN: 'you are not sure what happened',
+};
+
+// Which checkbox each urgency signal ticks. Mirrors SAFETY_FIELD_BY_SIGNAL in
+// src/ai/extraction.ts; the ids are the schema's field names.
+const SAFETY_CHECKBOX = {
+  BLOCKING_LIVE_LANE: 'blockingLiveLane',
+  SMOKE_OR_BURNING_SMELL: 'smokeOrBurningSmell',
+  FUEL_SMELL: 'fuelSmell',
+  OVERHEATING: 'overheating',
+  DRIVER_ALONE: 'driverAlone',
+  VULNERABLE_PASSENGERS: 'vulnerablePassengers',
+};
 
 export function render(state) {
   const panel = document.querySelector('[data-panel="request"]');
@@ -31,6 +55,12 @@ export function render(state) {
     if (section) section.hidden = state.request.step !== step;
   }
 
+  const describing = panel.querySelector('[data-field="describing"]');
+  if (describing) describing.hidden = !state.request.describing;
+
+  renderAssistantNote(panel, state.request);
+  prefillSafety(panel, state.request);
+
   markSelected(panel, '[data-complaint]', 'complaint', state.request.complaint);
   markSelected(panel, '[data-position]', 'position', state.request.location.roadPosition);
 
@@ -44,6 +74,36 @@ export function render(state) {
   // in its own right (src/domain/safety.ts), and guessing on the driver's
   // behalf is exactly what that rule exists to prevent.
   if (send) send.disabled = !state.request.location.roadPosition || state.request.locating;
+}
+
+// WHAT THE ASSISTANT READ, in a sentence, above the buttons that change it.
+// Two states and never both: it read something, or it was unavailable.
+function renderAssistantNote(panel, request) {
+  const note = panel.querySelector('[data-field="ai-note"]');
+  const degraded = panel.querySelector('[data-field="ai-degraded"]');
+
+  if (degraded) degraded.hidden = !request.aiDegraded;
+  if (!note) return;
+
+  note.hidden = !request.extracted;
+  if (!request.extracted) return;
+
+  const words = COMPLAINT_WORDS[request.extracted.primaryComplaint] ?? 'something is wrong';
+  note.textContent = `We understood: ${words}. If that is not right, pick the correct one below.`;
+}
+
+// The safety boxes, pre-ticked from what the driver already told us — until
+// they open that step and press Continue, after which their answers are the
+// only ones that count and this stops writing to the boxes.
+function prefillSafety(panel, request) {
+  if (request.safetyTouched || request.safetyProposed.length === 0) return;
+
+  for (const [signal, id] of Object.entries(SAFETY_CHECKBOX)) {
+    const box = panel.querySelector(`#${id}`);
+    if (!box) continue;
+    const shouldTick = request.safetyProposed.includes(signal);
+    if (shouldTick && !box.checked) box.checked = true;
+  }
 }
 
 // A chosen option is shown by swapping the outline for a solid fill AND by the

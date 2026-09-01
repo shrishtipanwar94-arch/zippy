@@ -32,6 +32,10 @@ export type PostMessageInput = {
   kind: 'TEXT' | 'LOCATION' | 'PHOTO';
   coordinates?: { lat: number; lng: number };
   photo?: { url: string; sizeBytes: number };
+  // Classifications the caller already computed, because the model that helps
+  // produce them must not be called from inside this transaction. Omitted, the
+  // rule table runs here as it always did.
+  classifications?: Classification[];
   at?: Date;
 };
 
@@ -117,6 +121,11 @@ export async function postMessage(
 function classificationsFor(input: PostMessageInput): Classification[] {
   if (input.coordinates) return [locationShareClassification(input.coordinates)];
   if (input.kind === 'PHOTO') return [];
+  // Already classified by the caller, which is how the Phase 16 model gets a
+  // word in without a network call happening inside this transaction. The rule
+  // table is already folded into that list (src/ai/classifyMessage.ts) — it is
+  // never skipped, only added to.
+  if (input.classifications) return input.classifications;
   return classifyMessage(input.body);
 }
 

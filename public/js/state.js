@@ -81,12 +81,35 @@ const state = {
   // here rather than read out of the form at submit time, so a re-render
   // triggered by an unrelated socket event cannot lose what has been answered.
   request: {
-    step: 'symptoms', // symptoms | safety | location | sent
+    step: 'describe', // describe | symptoms | safety | location | sent
     vehicleId: '',
     complaint: null,
     safety: {},
     location: { lat: null, lng: null, roadPosition: null, landmark: '' },
     locating: false,
+
+    // WHAT THE ASSISTANT READ (Phase 16). All of it is a PROPOSAL: the driver
+    // confirms or corrects every field before anything is sent, and the job is
+    // built from what they submit, never from this.
+    describing: false,
+    // True when the extractor was unavailable and the driver is on the picker.
+    // Drives the banner — a degraded state nobody can see is not a degraded
+    // state, it is a bug (invariant 8).
+    aiDegraded: false,
+    // The id of the AiExtraction row this request is answering, sent back at
+    // intake so "the driver confirmed what the model read" is a fact in the
+    // database rather than an inference from two timestamps.
+    extractionId: null,
+    // The extracted symptom payload, and the driver's own words. The payload is
+    // what gets submitted when the driver leaves the complaint alone.
+    extracted: null,
+    rawText: null,
+    aiEvidence: null,
+    // Safety signals the assistant heard, used to pre-tick the checkboxes on
+    // the safety step — until the driver touches that step, after which their
+    // answers are the only ones that count.
+    safetyProposed: [],
+    safetyTouched: false,
   },
 
   // WHAT THE DRIVER SEES, AS THE SERVER WORDED IT. The whole panel is one

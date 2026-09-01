@@ -107,6 +107,22 @@ const envSchema = z.object({
   // a commercial choice: a weekly cycle would want it higher, and a platform
   // absorbing transfer fees might set it to zero.
   PAYOUT_MINIMUM_PAISE: z.coerce.number().int().min(0).default(50_000),
+
+  // THE LANGUAGE MODEL (Phase 16) — intake only, never a dispatch decision.
+  //
+  // OPTIONAL BY DESIGN, and this is invariant 8 rather than convenience: with
+  // no key the extractor reports itself unavailable, the driver gets the
+  // structured symptom picker, the banner says the system is degraded, and
+  // every other part of dispatch behaves exactly as it did in Phase 3. A
+  // required key would make an external service a startup dependency of a
+  // system whose whole claim is that no external service sits on the decision
+  // path (invariant 10).
+  LLM_API_KEY: z.string().min(1).optional(),
+  LLM_MODEL: z.string().min(1).default('claude-opus-5'),
+  // Short on purpose. A driver standing at the roadside waits on this call, so
+  // a slow answer is worth less than a fast picker: past this we give up and
+  // degrade rather than hold the screen.
+  LLM_TIMEOUT_MS: z.coerce.number().int().positive().default(8_000),
 });
 
 function loadConfig() {

@@ -20,6 +20,7 @@ import { prisma } from '../infra/db.js';
 import { prismaBase } from '../infra/prismaBase.js';
 import { authenticate, requirePermission } from './middleware/authenticate.js';
 import { postMessage, markDeliveriesSent } from '../chat/messages.js';
+import { classifyMessageWithAi } from '../ai/classifyMessage.js';
 import { confirmPromotion } from '../commit/eventPromotions.js';
 import { confirmerFor, promptFor } from '../domain/promotionPolicy.js';
 import { handleTrigger } from '../commit/redispatch.js';
@@ -136,6 +137,18 @@ chatRouter.post(
     }
     const body = postSchema.parse(req.body ?? {});
 
+    // CLASSIFIED BEFORE THE WRITE, NEVER INSIDE IT. The rule table runs either
+    // way; the model adds what a phrase list cannot catch, and returns nothing
+    // extra when it is unavailable. It is awaited here rather than after the
+    // commit because the promotions have to be part of the same message's
+    // transaction — but it is deliberately OUTSIDE it, because a network call
+    // inside a Postgres transaction holds a connection open on somebody else's
+    // latency. A structured location tap and a photo are not text and skip it.
+    const classified =
+      body.kind === 'TEXT' && !body.coordinates
+        ? await classifyMessageWithAi(body.body)
+        : null;
+
     const posted = await postMessage(prismaBase, {
       jobId,
       senderRole: auth.role,
@@ -143,6 +156,7 @@ chatRouter.post(
       body: body.body,
       kind: body.kind,
       coordinates: body.coordinates,
+      classifications: classified?.classifications,
       photo: body.photoUrl
         ? { url: body.photoUrl, sizeBytes: Buffer.byteLength(body.photoUrl, 'utf8') }
         : undefined,

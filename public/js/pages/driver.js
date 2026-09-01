@@ -69,6 +69,59 @@ document.querySelector('[data-action="login"]').addEventListener('click', async 
   render();
 });
 
+// --- step 0: say it in your own words (Phase 16) ------------------------------
+//
+// Two buttons and one rule between them: NOTHING here can stop the driver
+// getting to the picker. A failed call, an unavailable model, a driver who
+// would rather tap — all three land on the same next screen, one with a banner
+// saying why.
+
+document.querySelector('[data-action="skip-describe"]').addEventListener('click', () => {
+  setRequestField({ step: 'symptoms' });
+  render();
+});
+
+document.querySelector('[data-action="describe"]').addEventListener('click', async () => {
+  const text = value('#describeText');
+  if (!text) {
+    setRequestField({ step: 'symptoms' });
+    render();
+    return;
+  }
+
+  setRequestField({ describing: true });
+  render();
+
+  try {
+    const read = await api.describeSymptoms(text);
+    if (read.degraded) {
+      setRequestField({ describing: false, aiDegraded: true, step: 'symptoms', rawText: text });
+    } else {
+      setRequestField({
+        describing: false,
+        aiDegraded: false,
+        step: 'symptoms',
+        rawText: text,
+        extractionId: read.extractionId,
+        extracted: read.symptoms,
+        aiEvidence: read.evidence,
+        // The complaint is PRE-SELECTED, not applied: the driver is looking at
+        // the same seven buttons and one of them is already lit. Correcting it
+        // is one tap on another button.
+        complaint: read.symptoms.primaryComplaint,
+        safetyProposed: read.hypothesis?.urgencySignals ?? [],
+      });
+    }
+    setError(null);
+  } catch (error) {
+    // A failed call is a degraded assistant, not a failed request for help.
+    setRequestField({ describing: false, aiDegraded: true, step: 'symptoms', rawText: text });
+    setError(null);
+    console.warn('describe failed', error);
+  }
+  render();
+});
+
 // --- step 1: what happened ---------------------------------------------------
 
 document.querySelector('[data-field="complaints"]').addEventListener('click', (clicked) => {
@@ -81,7 +134,9 @@ document.querySelector('[data-field="complaints"]').addEventListener('click', (c
 // --- step 2: are you safe ----------------------------------------------------
 
 document.querySelector('[data-action="to-location"]').addEventListener('click', () => {
-  setRequestField({ safety: readSafetyAnswers(), step: 'location' });
+  // `safetyTouched` freezes the pre-ticking: from here the boxes are the
+  // driver's answers, and a re-render must not put back one they cleared.
+  setRequestField({ safety: readSafetyAnswers(), safetyTouched: true, step: 'location' });
   render();
 });
 
@@ -126,7 +181,7 @@ document.querySelector('[data-action="locate"]').addEventListener('click', () =>
 
 // Both Back buttons, one listener. The step order lives in one array so there
 // is one definition of what "back" means.
-const STEP_ORDER = ['symptoms', 'safety', 'location'];
+const STEP_ORDER = ['describe', 'symptoms', 'safety', 'location'];
 for (const button of document.querySelectorAll('[data-action="back"]')) {
   button.addEventListener('click', () => {
     const index = STEP_ORDER.indexOf(getState().request.step);
@@ -145,7 +200,16 @@ document.querySelector('[data-action="report"]').addEventListener('click', async
     // silently ignored field.
     const created = await api.createIntake({
       vehicleId: value('#vehicleId'),
-      symptoms: { primaryComplaint: request.complaint ?? 'UNKNOWN' },
+      // WHAT THE DRIVER IS SUBMITTING, which is the extracted form with their
+      // own complaint on top — the button they left lit, or the one they
+      // corrected it to. When they never described anything, `extracted` is
+      // null and this is exactly the Phase 3 payload.
+      symptoms: {
+        ...(request.extracted ?? {}),
+        primaryComplaint: request.complaint ?? 'UNKNOWN',
+      },
+      extractionId: request.extractionId ?? undefined,
+      rawText: request.rawText ?? undefined,
       location: {
         lat: Number(value('#lat')),
         lng: Number(value('#lng')),
