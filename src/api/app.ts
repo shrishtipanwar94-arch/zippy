@@ -14,6 +14,7 @@ import { solveRouter } from './solve.js';
 import { diagnosisRouter } from './diagnosis.js';
 import { actionsRouter } from './actions.js';
 import { technicianRouter } from './technician.js';
+import { stockRouter } from './stock.js';
 import { driverRouter } from './driver.js';
 import { chatRouter } from './chat.js';
 import { estimatesRouter } from './estimates.js';
@@ -81,6 +82,7 @@ export function createApp(): Express {
   app.use(diagnosisRouter);
   app.use(actionsRouter);
   app.use(technicianRouter);
+  app.use(stockRouter);
   app.use(driverRouter);
   app.use(chatRouter);
   app.use(estimatesRouter);

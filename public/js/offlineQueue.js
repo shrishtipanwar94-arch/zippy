@@ -89,8 +89,8 @@ function nextSequence() {
   return next;
 }
 
-// One tap. Called by the ladder buttons and by the completion-code form; both
-// go through here, never straight to the API.
+// One tap. Called by the ladder buttons, the completion-code form and the
+// parts declaration; all of them go through here, never straight to the API.
 export function enqueue(action) {
   const queue = read();
   queue.push({
@@ -100,8 +100,19 @@ export function enqueue(action) {
     // stores both and the gap between them IS the offline period.
     eventTime: new Date().toISOString(),
     jobId: action.jobId,
+    // WHICH KIND OF TAP. 'LADDER' moves the job one rung; 'PARTS' declares
+    // what was fitted (Phase 18). They are in ONE queue rather than two
+    // because they need the same guarantee and the same ordering — parts
+    // fitted before the job was finished must reach the server that way round
+    // — and because the key minted above is what makes both of them safe to
+    // send twice. On the server the key is a technician_actions row for a
+    // ladder tap and a stock_movements id for a parts tap; either way, the
+    // second arrival changes nothing.
+    kind: action.kind ?? 'LADDER',
     step: action.step,
     completionCode: action.completionCode,
+    // Parts taps only: [{ partId, quantity }].
+    lines: action.lines,
     // What the server said, once it has said anything. Kept on the item so the
     // page can show the answer to the tap the technician actually made.
     result: null,
@@ -157,7 +168,10 @@ let results = [];
 
 function recordResult(item, response) {
   results = [
-    { step: item.step, outcome: response.outcome, detail: response.detail },
+    // A parts tap has no rung, so it is labelled by its kind. One field either
+    // way, because the panel is showing the technician what happened to a tap
+    // rather than reasoning about what sort of tap it was.
+    { step: item.step ?? item.kind, outcome: response.outcome, detail: response.detail },
     ...results,
   ].slice(0, RESULT_HISTORY);
 }

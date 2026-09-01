@@ -6,9 +6,12 @@
 // decremented. The socket delivers job events, which is what makes the ladder
 // and the trail current without polling.
 //
-// NO BUTTON CALLS THE API DIRECTLY except the offer response. Ladder actions
-// and the completion code go into the offline queue and drain from there, so
-// the offline path runs on every tap instead of only when the signal drops.
+// NO BUTTON CALLS THE API DIRECTLY except the offer response and the van count.
+// Ladder actions, the completion code and the parts declaration go into the
+// offline queue and drain from there, so the offline path runs on every tap
+// instead of only when the signal drops. The two exceptions are both online-
+// only for the same kind of reason: an offer expires in forty-five seconds,
+// and a count of the van is a thing somebody is doing while standing still.
 
 import {
   getState,
@@ -20,6 +23,8 @@ import {
   setJobs,
   setOutbox,
   setSession,
+  setVanCount,
+  setVanStock,
   setWork,
   tickClock,
 } from '../state.js';
@@ -29,6 +34,7 @@ import { connect, subscribeToJob } from '../socket.js';
 import { render as renderSession } from '../panels/session.js';
 import { render as renderOffers } from '../panels/technicianOffer.js';
 import { render as renderLadder, renderOutbox } from '../panels/technicianLadder.js';
+import { render as renderVanStock } from '../panels/vanStock.js';
 import { render as renderJobDetail } from '../panels/jobDetail.js';
 import { loadChat, registerChatPanels, wireChatActions } from '../chatActions.js';
 
@@ -36,6 +42,7 @@ registerPanel(renderSession);
 registerPanel(renderOutbox);
 registerPanel(renderOffers);
 registerPanel(renderLadder);
+registerPanel(renderVanStock);
 registerPanel(renderJobDetail);
 registerChatPanels();
 wireChatActions();
@@ -50,14 +57,27 @@ function syncOutbox() {
   setOutbox({ pending: pending(), results: recentResults(), online: navigator.onLine });
 }
 
+// ONE QUEUE, TWO KINDS OF TAP. A ladder tap moves the job a rung; a parts tap
+// declares what was fitted. Which endpoint an item goes to is decided here,
+// where the API lives, rather than inside the queue — the queue's job is the
+// key, the ordering and the retry, and it has never needed to know what any of
+// its items mean.
+function sendQueuedAction(action) {
+  if (action.kind === 'PARTS') return api.declarePartsUsed(action);
+  return api.sendTechnicianAction(action);
+}
+
 configureQueue({
-  send: api.sendTechnicianAction,
+  send: sendQueuedAction,
   onChange: () => {
     syncOutbox();
     render();
     // An applied action changed the job on the server; re-read the board so
     // the ladder shows the rung that is actually next.
     refreshWork();
+    // And it may have changed the van: a parts declaration decrements a shelf,
+    // and the screen showing that shelf is right here.
+    refreshVanStock();
   },
 });
 
@@ -83,6 +103,24 @@ async function refreshWork() {
   render();
 }
 
+// The van, read separately from the board. It changes for reasons that are
+// nothing to do with the job in hand — a depot run, a count taken at the start
+// of the shift — so it is its own read rather than another field on
+// /technician/work.
+async function refreshVanStock() {
+  if (!getState().token) return;
+  try {
+    setVanStock(await api.getVanStock());
+  } catch (error) {
+    // A technician with no van crewed to them gets a 409. That is a real state
+    // and not an error worth a red banner across the page — the panel simply
+    // has nothing to show.
+    if (error.status !== 409) setError(error.message);
+    setVanStock(null);
+  }
+  render();
+}
+
 onJobEvent(() => refreshWork());
 
 document.querySelector('[data-action="login"]').addEventListener('click', async () => {
@@ -93,6 +131,7 @@ document.querySelector('[data-action="login"]').addEventListener('click', async 
     syncOutbox();
     watchConnectivity();
     await refreshWork();
+    await refreshVanStock();
   } catch (error) {
     setError(error.message);
   }
@@ -154,6 +193,49 @@ document.querySelector('[data-panel="ladder"]').addEventListener('click', async 
     setError(error.message);
   }
   await refreshWork();
+});
+
+// THE VAN. Two actions and one input, delegated because the list is rebuilt on
+// every render.
+document.querySelector('[data-panel="van-stock"]').addEventListener('input', (typed) => {
+  const box = typed.target.closest('input[data-count]');
+  if (!box) return;
+  // Straight into state on every keystroke. The panel re-renders once a second
+  // and would otherwise overwrite what is being typed.
+  setVanCount(box.dataset.count, box.value);
+});
+
+document.querySelector('[data-panel="van-stock"]').addEventListener('click', async (clicked) => {
+  const fitted = clicked.target.closest('button[data-fitted]');
+  if (fitted) {
+    const job = getState().activeJobId ?? getState().work.jobs[0]?.jobId;
+    if (!job) return;
+    // Enqueued, never sent straight. The queue mints the key that makes a
+    // double tap decrement once.
+    enqueue({ kind: 'PARTS', jobId: job, lines: [{ partId: fitted.dataset.fitted, quantity: 1 }] });
+    return;
+  }
+
+  const confirm = clicked.target.closest('button[data-action="confirm-count"]');
+  if (!confirm) return;
+  const state = getState();
+  const counted = (state.van.stock?.lines ?? []).map((line) => ({
+    partId: line.partId,
+    // An empty or unparseable box means "leave this one as it is", which is
+    // what sending the current quantity says: the count agreed, and the shelf
+    // is freshly confirmed.
+    quantity: Number.parseInt(state.van.counts[line.partId] ?? String(line.quantity), 10) || 0,
+  }));
+  if (counted.length === 0) return;
+  try {
+    // Minted here, at the tap, for the same reason the queue mints its key at
+    // the tap: a double press must record one count, not two.
+    await api.confirmVanStock(crypto.randomUUID(), counted);
+    setError(null);
+  } catch (error) {
+    setError(error.message);
+  }
+  await refreshVanStock();
 });
 
 // One second is fine: the countdown is whole seconds, and deriving it from the

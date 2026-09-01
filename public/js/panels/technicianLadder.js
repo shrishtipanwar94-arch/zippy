@@ -26,6 +26,9 @@ const BUTTON_LABEL = {
   DIAGNOSING: 'Start diagnosing',
   WORKING: 'Start work',
   COMPLETE: 'Finish job',
+  // Not a rung. A parts declaration shares the offline queue with the ladder,
+  // so its answer comes back through the same results list and needs a word.
+  PARTS: 'Parts fitted',
 };
 
 const STATUS_LABEL = {

@@ -60,6 +60,15 @@ export type Resource =
   // say yes.
   | 'estimate'
   | 'estimateApproval'
+  // Parts (Phase 18), and two resources rather than one because they answer
+  // two different questions. `vanStock` is "my own van" — a technician reads
+  // it and confirms a count in it. `fleetStock` is "any van", which is an
+  // operator's view of the whole fleet and is not something the person sitting
+  // in one of those vans needs. Splitting them is what keeps /units/:id/stock
+  // from having to work out whether the caller happens to be crewed to the
+  // unit they asked about.
+  | 'vanStock'
+  | 'fleetStock'
   | 'actionRequest'
   // Taking one of the solver's competing plans. Its own resource because it is
   // the one console action that WRITES — everything else the console does is a
@@ -100,6 +109,8 @@ const PERMISSIONS: PermissionTable = {
     eventPromotion: ['read', 'update'],
     // Prices what they found; cannot approve it.
     estimate: ['read', 'create'],
+    // What is in their van, and the count that makes it believable again.
+    vanStock: ['read', 'update'],
   },
   DISPATCHER: {
     job: ['read', 'create', 'update', 'delete'],
@@ -129,12 +140,18 @@ const PERMISSIONS: PermissionTable = {
     driver: ['read'],
     user: ['read'],
     auditLog: ['read'],
+    // Any van's parts, and how stale the count is. Read-only: a dispatcher who
+    // could correct a stock level from a desk would be guessing at what is in
+    // a vehicle they cannot see, and the whole point of Phase 18 is that only
+    // the person who looked may say.
+    fleetStock: ['read'],
   },
   FLEET_MANAGER: {
     job: ['read'],
     driver: ['read'],
     unit: ['read'],
     technician: ['read'],
+    fleetStock: ['read'],
   },
 };
 

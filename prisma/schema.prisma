@@ -503,20 +503,21 @@ model Unit {
   createdAt           DateTime   @default(now()) @map("created_at")
   updatedAt           DateTime   @updatedAt @map("updated_at")
 
-  zone              Zone                @relation(fields: [zoneId], references: [id])
-  currentTechnician Technician?         @relation("UnitCurrentTechnician", fields: [currentTechnicianId], references: [id])
-  capabilities      UnitCapability[]
-  statusHistory     UnitStatusHistory[]
+  zone               Zone                @relation(fields: [zoneId], references: [id])
+  currentTechnician  Technician?         @relation("UnitCurrentTechnician", fields: [currentTechnicianId], references: [id])
+  capabilities       UnitCapability[]
+  statusHistory      UnitStatusHistory[]
   // One active job per unit (invariant 7). This is a list only because Prisma
   // models the inverse of a nullable FK as a list; it holds 0 or 1 rows.
-  assignedJobs      Job[]               @relation("JobAssignedUnit")
-  holds             UnitHold[]
-  stock             UnitStock[]
-  stockMovements    StockMovement[]
-  restockOrders     RestockOrder[]
-  etaEstimates      EtaEstimate[]
-  dispatchOptions   DispatchOption[]
-  dispatchOffers    DispatchOffer[]
+  assignedJobs       Job[]               @relation("JobAssignedUnit")
+  holds              UnitHold[]
+  stock              UnitStock[]
+  stockMovements     StockMovement[]
+  stockConfirmations StockConfirmation[]
+  restockOrders      RestockOrder[]
+  etaEstimates       EtaEstimate[]
+  dispatchOptions    DispatchOption[]
+  dispatchOffers     DispatchOffer[]
 
   @@index([zoneId, status])
   @@map("units")
@@ -1057,57 +1058,100 @@ model Depot {
   @@map("depots")
 }
 
+// WHAT WE BELIEVE IS ON THIS VAN, and how long ago somebody looked.
+//
+// `quantity` is a CACHE of the movement ledger, not an independent fact:
+// starting_qty + SUM(stock_movements.delta) = quantity, for every row. The
+// cache exists because a dispatch decision cannot afford to sum a ledger, and
+// the reconciliation query in the Phase 18 check is what proves it has not
+// drifted.
+//
+// `confirmedAt` is null until a technician has counted the shelf. Age is what
+// turns it into VERIFIED / AGEING / UNVERIFIED — see
+// src/domain/stockConfidence.ts. Consuming a part does NOT refresh it: using
+// one belt is not the same as having counted them.
 model UnitStock {
-  id        String   @id @default(cuid())
-  unitId    String   @map("unit_id")
-  partId    String   @map("part_id")
-  quantity  Int      @default(0)
-  version   Int      @default(0)
-  updatedAt DateTime @updatedAt @map("updated_at")
+  id          String    @id @default(cuid())
+  unitId      String    @map("unit_id")
+  partId      String    @map("part_id")
+  quantity    Int       @default(0)
+  startingQty Int       @default(0) @map("starting_qty")
+  confirmedAt DateTime? @map("confirmed_at")
+  version     Int       @default(0)
+  updatedAt   DateTime  @updatedAt @map("updated_at")
 
-  unit Unit @relation(fields: [unitId], references: [id], onDelete: Cascade)
-  part Part @relation(fields: [partId], references: [id])
+  unit      Unit            @relation(fields: [unitId], references: [id], onDelete: Cascade)
+  part      Part            @relation(fields: [partId], references: [id])
+  movements StockMovement[]
 
   @@unique([unitId, partId])
   @@index([partId])
   @@map("unit_stock")
 }
 
-// Ledger of stock changes. `reason` is CONSUMED_ON_JOB | RESTOCK | ADJUSTMENT |
-// TRANSFER. Carries event_time / received_at because a technician can confirm
-// a part used while offline and it reaches us later.
+// THE STOCK LEDGER. Append-only, enforced by a database trigger, exactly like
+// job_events and ledger_entries: a wrong movement is corrected with an
+// ADJUSTED row, never by editing one.
+//
+// `reason` is CONSUMED | REPLENISHED | ADJUSTED. There is deliberately no
+// TRANSFER: parts do not move between vans (see src/commit/stockMovements.ts
+// for why that is a cliff rather than a feature).
+//
+// `id` HAS NO DEFAULT, and that is the whole idempotency story. The phone
+// mints the id at the moment of the tap and every retry carries the same one,
+// so a double tap or an offline replay collides on the primary key and
+// decrements once. A server-minted id would be a new id on every retry.
+//
+// Carries event_time / received_at because a technician can declare a part
+// used while offline and it reaches us minutes later.
 model StockMovement {
-  id         String   @id @default(cuid())
-  unitId     String?  @map("unit_id")
-  depotId    String?  @map("depot_id")
-  partId     String   @map("part_id")
-  delta      Int
-  reason     String
-  jobId      String?  @map("job_id")
-  refId      String?  @map("ref_id")
-  eventTime  DateTime @default(now()) @map("event_time")
-  receivedAt DateTime @default(now()) @map("received_at")
+  id           String   @id
+  unitId       String?  @map("unit_id")
+  unitStockId  String?  @map("unit_stock_id")
+  depotId      String?  @map("depot_id")
+  partId       String   @map("part_id")
+  delta        Int
+  reason       String
+  jobId        String?  @map("job_id")
+  technicianId String?  @map("technician_id")
+  refId        String?  @map("ref_id")
+  eventTime    DateTime @default(now()) @map("event_time")
+  receivedAt   DateTime @default(now()) @map("received_at")
 
-  unit  Unit?  @relation(fields: [unitId], references: [id])
-  depot Depot? @relation(fields: [depotId], references: [id])
-  part  Part   @relation(fields: [partId], references: [id])
+  unit      Unit?      @relation(fields: [unitId], references: [id])
+  unitStock UnitStock? @relation(fields: [unitStockId], references: [id], onDelete: Restrict)
+  depot     Depot?     @relation(fields: [depotId], references: [id])
+  part      Part       @relation(fields: [partId], references: [id])
 
   @@index([partId, eventTime])
+  @@index([unitStockId])
+  @@index([jobId])
   @@map("stock_movements")
 }
 
+// A TECHNICIAN SAYING WHAT THEY COUNTED, timestamped. Append-only for the same
+// reason as the movements: it is the evidence behind a confidence level, and a
+// confidence level nobody can audit is a number we made up.
+//
+// `jobId` is optional because most confirmations are not about a job — a
+// technician counts the van at the start of a shift. `id` has no default: like
+// a movement, it is derived from the id the phone minted for the tap, so a
+// replayed confirmation is one row.
 model StockConfirmation {
-  id           String   @id @default(cuid())
-  jobId        String   @map("job_id")
+  id           String   @id
+  unitId       String   @map("unit_id")
+  jobId        String?  @map("job_id")
   technicianId String   @map("technician_id")
   partId       String   @map("part_id")
   quantity     Int
   confirmedAt  DateTime @default(now()) @map("confirmed_at")
 
-  job  Job  @relation(fields: [jobId], references: [id], onDelete: Cascade)
+  unit Unit @relation(fields: [unitId], references: [id], onDelete: Cascade)
+  job  Job? @relation(fields: [jobId], references: [id], onDelete: Cascade)
   part Part @relation(fields: [partId], references: [id])
 
   @@index([jobId])
+  @@index([unitId, confirmedAt])
   @@map("stock_confirmations")
 }
 
@@ -1126,6 +1170,7 @@ model RestockOrder {
   part  Part   @relation(fields: [partId], references: [id])
 
   @@index([partId])
+  @@index([unitId, status])
   @@map("restock_orders")
 }
 

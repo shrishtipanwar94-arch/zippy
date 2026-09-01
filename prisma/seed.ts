@@ -22,10 +22,12 @@ import { seedTenants } from './seed/tenants.js';
 import { seedTechnicians } from './seed/technicians.js';
 import { seedFleet } from './seed/fleet.js';
 import { seedWorkshops } from './seed/workshops.js';
+import { seedDepots } from './seed/depots.js';
 import { seedDrivers } from './seed/drivers.js';
 import { seedIntakeQuestions } from './seed/intakeQuestions.js';
 import { seedCrews } from './seed/crews.js';
 import { seedLedgerAccounts } from './seed/ledgerAccounts.js';
+import { seedVanCounts } from './seed/vanCounts.js';
 
 async function seed(): Promise<void> {
   await seedZones(prisma);
@@ -36,23 +38,26 @@ async function seed(): Promise<void> {
   await seedTechnicians(prisma); // needs zones + capabilities
   await seedFleet(prisma); // needs zones + capabilities + parts
   await seedWorkshops(prisma); // needs zones
+  await seedDepots(prisma); // needs zones
   await seedDrivers(prisma); // needs tenants
   await seedIntakeQuestions(prisma); // projection of src/domain/questions.ts
   await seedCrews(prisma); // needs units + technicians
   await seedLedgerAccounts(prisma); // the platform's three; technician accounts are made on first use
+  await seedVanCounts(prisma); // needs unit stock; stamps how long ago each van was counted
 
-  const [zones, units, technicians, workshops, evCertified, crewed] = await Promise.all([
+  const [zones, units, technicians, workshops, depots, evCertified, crewed] = await Promise.all([
     prisma.zone.count(),
     prisma.unit.count(),
     prisma.technician.count(),
     prisma.workshop.count(),
+    prisma.depot.count(),
     prisma.technicianCapability.count({ where: { capability: { code: 'EV_HV_CERTIFICATION' } } }),
     prisma.unit.count({ where: { currentTechnicianId: { not: null } } }),
   ]);
 
   console.log(
     `seeded: ${zones} zones, ${units} units, ${technicians} technicians, ` +
-      `${workshops} workshops, ${evCertified} EV-certified technicians, ` +
+      `${workshops} workshops, ${depots} depots, ${evCertified} EV-certified technicians, ` +
       `${crewed}/${units} units crewed`,
   );
 }

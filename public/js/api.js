@@ -147,6 +147,36 @@ export function sendTechnicianAction(action) {
   });
 }
 
+// --- the van, and what came out of it (Phase 18) -----------------------------
+
+export function getVanStock() {
+  return request('GET', '/technician/stock');
+}
+
+// A COUNT, not a correction. `confirmationId` is minted by the caller at the
+// tap, so sending the same count twice records one confirmation rather than
+// two — see src/commit/stockConfirmations.ts.
+export function confirmVanStock(confirmationId, counted) {
+  return request('POST', '/technician/stock/confirm', {
+    confirmationId,
+    counted,
+    confirmedAt: new Date().toISOString(),
+  });
+}
+
+// WHAT WAS FITTED. Called ONLY by the offline queue's drain, exactly like a
+// ladder action: the declaration id IS the queue item's key, minted at the tap
+// and unchanged by every retry, and each line's stock movement id derives from
+// it. That is what makes a double tap, or a replay off the queue, decrement
+// once.
+export function declarePartsUsed(action) {
+  return request('POST', `/jobs/${action.jobId}/parts-used`, {
+    declarationId: action.idempotencyKey,
+    lines: action.lines,
+    eventTime: action.eventTime,
+  });
+}
+
 export function submitDiagnosis(jobId, primaryComplaint, note) {
   return request('POST', `/jobs/${jobId}/diagnosis`, {
     symptoms: { primaryComplaint },

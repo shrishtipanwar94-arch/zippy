@@ -104,13 +104,26 @@ export async function seedFleet(prisma: PrismaClient): Promise<void> {
         });
       }
 
+      // STOCK IS SET ON CREATE AND NEVER ON UPDATE, from Phase 18 onward.
+      // `quantity` is no longer a fixture value — it is the running total of
+      // an append-only ledger (starting_qty + SUM(stock_movements.delta)), and
+      // a re-seed that reset it would silently break that reconciliation for
+      // every van that had done a job. Re-running the seed is still safe; it
+      // just leaves the vans where the day left them, which is the truthful
+      // answer. Put parts back with a REPLENISHED movement, not with a seed.
       const stock = stockFor(plan.kind, withinKind);
       for (const [sku, quantity] of Object.entries(stock)) {
         const pId = partId(sku);
         await prisma.unitStock.upsert({
           where: { unitId_partId: { unitId, partId: pId } },
-          update: { quantity },
-          create: { id: `stock-${number}-${sku.toLowerCase()}`, unitId, partId: pId, quantity },
+          update: {},
+          create: {
+            id: `stock-${number}-${sku.toLowerCase()}`,
+            unitId,
+            partId: pId,
+            quantity,
+            startingQty: quantity,
+          },
         });
       }
 

@@ -149,6 +149,14 @@ const state = {
 
   // The technician's board: open offers and the job in hand.
   work: { offers: [], jobs: [] },
+
+  // THE VAN (Phase 18). `stock` is the server's answer — quantities and how
+  // long ago each shelf was counted. `counts` is what the technician has typed
+  // into the count boxes and not yet confirmed, held here for exactly the
+  // reason planSelection.reasonDraft is: this page re-renders every second on
+  // the offer countdown, and a value that lives only in the DOM is discarded
+  // by the next render.
+  van: { stock: null, counts: {} },
   // Re-read every second so an offer countdown ticks. The countdown is derived
   // from `expiresAt` and this, never decremented — a decremented counter
   // drifts whenever the tab is backgrounded.
@@ -377,6 +385,19 @@ export function setDriverView(view) {
 
 export function setWork(work) {
   state.work = work;
+}
+
+export function setVanStock(stock) {
+  state.van.stock = stock;
+  // Every count box goes back to what the server just said. A number the
+  // technician typed before a refresh is not a count they have committed to,
+  // and carrying it over the top of fresh data is how a stale figure gets
+  // confirmed as if somebody had looked.
+  state.van.counts = {};
+}
+
+export function setVanCount(partId, value) {
+  state.van.counts = { ...state.van.counts, [partId]: value };
 }
 
 export function tickClock() {

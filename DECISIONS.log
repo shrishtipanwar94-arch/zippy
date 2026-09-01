@@ -6,3 +6,202 @@ each checkpoint (end of Phases 4, 9, 13, 17, 22).
 Cleared at the Phase 17 checkpoint — Phases 14 through 17 now live in
 INTERVIEW.md (§9 concurrency, §13 decisions, §14 questions, §15 weaknesses,
 §17 claims, §19 state) and in CHAOS_TESTING.md.
+
+## Phase 18 — Parts and inventory / 2026-09-01 / phase 18: parts
+
+### Built
+Migration `20260902000000_phase18_parts`: `unit_stock.starting_qty`,
+`unit_stock.confirmed_at`, `stock_movements.unit_stock_id` +
+`stock_movements.technician_id`, `stock_confirmations.unit_id` with `job_id`
+made nullable, append-only triggers on `stock_movements` and
+`stock_confirmations` (reusing `zippy_reject_mutation()` from Phase 1), and a
+backfill of `starting_qty` from `quantity` so the reconciliation holds from the
+first run.
+
+Config: `STOCK_VERIFIED_MAX_AGE_MINUTES` (120), `STOCK_AGEING_MAX_AGE_MINUTES`
+(480).
+
+- `src/domain/stockConfidence.ts` — `stockConfidence()`, `minutesSince()`. Pure,
+  no imports, thresholds passed in.
+- `src/commit/stockMovements.ts` — `applyStockMovement()`. The only place a van's
+  quantity changes.
+- `src/commit/partsConsumption.ts` — `declareConsumption()`. Writes a
+  `PARTS_CONSUMED` JobEvent.
+- `src/commit/stockConfirmations.ts` — `confirmVanStock()`.
+- `src/commit/restockOrders.ts` — `raiseRestockIfEmpty()`.
+- `src/commit/vanStock.ts` — `readVanStock()`, the one read.
+- `src/api/stock.ts` — `GET /technician/stock`, `POST /technician/stock/confirm`,
+  `POST /jobs/:id/parts-used`, `GET /units/:id/stock`.
+- `src/auth/permissions.ts` — new resources `vanStock` (TECHNICIAN read+update)
+  and `fleetStock` (DISPATCHER, FLEET_MANAGER read).
+- Seed: `prisma/seed/depots.ts` (3 depots), `prisma/seed/vanCounts.ts` (staggers
+  each van across the three confidence bands, with a StockConfirmation row
+  behind each stamp). `prisma/seed/fleet.ts` no longer rewrites `quantity` on
+  re-seed.
+- Frontend: `public/js/panels/vanStock.js`, the van panel on technician.html,
+  `van: { stock, counts }` in state.js, and a `kind` on offline-queue items so a
+  parts declaration rides the same queue as a ladder tap.
+- `tests/stock.test.ts` — 17 tests, including the phase's reconciliation query.
+
+### Decisions
+
+Decision: `stock_movements.id` has no default; the client mints it.
+Why: the phase asks for consumption idempotent on movement id. A client-minted
+id is the same id on every retry, so a double tap collides on the primary key.
+Alternative: a separate `idempotency_key` column with a unique index.
+Why not: two identifiers for one thing, and the PK is already unique.
+Tradeoff: the API contract now requires callers to generate ids, and a caller
+that generates a fresh one per attempt gets no protection at all.
+
+Decision: one declaration id per tap; each line derives
+`<declarationId>:<partId>`.
+Why: the phone mints one uuid, exactly as the offline queue already does, and a
+three-part declaration replays as one act.
+Alternative: an id per line from the client.
+Why not: three uuids per tap, and a partial replay that no client produces.
+Tradeoff: a line REJECTED on the first attempt cannot be reproduced on replay,
+because a rejection writes nothing. The client re-reads the van, which is where
+the real state is anyway.
+
+Decision: `quantity` is a cache of the ledger, with `starting_qty` as the
+anchor: `starting_qty + SUM(delta) = quantity`.
+Why: it makes the number checkable rather than trusted, which is the property
+the phase is graded on, and a dispatch decision cannot afford to sum a ledger.
+Alternative: derive the quantity on every read.
+Why not: Phase 19 calls this inside candidate generation, per option.
+Tradeoff: two places hold the number and they can drift. The reconciliation
+query is the test that they have not.
+
+Decision: consumption does NOT refresh `confirmed_at`.
+Why: fitting a belt is not counting the belts. If it refreshed, every busy van
+would read VERIFIED without anybody having looked in it, which inverts the whole
+point of the phase.
+Alternative: treat a declaration as evidence about the remaining count.
+Why not: it is evidence about the part that left, not about what is left.
+Tradeoff: a van working all day drifts to UNVERIFIED, which from Phase 19 makes
+it a worse candidate. That is the intended pressure — it is what makes counting
+the van worth a technician's minute.
+
+Decision: a count that disagrees writes an ADJUSTED movement, never an
+overwrite.
+Why: the ledger has to keep explaining the number; "somebody found one fewer on
+Tuesday" is the row an audit wants.
+Alternative: set `quantity` and log separately.
+Why not: two writes that can disagree, and the reconciliation would break.
+Tradeoff: none worth naming.
+
+Decision: no TRANSFER reason, and no cross-van part movement.
+Why: the phase names it as a cliff. It needs a second unit's version, a custody
+state while the part is in neither van, a rendezvous the solver would have to
+price, and a story for a re-dispatch mid-handover.
+Alternative: model it.
+Why not: it is a second dispatch problem inside a phase about confidence.
+Tradeoff: a real thing technicians do is not representable. Phase 19 prices a
+workshop run instead — one leg, one owner.
+
+Decision: two permission resources, `vanStock` and `fleetStock`.
+Why: "may I see my own van" and "may I see any van" are different questions.
+Alternative: one `stock` resource plus an ownership check in the route.
+Why not: it would put an RBAC decision back inside a handler, which is the thing
+permissions.ts exists to prevent.
+Tradeoff: one more row in the table.
+
+### Concurrency
+
+Scenario: a technician declares a part used while a replenishment lands on the
+same shelf.
+What races: two writers on `unit_stock.quantity`.
+Why dangerous: a lost update makes the cached quantity disagree with the ledger,
+and from Phase 19 the cached quantity is what decides whether a van can be sent.
+How handled: conditional UPDATE on the version read (optimistic lock, the same
+shape as holds.ts), then re-read and retry, up to three attempts.
+Assumption relied on: READ COMMITTED, so the re-read after a lost race sees the
+winner's committed value rather than the snapshot the transaction started from.
+
+Scenario: a double tap, or an offline queue replaying a declaration.
+What races: nothing, and that is the point — the second arrival is a duplicate,
+not a competitor.
+Why dangerous: a second decrement for one fitted part.
+How handled: the movement insert is LAST in the transaction, so a duplicate id
+raises P2002 and takes the decrement down with it. The caller answers REPLAYED.
+Assumption relied on: the client reuses the id across retries. The offline queue
+already mints its key at the tap and reuses it, which is why the parts
+declaration was put on that queue rather than given a path of its own.
+
+Scenario: a shelf is emptied twice in one shift.
+What races: two restock requests for one empty shelf.
+Why dangerous: only mildly — a duplicate line on an operator's list.
+How handled: a read for an open (REQUESTED|ORDERED) order inside the same
+transaction. Not a unique index, because "open" is a status and a partial unique
+index is not expressible in the Prisma schema.
+Assumption relied on: both writers are one technician's phone, behind one van.
+
+### Weaknesses introduced
+
+- `findOrCreateShelf` can race: two concurrent movements for a part the van does
+  not yet carry both try to create the `unit_stock` row, and the loser's unique
+  violation surfaces to the caller as REPLAYED rather than as a retry. Does not
+  matter at current scale — one technician per van, and replenishment is not
+  concurrent with anything.
+- A RestockOrder is written and nothing reads it. There is no route and no panel
+  listing open requests; an operator sees an empty van through
+  `GET /units/:id/stock` (quantity 0) rather than through the request row. The
+  phase forbids building procurement, so this is deliberate, but it is a table
+  with a writer and no reader until Phase 19.
+- Depots are seeded with coordinates and nothing routes to them yet. They exist
+  because Phase 19 needs a coordinate to measure a detour to.
+- Parts are not in feasibility. `PART_UNAVAILABLE` is still the Phase 3 stub and
+  never fires — by instruction; that is Phase 19.
+- The seed's van counts are stamped relative to run time and their ids carry the
+  date, so re-running the seed on a later day writes a fresh confirmation. That
+  is right for a demo whose subject is age, and wrong for anyone who expected a
+  seed to be a fixed point.
+- `stock_confirmations.technician_id` is a bare column with no FK, following the
+  shape the Phase 1 schema already had. The seed writes the literal `'seed'`
+  into it, which no `technicians` row will ever match.
+
+### Concepts now genuinely in use
+
+- Client-minted primary keys as idempotency keys, on a second table and a second
+  surface (`technician_actions` was the first).
+- A cached aggregate with a reconciliation invariant against an append-only
+  ledger — the same shape as the double-entry balance check, applied to counts
+  rather than to money.
+- Confidence as a function of age, computed on read rather than stored, because
+  it changes with the clock and with nothing else.
+- Optimistic locking on a third table (units, jobs, now unit_stock).
+
+### Interview angle
+
+"A technician taps 'fitted one' in a basement car park and the phone replays the
+queue ten minutes later — what stops that decrementing twice?" The movement id is
+minted at the tap and is the primary key, and the insert is last in the
+transaction, so the duplicate rolls the decrement back with it.
+
+"Your database says there are two batteries in that van. How much do you trust
+it?" Not on its own: the number is a claim whose age is the interesting part, so
+it carries the time a human last counted it, and from Phase 19 a count older than
+eight hours is treated as no stock at all rather than sending a van that turns
+out to be empty.
+
+### What broke
+
+The FK on `stock_movements.unit_stock_id` was first written ON DELETE SET NULL,
+which is incompatible with the append-only trigger added in the same migration:
+SET NULL issues an UPDATE, and the trigger refuses UPDATEs. Caught while working
+out how the test would reset its fixture, before it ran. It is RESTRICT now,
+which is also the better answer — history pins the row it explains — and it is
+why the test tops its van back up with a REPLENISHED movement instead of
+deleting and recreating the shelf.
+
+The seed was rewriting `quantity` on every run (`update: { quantity }`). Harmless
+while nothing read inventory; from this phase it would have silently rewritten a
+ledger-backed number and broken the reconciliation for every van that had done a
+job. It sets stock on create only now.
+
+A smoke script run against the dev database appeared to hang with no output. It
+had not hung — the output was buffered and lost when the harness killed it, and
+the script had in fact run to completion, which is why `unit-01` afterwards read
+as counted four minutes ago instead of the seeded five hours. Re-seeding put the
+staggering back. The lesson is the one already in CLAUDE.md about rejected Bash
+calls: check the disk before assuming a command did not land.

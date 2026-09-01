@@ -108,6 +108,23 @@ const envSchema = z.object({
   // absorbing transfer fees might set it to zero.
   PAYOUT_MINIMUM_PAISE: z.coerce.number().int().min(0).default(50_000),
 
+  // HOW LONG A STOCK COUNT STAYS BELIEVABLE (Phase 18).
+  //
+  // Stock is a claim, not a fact: the number on a van is only as good as the
+  // last time somebody looked in the back of it. These two thresholds turn the
+  // AGE of that count into a confidence level — under the first it is
+  // VERIFIED, between them AGEING, past the second UNVERIFIED.
+  //
+  // Two hours and eight hours are a shift's shape, not a measurement: a
+  // technician who counted at the start of the morning is trustworthy for the
+  // first couple of jobs and much less so by the end of the day. Configurable
+  // because the right numbers depend on how busy a fleet is, and because
+  // Phase 19 makes them load-bearing — UNVERIFIED stock will count as
+  // unavailable, so moving these thresholds moves real dispatch decisions and
+  // that has to be something the evaluation harness can vary.
+  STOCK_VERIFIED_MAX_AGE_MINUTES: z.coerce.number().int().positive().default(120),
+  STOCK_AGEING_MAX_AGE_MINUTES: z.coerce.number().int().positive().default(480),
+
   // THE LANGUAGE MODEL (Phase 16) — intake only, never a dispatch decision.
   //
   // OPTIONAL BY DESIGN, and this is invariant 8 rather than convenience: with
