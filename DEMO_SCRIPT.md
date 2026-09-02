@@ -32,10 +32,15 @@ screen is flagged degraded — fine for a dry run, wrong for the real thing.
 | dispatcher | `dispatch-ops@zippy.internal` | `/dispatcher.html` |
 | fleet manager | `fm-metrocab@zippy.internal` | `/fleet.html` |
 | technician | `tech1@zippy.internal` (…`tech31`) | `/technician.html` |
-| driver | created per job, or `driver-<id>@zippy.internal` | `/driver.html` |
+| driver | `driver-metrocab-1@zippy.internal` (…`driver-<tenant>-<n>`) | `/driver.html` |
 
-Open four tabs: dispatcher, driver, technician, fleet. Dispatcher is the tab
-you present from; the others you cut to.
+Each login page pre-fills its own email and the dev password, so signing in is
+one click on **Sign in**. Open four tabs: dispatcher, driver, technician,
+fleet. Dispatcher is the tab you present from; the others you cut to.
+
+> Beats 1, 2 and 4 and the panel/label names below were walked against a live
+> run from a fresh seed. Beats 3, 5, 6, 9, 10 have not been walked end to end —
+> confirm them on the first rehearsal.
 
 **One line to open with:** "Zippy dispatches roadside breakdowns for
 time-to-*resolution*, not time-to-arrival. The nearest van is often the wrong
@@ -49,38 +54,52 @@ server runs."
 
 **Objective:** show arrival and resolution disagreeing on a single dispatch.
 
-1. Driver tab → **Describe** → type *"car won't start, no lights at all"* →
-   **Continue**.
-2. Step through the symptom picker (leave the lit complaint), mark safety
-   **not** high-risk, drop the pin on a main road, **Create**.
-3. Dispatcher tab → the job appears in the jobs table → click it.
-4. **Inspector panel** ("why this crew?") → read the chosen option's cost
-   breakdown term by term, then open **rejected alternatives**: point at the
-   nearer jump-start-only van and its reason code.
+1. Driver tab → the free-text box on "Tell us what happened" → type *"car
+   won't start, no lights at all, engine doesn't turn over"* → **Continue**.
+2. Symptom picker ("What has happened…") — the extractor pre-lights *"It will
+   not start"*, leave it → the entropy question ("What do you hear…"), answer
+   or skip → safety checkboxes, leave the high-risk ones **unchecked** →
+   location: pick a road position (e.g. *"On a service road or side street"*) →
+   **Send for help**.
+3. Dispatcher tab → **Solve — plan every pending job** → then click the job's
+   id in the **LIVE INCIDENT TIMELINE** (or the priority queue) to load the
+   inspector.
+4. **WHY THIS TECHNICIAN?** panel → read the header (`believed:` the fault
+   distribution, `requires:` the capability set, "covers N% of the fault
+   distribution") and the cost-breakdown table term by term (`slaRisk`,
+   `travelDistance`, `operationalCost`, `partSourcingCost`,
+   `contractSlaExposure`, `destinationRefusalRisk`). Scroll past **Chosen** to
+   the rejected options and point at a nearer, narrower van with its reason
+   code.
 
-**Say:** "The van it turned down is closer. It went with the one 7km further
-out because that crew covers the whole fault distribution — expected time to
+**Say:** "The van it turned down is closer. It went with the broader crew
+because that crew covers 86% of the fault distribution — expected time to
 *resolution* is lower even though arrival is worse. That trade is the product."
 
-**Expect:** chosen crew is broad-capability; a closer `VEHICLE_TYPE`- or
-capability-rejected option is listed with its code.
+**Expect:** chosen crew is broad-capability; a closer capability-rejected
+option is listed with its code.
 
 ---
 
-## Beat 2 — capability-scarcity: three plans, priced  ·  ~60s
+## Beat 2 — capability-scarcity: four plans, priced  ·  ~60s
 
 **Objective:** the solver offering ranked whole-board plans, not one answer.
 
-1. Dispatcher → **Plans panel**: three plan cards for the current board.
-2. Point at the cost delta between card 1 and card 2, and at the
-   **scarcity panel** flagging which capability is the bottleneck.
-3. Select card 1 → the selection paints immediately, the decision record
-   lands a moment later.
+1. Dispatcher → the plan cards under the **Solve** button: **FASTEST_RESOLUTION**,
+   **LOWEST_COST**, **BALANCED** (marked `RECOMMENDED`), **PROTECT_CONTRACTS** —
+   each with a `TOTAL` and its per-job unit + cost.
+2. Point at the `TOTAL` delta between BALANCED and FASTEST_RESOLUTION, and at
+   the **CAPABILITY SCARCITY** panel — `EV_HV_CERTIFICATION` shows `CRITICAL`,
+   several others `THIN`.
+3. Selecting BALANCED is one click ("Select this plan"); the other three are
+   `OVERRIDE` and need a typed reason first. Select BALANCED → the card flips
+   to **selected**, a `PLAN_SELECTED` event lands in the timeline.
 
-**Say:** "One scarce skill across the fleet. The planner assigns the whole
-pending board at once, so a job whose only possible crew would have gone to a
-marginally better match somewhere else is not stranded. These are the same
-three cards ranked by the cost function — no hidden tiebreak."
+**Say:** "The planner assigns the whole pending board at once, so a job whose
+only possible crew would have gone to a marginally better match elsewhere is
+not stranded. Four cards ranked by the cost function — BALANCED is the default;
+PROTECT_CONTRACTS is the same board with the contract-exposure weight turned up
+ten times. No hidden tiebreak."
 
 ---
 
@@ -88,10 +107,11 @@ three cards ranked by the cost function — no hidden tiebreak."
 
 **Objective:** honesty. Show the scenario the harness scores against us.
 
-1. Driver tab → **Describe** something deliberately vague: *"weird noise and a
-   warning light, not sure what."* → create the job.
-2. Dispatcher → inspector → show the fault **distribution** is spread, and the
-   required-capability set is wide.
+1. Driver tab → free-text box → something deliberately vague: *"weird noise and
+   a warning light, not sure what."* → step through and **Send for help**.
+2. Dispatcher → **Solve** → open the inspector for that job → show the
+   `believed:` distribution is spread across several faults and the `requires:`
+   capability set is wide.
 3. Cut to terminal: `npm run eval -- --scenario ambiguous-diagnosis` (or point
    at `EVALUATION.md`).
 
@@ -108,9 +128,11 @@ signal to act on."
 
 **Objective:** the inventory layer, and the sentence the driver sees.
 
-1. Pick (or create) a job whose likely fault needs a part — e.g. *alternator*
-   symptoms. Dispatcher → inspector → the chosen option shows a
-   **PART_SOURCING** branch: the crew diverts to a depot for the part.
+1. A won't-start job often already triggers this (the seed's battery faults
+   pull `BAT-45AH` / `STR-MOTOR-RECON`); otherwise create one with *alternator*
+   / *warning light* symptoms. Dispatcher → inspector → under the chosen crew,
+   a line like *"collecting BAT-45AH, STR-MOTOR-RECON on the way — 2.9 min
+   detour"*, and a non-zero **`partSourcingCost`** row in the cost table.
 2. Cut to the **driver tab** for that job. The status line reads:
    > "<crew name> has the skills for this but needs a part. We are arranging it
    > now."
@@ -151,10 +173,11 @@ has a real caller."
 1. Terminal: `npm run sim -- --live --rate 45 --duration 60` — `--duration` is
    in *simulated* minutes and live mode runs ~1 real second per simulated
    minute, so this is about a one-minute burst; add `--pace 2` to slow it.
-2. Dispatcher → let the jobs table fill, scroll halfway, **wait**. Point at
-   the **priority queue** re-ordering and the **map** fan-out.
+2. Dispatcher → the **PRIORITY QUEUE** and bottom job strip fill; the header
+   count ("Jobs on the board: N") climbs. Scroll halfway, select a job, **wait**.
 3. Scroll position and selection hold; no flicker (rows patch by
-   `data-job-id`, nothing rebuilds).
+   `data-job-id`, nothing rebuilds). `Solve` now reports hundreds of options
+   and `zonePartitioned: true`.
 4. Stop the surge: `docker compose exec redis redis-cli SET zippy:sim:stop 1`.
 
 **Say:** "Forty-five jobs an hour. The table patches row by row over a
