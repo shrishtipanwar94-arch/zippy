@@ -7,11 +7,17 @@
 // feasibility.ts: a fact about WHEN, not about WHETHER a match would be good.
 //
 // NO OVERNIGHT WINDOWS. Every seeded workshop's hours are same-day
-// (`09:00`-`19:00`, or `00:00`-`23:59` for the two round-the-clock ones), so a
+// (`09:00`-`19:00`, or `00:00`-`24:00` for the two round-the-clock ones), so a
 // simple string comparison of `opens <= now < closes` is correct. A workshop
 // open across midnight (`22:00`-`06:00`) would need the comparison split in
 // two, and nothing in this project's data needs that yet — recorded as a gap,
 // not silently handled wrong.
+//
+// `closes` is EXCLUSIVE, so a round-the-clock workshop stores `24:00`, not
+// `23:59`: with `23:59` the strict `<` below reads it as shut for the
+// 23:59:00-23:59:59 minute every day, which once stranded a tow whose only
+// open destinations were the two always-open sites. `24:00` sorts after every
+// real `HH:MM` a clock produces, so the same `<` keeps it open all day.
 //
 // Pure. No database, no clock — `at` is passed in.
 

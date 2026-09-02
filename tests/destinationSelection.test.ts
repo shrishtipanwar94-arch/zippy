@@ -46,7 +46,7 @@ function ordinaryJob(): JobForDispatch {
 const OPEN_ALL_WEEK = Array.from({ length: 7 }, (_, dayOfWeek) => ({
   dayOfWeek,
   opens: '00:00',
-  closes: '23:59',
+  closes: '24:00',
   closed: false,
 }));
 

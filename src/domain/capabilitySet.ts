@@ -51,6 +51,17 @@ export function requiredCapabilities(distribution: FaultDistribution): string[] 
   return [...required].sort();
 }
 
+// The two capability codes that mean a vehicle has to be loaded or winched
+// onto a truck — the physical fact that a job needs a tow at all, and with it
+// a workshop to be towed to. feasibility.ts (can this unit tow?) and
+// destinationSelection.ts (does this job need a destination?) both ask it, so
+// the list lives here and is written once.
+export const TOW_CAPABILITY_CODES: ReadonlySet<string> = new Set(['FLATBED_LOADING', 'WINCH_RECOVERY']);
+
+export function faultsNeedTow(distribution: FaultDistribution): boolean {
+  return requiredCapabilities(distribution).some((code) => TOW_CAPABILITY_CODES.has(code));
+}
+
 // True when every contending fault needs exactly the same skills. At that point
 // the answer to "who do we send" no longer depends on which of them it is, so
 // more questions cannot change the dispatch decision.

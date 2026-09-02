@@ -14,7 +14,7 @@ const WEEKDAY_HOURS: WorkshopHoursRow[] = Array.from({ length: 7 }, (_, dayOfWee
 const ALWAYS_OPEN: WorkshopHoursRow[] = Array.from({ length: 7 }, (_, dayOfWeek) => ({
   dayOfWeek,
   opens: '00:00',
-  closes: '23:59',
+  closes: '24:00',
   closed: false,
 }));
 
@@ -57,6 +57,11 @@ describe('isWorkshopOpen', () => {
   it('is open at any hour for a round-the-clock workshop', () => {
     expect(isWorkshopOpen(ALWAYS_OPEN, new Date('2026-06-14T20:00:00Z'))).toBe(true); // Sunday night IST
     expect(isWorkshopOpen(ALWAYS_OPEN, new Date('2026-06-15T02:30:00Z'))).toBe(true); // Monday 08:00 IST
+  });
+
+  it('stays open in the last minute before midnight — the 24:00 close, not 23:59', () => {
+    // 18:29 UTC = 23:59 IST. A `23:59` close would read shut here every day.
+    expect(isWorkshopOpen(ALWAYS_OPEN, new Date('2026-06-15T18:29:30Z'))).toBe(true);
   });
 
   it('treats a missing row for today as closed rather than open', () => {

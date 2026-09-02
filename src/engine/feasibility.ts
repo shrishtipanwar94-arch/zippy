@@ -25,7 +25,7 @@
 // query with opinions.
 
 import { distanceKm } from '../domain/geo.js';
-import { requiredCapabilities } from '../domain/capabilitySet.js';
+import { faultsNeedTow } from '../domain/capabilitySet.js';
 import { MAX_PART_SOURCING_DETOUR_MINUTES } from './partSourcing.js';
 import { unitLocation } from './candidates.js';
 import type {
@@ -100,18 +100,11 @@ const DIRECT_SPEED_KMH_FOR_DETOUR_CHECK = 40;
 // specific unit row, so a data-entry mistake in the capability table cannot
 // accidentally clear a bike to tow.
 const TOW_CAPABLE_KINDS: ReadonlySet<UnitKindSnapshot> = new Set(['FLATBED_TOW', 'WHEEL_LIFT_TOW']);
-const TOW_CAPABILITY_CODES: ReadonlySet<string> = new Set(['FLATBED_LOADING', 'WINCH_RECOVERY']);
 
 // The same two kinds a basement ramp cannot clear — a flatbed or a wheel-lift
 // truck's length and ground clearance, not a capability a technician can
 // train their way around.
 const BASEMENT_INACCESSIBLE_KINDS: ReadonlySet<UnitKindSnapshot> = new Set(['FLATBED_TOW', 'WHEEL_LIFT_TOW']);
-
-// ---------------------------------------------------------------------------
-
-function jobNeedsTow(job: JobForDispatch): boolean {
-  return requiredCapabilities(job.faultDistribution).some((code) => TOW_CAPABILITY_CODES.has(code));
-}
 
 function isBasementLevel(parkingLevel: string | null): boolean {
   // The simulator's own format (src/sim/scenarios.ts): "B1", "B2", "B3".
@@ -259,7 +252,7 @@ function classify(
     return { code: 'UNIT_UNAVAILABLE', detail: `unit is ${unit.status.toLowerCase()}` };
   }
 
-  if (jobNeedsTow(job) && !TOW_CAPABLE_KINDS.has(unit.kind)) {
+  if (faultsNeedTow(job.faultDistribution) && !TOW_CAPABLE_KINDS.has(unit.kind)) {
     return {
       code: 'VEHICLE_TYPE_INCOMPATIBLE',
       detail: `${unit.kind} cannot tow or winch a vehicle`,

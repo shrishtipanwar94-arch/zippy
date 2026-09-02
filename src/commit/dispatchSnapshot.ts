@@ -27,6 +27,7 @@ import type {
 } from '../engine/candidates.js';
 import type { PartsSnapshot } from '../engine/partSourcing.js';
 import type { WorkshopAcceptanceCell, WorkshopsSnapshot } from '../engine/destinationSelection.js';
+import { acceptanceBucketKey } from '../domain/workshopAcceptance.js';
 import type { HourBucket, VehicleClass } from '../domain/workshopAcceptance.js';
 import { FAULT_CODES } from '../domain/faults.js';
 import type { FaultDistribution } from '../domain/faults.js';
@@ -321,7 +322,11 @@ function foldAcceptanceGroups(
   const cells = new Map<string, WorkshopAcceptanceCell>();
 
   for (const group of groups) {
-    const key = `${group.workshopId} ${group.hourBucket} ${group.vehicleClass}`;
+    const key = acceptanceBucketKey(
+      group.workshopId,
+      group.hourBucket as HourBucket,
+      group.vehicleClass as VehicleClass,
+    );
     const cell = cells.get(key) ?? {
       workshopId: group.workshopId,
       hourBucket: group.hourBucket as HourBucket,

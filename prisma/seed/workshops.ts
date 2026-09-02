@@ -42,7 +42,7 @@ async function seedHours(prisma: PrismaClient, workshopId: string, around: boole
       where: { workshopId_dayOfWeek: { workshopId, dayOfWeek: day } },
       update: {
         opens: around ? '00:00' : '09:00',
-        closes: around ? '23:59' : '19:00',
+        closes: around ? '24:00' : '19:00',
         closed: closedSunday,
       },
       create: {
@@ -50,7 +50,7 @@ async function seedHours(prisma: PrismaClient, workshopId: string, around: boole
         workshopId,
         dayOfWeek: day,
         opens: around ? '00:00' : '09:00',
-        closes: around ? '23:59' : '19:00',
+        closes: around ? '24:00' : '19:00',
         closed: closedSunday,
       },
     });

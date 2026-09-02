@@ -28,12 +28,13 @@ import { distanceKm } from '../domain/geo.js';
 import { isWorkshopOpen } from '../domain/workshopHours.js';
 import type { WorkshopHoursRow } from '../domain/workshopHours.js';
 import {
+  acceptanceBucketKey,
   betaAcceptMean,
   hourBucketFor,
   vehicleClassFor,
 } from '../domain/workshopAcceptance.js';
 import type { HourBucket, VehicleClass } from '../domain/workshopAcceptance.js';
-import { requiredCapabilities } from '../domain/capabilitySet.js';
+import { faultsNeedTow } from '../domain/capabilitySet.js';
 import type { JobForDispatch } from './candidates.js';
 import type { TravelTimeSource } from '../infra/routing.js';
 
@@ -144,14 +145,12 @@ function unresolved(status: 'NO_BRAND_MATCH' | 'NO_EV_CLASS_MATCH' | 'NO_DESTINA
   return { status, workshopId: null, distanceKm: 0, pAccept: 0, detail, screened: [] };
 }
 
-// Only these two unit kinds are ever equipped to load or winch a vehicle —
-// the same fact src/engine/feasibility.ts's own TOW_CAPABILITY_CODES encodes,
-// duplicated here for the same "each file owns its own small vocabulary"
-// reason as everywhere else in this module.
-const TOW_CAPABILITY_CODES: ReadonlySet<string> = new Set(['FLATBED_LOADING', 'WINCH_RECOVERY']);
-
+// A tow job needs a workshop to be towed to, and "needs a tow" is exactly the
+// FLATBED_LOADING / WINCH_RECOVERY test feasibility.ts uses to require a
+// tow-capable unit. src/domain/capabilitySet.ts owns that capability list so
+// the destination screen and the feasibility filter cannot drift apart.
 export function jobNeedsDestination(job: JobForDispatch): boolean {
-  return requiredCapabilities(job.faultDistribution).some((code) => TOW_CAPABILITY_CODES.has(code));
+  return faultsNeedTow(job.faultDistribution);
 }
 
 // null (not an EV) matches ANY workshop's own evClass — EV certification is
@@ -182,11 +181,12 @@ function countsFor(
   hourBucket: HourBucket,
   vehicleClass: VehicleClass,
 ): { accepted: number; refused: number } {
+  // Match on the one key format src/domain/workshopAcceptance.ts owns, the
+  // same call src/commit/dispatchSnapshot.ts builds the cells under, so the
+  // reader and the builder cannot disagree about the string.
+  const wanted = acceptanceBucketKey(workshopId, hourBucket, vehicleClass);
   const cell = cells.find(
-    (candidate) =>
-      candidate.workshopId === workshopId &&
-      candidate.hourBucket === hourBucket &&
-      candidate.vehicleClass === vehicleClass,
+    (candidate) => acceptanceBucketKey(candidate.workshopId, candidate.hourBucket, candidate.vehicleClass) === wanted,
   );
   return cell ? { accepted: cell.accepted, refused: cell.refused } : { accepted: 0, refused: 0 };
 }
@@ -238,12 +238,19 @@ export async function resolveDestinationForJob(input: {
     .sort((a, b) => a.straightKm - b.straightKm)
     .slice(0, MAX_DESTINATION_SHORTLIST);
 
-  // ONE round trip for the whole shortlist's real distance, not one per
-  // workshop — the same /table-over-/route argument routing.ts's own comment
-  // makes for candidate generation.
-  const real = await travelTimes(
-    shortlist.map((entry) => ({ lat: entry.workshop.lat, lng: entry.workshop.lng })),
-    { lat: job.lat, lng: job.lng },
+  // A tow drives FROM the job TO the workshop, so the distance that ranks the
+  // shortlist and lands in the audit record has to be measured in that
+  // direction — OSRM's graph encodes one-way roads and dividers, so job -> ws
+  // and ws -> job are not the same number. TravelTimeSource takes many origins
+  // and one destination, which is the wrong shape for one origin (the job) and
+  // several destinations, so the shortlist — already down to four — gets one
+  // call each, run in parallel, rather than a single matrix call backwards.
+  const jobOrigin = [{ lat: job.lat, lng: job.lng }];
+  const real = await Promise.all(
+    shortlist.map(async (entry) => {
+      const [estimate] = await travelTimes(jobOrigin, { lat: entry.workshop.lat, lng: entry.workshop.lng });
+      return estimate!;
+    }),
   );
 
   const bucket = hourBucketFor(now);
