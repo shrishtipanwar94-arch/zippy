@@ -195,6 +195,22 @@ It contains three things and nothing else:
 
 Keep it under 150 lines. A map longer than the territory is not a map.
 
+## Phase workflow — review anchor per phase
+
+START OF EVERY PHASE — before writing any code for Phase N, cut a review-base
+branch at the current HEAD:
+
+  git branch pre-phaseN <current HEAD>
+
+This exists so `/code-review ultra pre-phaseN` reviews only that phase's diff.
+`/ultrareview` with no base tries to diff the whole repo — there is no `main`
+on GitHub — and refuses once the diff crosses its size limit, which is exactly
+what happened at the Phase 22 ship point. The branch is a diff anchor only,
+never a place to land commits; all phase work commits to `master`. Delete it
+once the phase is reviewed, or keep it if the next phase reuses the same
+anchor. The review itself is billed and user-triggered — the assistant cannot
+launch it.
+
 ## INTERVIEW.md — standing instruction
 This repo contains INTERVIEW.md, a living SDE interview-prep document for the
 maintainer. You maintain it, silently. Never quiz, teach, or interrupt.
