@@ -1,0 +1,134 @@
+/* THE TECHNICIAN'S SURFACE — everything only their phone uses.
+ *
+ * Split out of field.css in Phase 22b, alongside driver.css. The brief is from
+ * Phase 15 and still governs: one hand, a cracked screen, daylight. Very high
+ * contrast, big targets, one obvious thing to press.
+ *
+ * Most of what is here did not exist before Phase 22b's audit, because the
+ * things it styles were not on the page at all — the rung track, the context
+ * blocks explaining a detour, the boxed completion code, the release notice and
+ * the earnings statement.
+ */
+
+/* ---------------------------------------------------------------------------
+ * THE TECHNICIAN.
+ */
+
+/* Amber while there is time, red under fifteen seconds — and always paired
+ * with the words "seconds left", because colour is never the only signal. */
+.countdown {
+  font-size: 1.75rem;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  color: var(--accent);
+}
+
+.offer-card {
+  border-left: 4px solid var(--accent);
+  box-shadow: var(--lift-high);
+}
+
+.offer-urgent {
+  border-left-color: var(--danger);
+}
+
+.offer-urgent .countdown {
+  color: var(--danger);
+}
+
+.job-card {
+  border-left: 4px solid var(--ok);
+}
+
+/* A step on the technician's ladder. The rung they are on is filled; the ones
+ * behind are outlined; the ones ahead are dim. One glance answers "where am I
+ * in this job", which a single status badge never did. */
+.rung-track {
+  display: flex;
+  gap: 0.25rem;
+  margin-bottom: 1rem;
+}
+
+.rung {
+  flex: 1;
+  height: 0.25rem;
+  border-radius: 999px;
+  background: var(--border);
+}
+
+.rung.is-done {
+  background: var(--ok);
+}
+
+.rung.is-current {
+  background: var(--accent);
+}
+
+/* A CONTEXT BLOCK — the things that explain why this job is not a straight
+ * line: a part-sourcing detour, the workshop a tow is going to, the cost the
+ * driver is deciding on. Quieter than a card and louder than body text, because
+ * none of it is an action; it is the background a technician needs before the
+ * action makes sense. */
+.context-card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--text-muted);
+  border-radius: var(--radius);
+  padding: 0.75rem 0.875rem;
+}
+
+.context-title {
+  font-size: 0.75rem;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--text-muted);
+  margin-bottom: 0.35rem;
+}
+
+/* THE COMPLETION CODE, boxed. Entering it takes the driver's money, so it is
+ * visually separated from the ladder buttons around it — the one control on
+ * this page whose consequence is irreversible should not look like the four
+ * that just move a status. */
+.capture-card {
+  border: 1px solid var(--ok);
+  border-radius: var(--radius);
+  padding: 0.875rem;
+  background: var(--surface);
+}
+
+/* BEING STOOD DOWN MID-JOB. The only red on this page that is not a failure —
+ * see technicianRelease.js for why it earns it. */
+.release-card {
+  border: 2px solid var(--danger);
+  background: var(--surface-raised);
+  box-shadow: var(--lift-high);
+}
+
+/* THE BALANCE. Large, because it is the number somebody opened this section
+ * for, and tabular so a column of figures lines up. */
+.balance-figure {
+  font-size: 2rem;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  line-height: 1.1;
+}
+
+.balance-due {
+  border-left: 4px solid var(--ok);
+}
+
+/* Amber, never red. Owing the platform its share of collected cash is the
+ * ordinary consequence of taking cash, not a fault — and it settles itself out
+ * of the next job. */
+.balance-owing {
+  border-left: 4px solid var(--accent);
+}
+
+/* A <details> summary is a real control: it needs a target size and a pointer,
+ * which the browser default gives it in neither case. */
+.technician summary,
+.driver summary {
+  cursor: pointer;
+  padding: 0.5rem 0;
+  min-height: 2.75rem;
+}

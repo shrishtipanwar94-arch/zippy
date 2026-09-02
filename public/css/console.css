@@ -1,0 +1,123 @@
+/* THE DISPATCHER'S CONSOLE — dense on purpose.
+ *
+ * Split out of tokens.css in Phase 22b. It was always a separate concern: the
+ * console is a control room reading many jobs at once, the field surfaces are
+ * one person reading one sentence, and keeping both in one file meant every
+ * change to either risked the other.
+ *
+ * Everything here assumes the Bootstrap dark theme is already in force — the
+ * component re-skins that used to live here are gone, because `data-bs-theme`
+ * does that job now (see tokens.css). What remains is only what Bootstrap has
+ * no opinion about.
+ */
+
+body.console {
+  font-size: 0.875rem;
+}
+
+.console .card-header {
+  background: var(--surface);
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  font-size: 0.75rem;
+}
+
+/* The timeline is a long scrolling region that must NOT move under the
+ * operator while events arrive — see the panels for how that is achieved. */
+.timeline-scroll {
+  max-height: 26rem;
+  overflow-y: auto;
+}
+
+.timeline-row {
+  border-bottom: 1px solid var(--border);
+  padding: 0.25rem 0;
+  font-size: 0.8125rem;
+}
+
+.timeline-row.is-selected {
+  background: rgb(245 158 11 / 0.12);
+}
+
+.event-type {
+  font-family: var(--mono);
+  font-size: 0.75rem;
+  color: var(--accent);
+}
+
+.mono {
+  font-family: var(--mono);
+  font-size: 0.75rem;
+}
+
+.safety-HIGH_RISK {
+  color: var(--danger);
+  font-weight: 600;
+}
+
+.safety-ELEVATED {
+  color: var(--accent);
+}
+
+.term-bar {
+  height: 0.5rem;
+  background: var(--accent);
+  border-radius: 2px;
+}
+
+/* A rejected option's reason code. Bordered rather than filled so a long list
+ * of them does not read as a wall of alarm — most rejections are ordinary. */
+.reason-code {
+  font-family: var(--mono);
+  font-size: 0.6875rem;
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  padding: 0 0.25rem;
+  color: var(--text-muted);
+}
+
+.chosen-row {
+  border-left: 3px solid var(--ok);
+}
+
+/* ---------------------------------------------------------------------------
+ * THE ACTION QUEUE (Phase 13, surfaced in Phase 22b).
+ *
+ * Two tiers, told apart by a left border as well as by a badge, because the
+ * difference is about AUTHORITY rather than urgency: a RECOMMEND is the system
+ * asking to get on with it, an APPROVE is the system refusing to decide and
+ * waiting for a person to put their name to it.
+ *
+ * Red on the APPROVE tier is deliberate and is the one place on this console
+ * where red does not mean "something failed" — it means "nothing happens until
+ * you decide", which is the state most worth not scrolling past.
+ */
+
+.action-row {
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--accent);
+  border-radius: 0.375rem;
+  padding: 0.5rem 0.625rem;
+  margin-bottom: 0.5rem;
+}
+
+.action-row:last-child {
+  margin-bottom: 0;
+}
+
+.action-approve {
+  border-left-color: var(--danger);
+}
+
+.action-recommend {
+  border-left-color: var(--accent);
+}
+
+/* What the action would cost, as a key/value column. Dimmed labels and a mono
+ * figure: the operator is scanning for the number, not reading prose. */
+.impact-list {
+  border-top: 1px solid var(--border);
+  margin-top: 0.375rem;
+  padding-top: 0.375rem;
+}

@@ -1,25 +1,31 @@
-// THE STATUS LADDER, THE DIAGNOSIS FORM, AND THE COMPLETION CODE.
+// THE JOB IN HAND — the rung track, the pause, the money, and the detour.
 //
-// One card for the job in hand, with exactly one primary button on it at a
-// time — the next rung. The rung comes from the SERVER (`nextStep` on
-// /technician/work), not from a copy of the ladder held here: the ladder is
-// domain/jobLadder.ts and a second definition in the browser is a second thing
-// to keep in step.
+// One card, with exactly one primary button on it at a time: the next rung. The
+// rung comes from the SERVER (`nextStep` on /technician/work), not from a copy
+// of the ladder held here — the ladder is domain/jobLadder.ts and a second
+// definition in the browser is a second thing to keep in step.
 //
 // Every button here enqueues. None of them calls the API. That is the design
-// (see /js/offlineQueue.js): the online case is the queue draining
-// immediately, so the offline path is exercised on every tap rather than only
-// when the signal happens to drop.
+// (see /js/offlineQueue.js): the online case is the queue draining immediately,
+// so the offline path is exercised on every tap rather than only when the
+// signal happens to drop.
 //
 // The DIAGNOSIS form is the exception and is disabled offline, deliberately.
 // Filing a new diagnosis triggers a re-solve on the server (Phase 13), and
 // replaying that from a queue would raise a second reassignment recommendation
-// for a decision a dispatcher may already have taken. It needs a live
-// connection, and the page says so rather than queueing something it cannot
-// make safe.
+// for a decision a dispatcher may already have taken.
+//
+// WHAT PHASE 22b'S AUDIT ADDED HERE:
+//   - a RUNG TRACK, so "where am I in this job" is one glance rather than a
+//     status badge that has to be read and decoded
+//   - the ESTIMATE the driver is deciding on, itemised, and the amount the
+//     AWAITING_APPROVAL pause is waiting for. The pause was already worded; it
+//     did not say what the money was.
+//   - the PART SOURCING detour (Phase 19) and the WORKSHOP a tow is going to
+//     (Phase 22), neither of which the technician could see at all
+//   - what entering the completion code actually DOES. It releases the payment
+//     capture, which was documented in a code comment and nowhere on screen.
 
-// What each rung says on the button. The KEYS come from the server; only the
-// wording is ours.
 const BUTTON_LABEL = {
   EN_ROUTE: 'I am on my way',
   ARRIVED: 'I have arrived',
@@ -40,6 +46,17 @@ const STATUS_LABEL = {
   AWAITING_APPROVAL: 'Waiting on the driver',
 };
 
+// THE TRACK, in the order a job is actually worked. AWAITING_APPROVAL is
+// deliberately absent: it is not a rung, it is a job stopped between two of
+// them, which is why `nextStepFor` returns null for it on the server.
+const RUNGS = [
+  { status: 'COMMITTED', label: 'Assigned' },
+  { status: 'EN_ROUTE', label: 'On the way' },
+  { status: 'ON_SITE', label: 'On scene' },
+  { status: 'DIAGNOSING', label: 'Diagnosing' },
+  { status: 'WORKING', label: 'Working' },
+];
+
 export function render(state) {
   const panel = document.querySelector('[data-panel="ladder"]');
   if (!panel) return;
@@ -48,8 +65,8 @@ export function render(state) {
     ?? state.work.jobs[0];
 
   const markup = `
-    <div data-panel="ladder" class="mb-4">
-      ${job ? jobMarkup(job, state) : '<p class="text-muted">No job in hand.</p>'}
+    <div data-panel="ladder" class="mb-4" aria-live="polite">
+      ${job ? jobMarkup(job, state) : '<p class="text-secondary">No job in hand.</p>'}
     </div>`;
 
   // eslint-disable-next-line no-undef
@@ -63,18 +80,21 @@ function jobMarkup(job, state) {
     <div class="card job-card" data-job-id="${escapeText(job.jobId)}">
       <div class="card-body">
         <p class="h5 mb-1">${escapeText(job.vehicle)}</p>
-        <p class="small mb-2">
+        <p class="small text-secondary mb-3">
           ${escapeText(job.zone)}${job.landmark ? ` · ${escapeText(job.landmark)}` : ''}
         </p>
-        <p class="mb-3">
-          <span class="badge bg-secondary">${escapeText(STATUS_LABEL[job.status] ?? job.status)}</span>
-        </p>
 
+        ${rungTrackMarkup(job.status)}
+        <p class="mb-3"><span class="badge text-bg-secondary">${escapeText(STATUS_LABEL[job.status] ?? job.status)}</span></p>
+
+        ${contextMarkup(job)}
+        ${estimateMarkup(job)}
         ${nextActionMarkup(job)}
 
         <hr />
         <p class="small mb-1">Found something different?</p>
-        <select class="form-select mb-2" data-field="diagnosis-complaint" ${offline ? 'disabled' : ''}>
+        <label class="sr-only" for="diagnosis-complaint">New diagnosis</label>
+        <select id="diagnosis-complaint" class="form-select mb-2" data-field="diagnosis-complaint" ${offline ? 'disabled' : ''}>
           <option value="WONT_START">Will not start</option>
           <option value="FLAT_TYRE">Flat tyre</option>
           <option value="LOCKED_OUT">Locked out</option>
@@ -82,14 +102,14 @@ function jobMarkup(job, state) {
           <option value="NOISE_OR_SMELL">Noise or smell</option>
           <option value="STUCK_OR_DAMAGED">Stuck or damaged</option>
         </select>
-        <button class="btn btn-outline-warning w-100 mb-2" data-diagnose="${escapeText(job.jobId)}" ${offline ? 'disabled' : ''}>
+        <button class="btn btn-outline-warning btn-lg w-100 mb-2" data-diagnose="${escapeText(job.jobId)}" ${offline ? 'disabled' : ''}>
           File a new diagnosis
         </button>
         <!-- Online only, like the diagnosis: pricing reads the job's pinned
              price list and its current diagnosis, neither of which the phone
              holds, and a queued estimate would be priced against a fault the
              driver has already been quoted for. -->
-        <button class="btn btn-outline-info w-100" data-estimate="${escapeText(job.jobId)}" ${offline ? 'disabled' : ''}>
+        <button class="btn btn-outline-info btn-lg w-100" data-estimate="${escapeText(job.jobId)}" ${offline ? 'disabled' : ''}>
           Send the driver a cost
         </button>
         ${
@@ -101,17 +121,108 @@ function jobMarkup(job, state) {
     </div>`;
 }
 
-// WHAT THE TECHNICIAN CAN DO NEXT. Three cases, and the middle one is the
-// point of Phase 15c stage 2: a job waiting on a driver's decision has NO next
-// rung — `nextStepFor` returns null for AWAITING_APPROVAL because the ladder
-// has no rank for it — so the card says who it is waiting on rather than
-// offering a button that the server would refuse.
+// WHERE AM I IN THIS JOB, in one glance. Filled behind, amber on the current
+// rung, dim ahead — and the label under it names the rung in words, because a
+// track of coloured bars alone is colour as the only signal.
+function rungTrackMarkup(status) {
+  const index = RUNGS.findIndex((rung) => rung.status === status);
+  // A paused job sits after whatever rung it reached; showing nothing filled
+  // would read as "not started".
+  const reached = status === 'AWAITING_APPROVAL' ? RUNGS.length - 1 : index;
+
+  return `
+    <div class="rung-track" role="img" aria-label="${escapeText(STATUS_LABEL[status] ?? status)}">
+      ${RUNGS.map((rung, position) => {
+        const className =
+          position < reached ? 'rung is-done' : position === reached ? 'rung is-current' : 'rung';
+        return `<span class="${className}"></span>`;
+      }).join('')}
+    </div>`;
+}
+
+// WHY THIS JOB IS NOT A STRAIGHT LINE. Two things the technician could not see
+// before: a part-sourcing detour, and the workshop a tow is going to. Both are
+// read exactly as the solver recorded them.
+function contextMarkup(job) {
+  const blocks = [];
+
+  if (job.partSourcing && job.partSourcing.status !== 'ON_BOARD') {
+    blocks.push(`
+      <div class="context-card mb-3">
+        <div class="context-title">Parts</div>
+        <p class="mb-0">${escapeText(sourcingSentence(job.partSourcing))}</p>
+      </div>`);
+  }
+
+  if (job.destination) {
+    const eta = job.destination.etaSeconds
+      ? ` · about ${Math.round(job.destination.etaSeconds / 60)} min away`
+      : '';
+    const authorised = job.destination.authorisedBrands.length > 0
+      ? `Authorised for ${escapeText(job.destination.authorisedBrands.join(', '))}.`
+      : 'No brand authorisation recorded for this workshop.';
+    blocks.push(`
+      <div class="context-card mb-3">
+        <div class="context-title">Taking it to</div>
+        <p class="mb-1"><strong>${escapeText(job.destination.name)}</strong>${escapeText(eta)}</p>
+        <p class="small text-secondary mb-0">${authorised}</p>
+      </div>`);
+  }
+
+  return blocks.join('');
+}
+
+// The driver is told "Ravi has the skills but needs a part". This is Ravi's
+// side of the same sentence.
+function sourcingSentence(sourcing) {
+  if (sourcing.status === 'WORKSHOP_RUN') {
+    return 'You do not have this part on board — the plan sends you via a workshop to collect it.';
+  }
+  if (sourcing.status === 'DEPOT_RUN') {
+    return 'You do not have this part on board — collect it from the depot on the way.';
+  }
+  return sourcing.detail ?? `Parts sourcing: ${sourcing.status}`;
+}
+
+// WHAT THE DRIVER IS LOOKING AT. A technician standing next to somebody
+// deciding whether to approve a cost should be able to see the cost.
+function estimateMarkup(job) {
+  const estimate = job.estimate;
+  if (!estimate || estimate.lines.length === 0) return '';
+
+  return `
+    <div class="context-card mb-3">
+      <div class="context-title">The cost sent to the driver</div>
+      <ul class="list-unstyled small mb-2">
+        ${estimate.lines
+          .map(
+            (line) =>
+              `<li class="d-flex justify-content-between gap-2">
+                 <span>${escapeText(line.description)}${line.quantity > 1 ? ` ×${escapeText(line.quantity)}` : ''}</span>
+                 <span>${escapeText(rupees(line.amountPaise))}</span>
+               </li>`,
+          )
+          .join('')}
+      </ul>
+      <p class="mb-0 d-flex justify-content-between">
+        <strong>Driver pays</strong>
+        <strong>${escapeText(rupees(estimate.payablePaise))}</strong>
+      </p>
+    </div>`;
+}
+
+// WHAT THE TECHNICIAN CAN DO NEXT. Three cases, and the middle one is the point
+// of Phase 15c stage 2: a job waiting on a driver's decision has NO next rung —
+// `nextStepFor` returns null for AWAITING_APPROVAL — so the card says who it is
+// waiting on rather than offering a button the server would refuse.
 function nextActionMarkup(job) {
   if (job.status === 'AWAITING_APPROVAL') {
+    const amount = job.estimate ? ` of ${rupees(job.estimate.payablePaise)}` : '';
     return `
-      <div class="alert alert-warning py-2 px-3 mb-0">
-        Work is paused until the driver approves the cost. You will see this
-        card change when they answer.
+      <div class="alert alert-warning mb-0">
+        <strong>Paused — waiting on the driver.</strong>
+        <div>They are deciding on the cost${escapeText(amount)}. Nothing you can do moves this
+        forward; the card changes as soon as they answer.</div>
       </div>`;
   }
   if (job.nextStep === 'COMPLETE') return completionMarkup(job);
@@ -126,19 +237,28 @@ function ladderButtonMarkup(job) {
     </button>`;
 }
 
-// The last rung is not a button on its own — it is the driver's code. Entering
-// it is what closes the job, and from Phase 15c it is also what releases the
-// payment capture, which is why nothing else can stand in for it.
+// THE LAST RUNG IS NOT A BUTTON ON ITS OWN — it is the driver's code, and
+// entering it is what CHARGES THEM. That consequence lived in a code comment
+// until Phase 22b's audit; on screen this looked like an arbitrary form field.
+// Saying so is not a courtesy: a technician who thinks the code is a formality
+// will happily type it before the work is finished.
 function completionMarkup(job) {
+  const amount = job.estimate ? rupees(job.estimate.payablePaise) : 'the approved amount';
   return `
-    <label class="form-label" for="completion-code">
-      Ask the driver for the code on their screen
-    </label>
-    <input id="completion-code" class="form-control form-control-lg mb-2"
-           inputmode="numeric" autocomplete="off" placeholder="000 000" />
-    <button class="btn btn-success btn-lg w-100" data-step="COMPLETE" data-job-id="${escapeText(job.jobId)}">
-      ${escapeText(BUTTON_LABEL.COMPLETE)}
-    </button>`;
+    <div class="capture-card">
+      <label class="form-label mb-1" for="completion-code">
+        Ask the driver for the code on their screen
+      </label>
+      <p class="small text-secondary mb-2">
+        Entering it finishes the job <strong>and takes payment</strong> — ${escapeText(amount)}
+        from the driver’s card. Only do this once the work is done.
+      </p>
+      <input id="completion-code" class="form-control form-control-lg mb-2"
+             inputmode="numeric" autocomplete="off" placeholder="000 000" />
+      <button class="btn btn-success btn-lg w-100" data-step="COMPLETE" data-job-id="${escapeText(job.jobId)}">
+        ${escapeText(BUTTON_LABEL.COMPLETE)}
+      </button>
+    </div>`;
 }
 
 // WHAT THE QUEUE IS HOLDING, and what came back. Both on screen: a tap that
@@ -148,10 +268,15 @@ export function renderOutbox(state) {
   const banner = document.querySelector('[data-field="outbox"]');
   if (banner) {
     const count = state.outbox.pending.length;
+    // THREE STATES, NOT TWO. A queue holding taps while offline and a queue
+    // actively sending them look the same to somebody watching the screen, and
+    // the second one resolves itself while the first needs signal.
     const text =
       count === 0
         ? ''
-        : `${count} ${count === 1 ? 'action is' : 'actions are'} waiting to send. They will go in order as soon as you are back online.`;
+        : state.outbox.online
+          ? `Sending ${count} ${count === 1 ? 'action' : 'actions'}…`
+          : `${count} ${count === 1 ? 'action is' : 'actions are'} waiting to send. They will go in order as soon as you are back online.`;
     if (banner.textContent !== text) banner.textContent = text;
     banner.hidden = count === 0;
   }
@@ -160,7 +285,7 @@ export function renderOutbox(state) {
   if (network) {
     const text = state.outbox.online ? 'online' : 'offline';
     if (network.textContent !== text) network.textContent = text;
-    const className = `badge ${state.outbox.online ? 'bg-success' : 'bg-danger'}`;
+    const className = `badge ${state.outbox.online ? 'text-bg-success' : 'text-bg-danger'}`;
     if (network.className !== className) network.className = className;
   }
 
@@ -176,6 +301,10 @@ export function renderOutbox(state) {
 
 function resultMarkup(result) {
   return `<li>${escapeText(BUTTON_LABEL[result.step] ?? result.step)} — ${escapeText(result.detail ?? result.outcome)}</li>`;
+}
+
+function rupees(paise) {
+  return `₹${(paise / 100).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 }
 
 function escapeText(value) {

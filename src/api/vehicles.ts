@@ -1,5 +1,6 @@
-// REGISTERING A VEHICLE — one endpoint, one rule worth having a route for.
+// VEHICLES — two endpoints.
 //
+// GET  /vehicles   the caller's own vehicles, in words a person recognises
 // POST /vehicles   put a vehicle on a tenant's books
 //
 // A fleet manager adds vehicles to their own fleet; a dispatcher can add one on
@@ -13,11 +14,57 @@
 
 import { Router } from 'express';
 import { z } from 'zod';
+import { prisma } from '../infra/db.js';
 import { prismaBase } from '../infra/prismaBase.js';
 import { authenticate, requirePermission } from './middleware/authenticate.js';
 import { registerVehicle } from '../commit/vehicleRegistration.js';
+// `MARUTI_SUZUKI` is a database value; "Maruti Suzuki" is a car. Shared with
+// the technician's board, which leaked the same string until Phase 22b.
+import { inWords } from '../domain/vehicleWords.js';
 
 export const vehiclesRouter = Router();
+
+// GET /vehicles — WHAT A PERSON CALLS THEIR CAR.
+//
+// This exists because the driver's page used to ask them to type
+// `vehicle-metrocab-1` into a text box. A database id is not something a
+// stranded driver knows, can read off their vehicle, or should ever be shown:
+// they know the number plate. The picker on the request screen is built from
+// this, so the id travels in a value attribute and the human reads
+// "KA04GH4001 · Maruti Swift".
+//
+// SCOPED, NEVER FILTERED HERE. The `prisma` client narrows a DRIVER to their
+// own rows (permissions.jobReadOwnershipFilter and the tenant extension), so
+// this route does not decide who may see what — asking for everything and
+// receiving only your own is the whole point of that client.
+vehiclesRouter.get(
+  '/vehicles',
+  authenticate,
+  requirePermission('read', 'vehicle'),
+  async (_req, res) => {
+    const vehicles = await prisma.vehicle.findMany({
+      select: {
+        id: true,
+        registration: true,
+        colour: true,
+        profile: { select: { make: true, model: true } },
+      },
+      orderBy: { registration: 'asc' },
+    });
+
+    res.json({
+      vehicles: vehicles.map((vehicle) => ({
+        id: vehicle.id,
+        registration: vehicle.registration,
+        // One sentence rather than three fields, because the caller is a
+        // dropdown and every consumer would otherwise join these itself.
+        description: [vehicle.colour, inWords(vehicle.profile?.make), vehicle.profile?.model]
+          .filter((part) => Boolean(part))
+          .join(' '),
+      })),
+    });
+  },
+);
 
 const registerSchema = z
   .object({

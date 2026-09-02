@@ -22,6 +22,8 @@ import {
   setNextQuestion,
   setRequestField,
   setSession,
+  setCheckout,
+  setVehicles,
 } from '../state.js';
 import * as api from '../api.js';
 import { connect, subscribeToJob } from '../socket.js';
@@ -29,12 +31,14 @@ import { render as renderSession } from '../panels/session.js';
 import { render as renderRequest, readSafetyAnswers } from '../panels/driverRequest.js';
 import { render as renderIntake } from '../panels/intake.js';
 import { render as renderStatus } from '../panels/driverStatus.js';
+import { render as renderCheckout, loadCheckout, openCheckout } from '../panels/checkout.js';
 import { loadChat, registerChatPanels, wireChatActions } from '../chatActions.js';
 
 registerPanel(renderSession);
 registerPanel(renderRequest);
 registerPanel(renderIntake);
 registerPanel(renderStatus);
+registerPanel(renderCheckout);
 registerChatPanels();
 wireChatActions();
 
@@ -51,8 +55,28 @@ async function refreshDriverView() {
   } catch (error) {
     setError(error.message);
   }
+  // ASKED SEPARATELY AND FAILING SEPARATELY. A gateway that is down must not
+  // blank the panel telling a driver where their technician is — so this call
+  // gets its own try, and a failure just leaves the pay button hidden.
+  try {
+    setCheckout(await loadCheckout(jobId));
+  } catch (error) {
+    setCheckout(null);
+    console.warn('checkout unavailable', error);
+  }
   render();
 }
+
+document.querySelector('[data-action="pay-callout"]')?.addEventListener('click', async () => {
+  const jobId = getState().activeJobId;
+  if (!jobId) return;
+  try {
+    await openCheckout(jobId, refreshDriverView);
+  } catch (error) {
+    setError(error.message);
+    render();
+  }
+});
 
 onJobEvent((jobId) => {
   if (jobId === getState().activeJobId) refreshDriverView();
@@ -63,11 +87,51 @@ document.querySelector('[data-action="login"]').addEventListener('click', async 
     const result = await api.login(value('#email'), value('#password'));
     setSession(result.accessToken, { role: result.user.role, userId: result.user.id });
     connect();
+    await loadVehicles();
   } catch (error) {
     setError(error.message);
   }
   render();
 });
+
+// THE PICKER, FILLED ONCE AT SIGN-IN. A driver picks the car that has broken
+// down from their own number plates; the database id lives in the option's
+// value and is never shown. Its own try/catch: a vehicle list that fails to
+// load must not stop somebody signing in and asking for help, so the select is
+// simply left with its fallback option.
+async function loadVehicles() {
+  try {
+    const { vehicles } = await api.listVehicles();
+    setVehicles(vehicles);
+    fillVehiclePicker(vehicles);
+  } catch (error) {
+    console.warn('could not load vehicles', error);
+  }
+}
+
+function fillVehiclePicker(vehicles) {
+  const picker = document.querySelector('#vehicleId');
+  if (!picker) return;
+
+  if (vehicles.length === 0) {
+    picker.innerHTML = '<option value="">No vehicle registered to you</option>';
+    return;
+  }
+
+  // Built with createElement rather than an HTML string: a registration is
+  // user-supplied text and this is the one place on the page that would
+  // otherwise interpolate it into markup.
+  picker.replaceChildren(
+    ...vehicles.map((vehicle) => {
+      const option = document.createElement('option');
+      option.value = vehicle.id;
+      option.textContent = vehicle.description
+        ? `${vehicle.registration} · ${vehicle.description}`
+        : vehicle.registration;
+      return option;
+    }),
+  );
+}
 
 // --- step 0: say it in your own words (Phase 16) ------------------------------
 //

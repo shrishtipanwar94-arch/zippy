@@ -26,6 +26,7 @@ import {
   setVanCount,
   setVanStock,
   setWork,
+  setEarnings,
   tickClock,
 } from '../state.js';
 import * as api from '../api.js';
@@ -35,7 +36,11 @@ import { render as renderSession } from '../panels/session.js';
 import { render as renderOffers } from '../panels/technicianOffer.js';
 import { render as renderLadder, renderOutbox } from '../panels/technicianLadder.js';
 import { render as renderVanStock } from '../panels/vanStock.js';
-import { render as renderJobDetail } from '../panels/jobDetail.js';
+// jobDetail.js is the DISPATCHER's raw audit panel and is deliberately no
+// longer used here — see technicianUpdates.js for what replaced it and why.
+import { render as renderUpdates } from '../panels/technicianUpdates.js';
+import { render as renderRelease, dismissRelease } from '../panels/technicianRelease.js';
+import { render as renderEarnings } from '../panels/technicianEarnings.js';
 import { loadChat, registerChatPanels, wireChatActions } from '../chatActions.js';
 
 registerPanel(renderSession);
@@ -43,7 +48,9 @@ registerPanel(renderOutbox);
 registerPanel(renderOffers);
 registerPanel(renderLadder);
 registerPanel(renderVanStock);
-registerPanel(renderJobDetail);
+registerPanel(renderUpdates);
+registerPanel(renderRelease);
+registerPanel(renderEarnings);
 registerChatPanels();
 wireChatActions();
 
@@ -78,6 +85,9 @@ configureQueue({
     // And it may have changed the van: a parts declaration decrements a shelf,
     // and the screen showing that shelf is right here.
     refreshVanStock();
+    // A completed job books earnings and a commission on the ledger, so the
+    // balance on this same screen is stale the moment a rung lands.
+    refreshEarnings();
   },
 });
 
@@ -102,6 +112,29 @@ async function refreshWork() {
   }
   render();
 }
+
+// WHAT I AM OWED, read separately and failing separately. It is a running
+// account rather than a fact about the job in hand, and a ledger read that
+// fails must never blank the ladder somebody is working from — so it gets its
+// own try and its own silence.
+async function refreshEarnings() {
+  if (!getState().token) return;
+  try {
+    setEarnings(await api.getTechnicianEarnings());
+  } catch (error) {
+    console.warn('could not load earnings', error);
+  }
+  render();
+}
+
+// ACKNOWLEDGED BY THE PERSON. A release notice stays until it is pressed —
+// see technicianRelease.js for why it is not cleared on a timer.
+document.addEventListener('click', (clicked) => {
+  const button = clicked.target.closest('[data-dismiss-release]');
+  if (!button) return;
+  dismissRelease(button.dataset.dismissRelease);
+  render();
+});
 
 // The van, read separately from the board. It changes for reasons that are
 // nothing to do with the job in hand — a depot run, a count taken at the start
@@ -132,6 +165,7 @@ document.querySelector('[data-action="login"]').addEventListener('click', async 
     watchConnectivity();
     await refreshWork();
     await refreshVanStock();
+    await refreshEarnings();
   } catch (error) {
     setError(error.message);
   }

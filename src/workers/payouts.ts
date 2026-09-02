@@ -19,6 +19,8 @@
 import type { Job, Queue } from 'bullmq';
 import { prismaBase } from '../infra/prismaBase.js';
 import { runPayoutBatch } from '../commit/payouts.js';
+import { executeUnfinishedPayoutBatches } from '../commit/payoutExecution.js';
+import { isRazorpayConfigured } from '../payments/razorpayClient.js';
 
 export const PAYOUT_SCHEDULER_ID = 'payout-daily';
 export const PAYOUT_JOB_NAME = 'payouts';
@@ -45,4 +47,18 @@ export async function processPayoutRun(job: Job): Promise<void> {
     `batch ${result.reference}: paid ${result.paid}, held ${result.heldBelowMinimum} below the ` +
       `minimum, ${result.carryingDebt} carrying debt, ${result.totalPaise} paise pending transfer`,
   );
+
+  // PHASE 22b — AND THEN ACTUALLY SEND IT. Every batch still carrying work, not
+  // only today's, so a payout that failed on Monday is retried on Tuesday
+  // without anybody re-running Monday's batch by hand. Computing and sending
+  // stay two steps rather than one because the computation is business logic
+  // that must run with no vendor configured at all.
+  if (!isRazorpayConfigured()) return;
+  const executed = await executeUnfinishedPayoutBatches(prismaBase);
+  for (const batch of executed) {
+    await job.log(
+      `batch ${batch.reference}: sent ${batch.sent}, ${batch.alreadySent} already with the rail, ` +
+        `${batch.deferred} left pending`,
+    );
+  }
 }

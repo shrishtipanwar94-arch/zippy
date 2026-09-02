@@ -6,6 +6,7 @@ import { sharedQueueConnection } from './queues/connection.js';
 import { startWorkers, stopWorkers } from './workers/runWorkers.js';
 import { recoverSagas } from './commit/sagaRecovery.js';
 import { startHealthLoop, stopHealthLoop } from './health/loop.js';
+import { installConfiguredPaymentProvider } from './payments/selectProvider.js';
 
 /**
  * The worker process. It exists from Phase 0 — as its own process, not a
@@ -28,6 +29,12 @@ import { startHealthLoop, stopHealthLoop } from './health/loop.js';
  * start competing for the same units.
  */
 logger.info({ env: config.NODE_ENV }, 'worker process starting');
+
+// BOTH PROCESSES INSTALL THE SAME PROVIDER. The retry sweep and the
+// reconciliation worker call a gateway from here, exactly as the routes do from
+// the web process, and a provider installed in only one of them would have the
+// two disagreeing about where money lives.
+installConfiguredPaymentProvider();
 
 // Unscoped on purpose: recovery is a fleet-wide sweep with no requesting
 // user, so there is no tenant to scope it to.

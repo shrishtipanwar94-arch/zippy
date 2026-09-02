@@ -24,6 +24,7 @@ import {
   setChaos,
   setEscalation,
   setEscalationDecision,
+  setActions,
   getState,
 } from '../state.js';
 import * as api from '../api.js';
@@ -40,6 +41,7 @@ import { render as renderMap } from '../panels/map.js';
 import { render as renderHealth } from '../panels/health.js';
 import { render as renderChaos } from '../panels/chaos.js';
 import { render as renderEscalation } from '../panels/escalation.js';
+import { render as renderActions } from '../panels/actions.js';
 
 registerPanel(renderSession);
 registerPanel(renderJobsTable);
@@ -53,6 +55,7 @@ registerPanel(renderMap);
 registerPanel(renderHealth);
 registerPanel(renderChaos);
 registerPanel(renderEscalation);
+registerPanel(renderActions);
 
 function value(selector) {
   return document.querySelector(selector).value.trim();
@@ -141,14 +144,46 @@ document.querySelector('[data-action="refresh-timeline"]').addEventListener('cli
 // would be a request per event on a board taking one every few seconds.
 async function refreshBoard() {
   try {
-    const [scarcity, queue] = await Promise.all([api.getScarcity(), api.getQueue()]);
+    // The action queue rides along with the board read. It changes for the same
+    // reasons the queue does — a re-plan trigger, an SLA window closing — and a
+    // third round trip on the same button would buy nothing.
+    const [scarcity, queue, actions] = await Promise.all([
+      api.getScarcity(),
+      api.getQueue(),
+      api.listActions(),
+    ]);
     setScarcity(scarcity);
     setQueue(queue);
+    setActions(actions.actions);
     setError(null);
   } catch (error) {
     setError(error.message);
   }
 }
+
+// THE TWO TIERS ARE TWO DIFFERENT ACTS, so they are two different handlers
+// rather than one with a flag. Executing a recommendation is doing the work the
+// system proposed; signing off an APPROVE is accepting responsibility for a
+// call the system explicitly refused to make, and that signature is recorded.
+document.querySelector('[data-panel="actions"]').addEventListener('click', async (clicked) => {
+  const button = clicked.target.closest('[data-execute], [data-approve], [data-reject]');
+  if (!button) return;
+
+  try {
+    if (button.dataset.execute) {
+      await api.executeAction(button.dataset.execute);
+    } else if (button.dataset.approve) {
+      await api.approveAction(button.dataset.approve, 'APPROVED');
+    } else {
+      await api.approveAction(button.dataset.reject, 'REJECTED');
+    }
+    setError(null);
+  } catch (error) {
+    setError(error.message);
+  }
+  await refreshBoard();
+  render();
+});
 
 document.querySelector('[data-action="refresh-board"]').addEventListener('click', async () => {
   await refreshBoard();

@@ -1,69 +1,114 @@
 <!doctype html>
-<html lang="en">
+<html lang="en" data-bs-theme="dark">
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="theme-color" content="#0f172a" />
     <title>Zippy — Technician</title>
     <link
       href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css"
       rel="stylesheet"
     />
     <link href="/css/tokens.css" rel="stylesheet" />
+    <link href="/css/field.css" rel="stylesheet" />
+    <link href="/css/technician.css" rel="stylesheet" />
   </head>
   <!--
     THE TECHNICIAN'S PAGE. Field use: big targets, very high contrast, one
-    obvious primary button at a time, assume one hand and a cracked screen.
+    obvious primary button at a time, assume one hand and a cracked screen in
+    daylight. That brief is from Phase 15 and it still governs this page.
 
-    Unlike the driver's page this one DOES show the vocabulary of the job —
-    a technician is an operator and the ladder is their language. What it never
+    Unlike the driver's page this one DOES show the vocabulary of the job — a
+    technician is an operator and the ladder is their language. What it never
     does is send an action straight to the network: every tap goes into the
     offline queue (/js/offlineQueue.js) and drains from there, so the offline
     path is exercised on every tap rather than only when the signal drops.
+
+    WHAT PHASE 22b'S AUDIT ADDED. This page was built in Phase 15 and never
+    revisited, so four later phases' work was invisible on it: the release a
+    re-plan writes (Phase 13), the itemised estimate and what the pause is
+    waiting on (15c), the part-sourcing detour (19), the workshop a tow is going
+    to (22), and the technician's own earnings (15c/22b). Each has a section
+    below, and each appears only when it has something to say.
+
+    ORDER IS THE JOB'S ORDER: what has taken the job away from you, then what
+    you are being asked to do next, then the money, then the van, then the rest.
+    Somebody holding a phone one-handed reads downwards and stops early.
   -->
   <body class="p-3 technician">
-    <div class="d-flex align-items-center gap-2 mb-3 flex-wrap">
-      <h1 class="h4 mb-0">Technician</h1>
-      <span data-field="connection" class="badge bg-secondary">disconnected</span>
-      <span data-field="network" class="badge bg-secondary">online</span>
-      <span data-field="session" class="text-muted small">signed out</span>
-      <a href="/" class="ms-auto small">index</a>
-    </div>
+    <header class="app-bar">
+      <h1>Technician</h1>
+      <!-- A DOT, NOT A BADGE — see driver.html. The word is in the title and in
+           screen-reader text, so colour is never the only signal. -->
+      <span class="conn-dot" data-field="connection" title="Connected"></span>
+      <span class="sr-only" data-field="connection-text">Connected</span>
+      <!-- THE NETWORK BADGE STAYS A BADGE. Being offline is not a quiet state
+           here: every tap goes into a queue instead of to the server, and that
+           has to be readable at a glance, in words. -->
+      <span data-field="network" class="badge text-bg-secondary">online</span>
+      <a href="/" class="ms-auto small link-secondary">Index</a>
+    </header>
 
-    <div data-field="error" class="alert alert-danger" hidden></div>
+    <div data-field="error" class="alert alert-danger" role="alert" hidden></div>
 
-    <form data-panel="login" class="row g-2 mb-3" onsubmit="return false">
-      <div class="col-12 col-sm-auto">
-        <input id="email" class="form-control" value="tech01@zippy.internal" />
-      </div>
-      <div class="col-12 col-sm-auto">
-        <input id="password" type="password" class="form-control" value="password-dev-only" />
-      </div>
-      <div class="col-12 col-sm-auto">
-        <button data-action="login" class="btn btn-primary w-100">Sign in</button>
+    <form data-panel="login" class="card mb-3" onsubmit="return false">
+      <div class="card-body">
+        <h2 class="h6 mb-3">Sign in</h2>
+        <div class="mb-2">
+          <label class="form-label small text-secondary" for="email">Email</label>
+          <input id="email" class="form-control" value="tech01@zippy.internal" />
+        </div>
+        <div class="mb-3">
+          <label class="form-label small text-secondary" for="password">Password</label>
+          <input id="password" type="password" class="form-control" value="password-dev-only" />
+        </div>
+        <button data-action="login" class="btn btn-primary btn-lg w-100">Sign in</button>
       </div>
     </form>
 
     <div data-panel="workspace" hidden>
+      <!-- ============ RELEASED FROM A JOB (Phase 13) ============ -->
+      <!-- THE ONE THING ON THIS PAGE THAT INTERRUPTS. A re-plan that no longer
+           uses this crew detaches the job and writes
+           TECHNICIAN_RELEASED_FROM_JOB — and until Phase 22b nothing read it,
+           so the board simply went empty and somebody stood at a roadside with
+           no idea whether to wait. aria-live="assertive" because it can arrive
+           while they are looking at something else, and standing down is not
+           news that can wait for them to scroll. -->
+      <div data-panel="release" aria-live="assertive"></div>
+
       <!-- WHAT THE QUEUE IS HOLDING. Invariant 8: a degraded state is visible.
            Taps waiting to send are exactly that, so they are on screen rather
            than hidden in localStorage. -->
-      <div class="alert alert-warning py-2 px-3" data-field="outbox" hidden></div>
+      <div class="alert alert-warning py-2 px-3" data-field="outbox" role="status" hidden></div>
       <ul class="list-unstyled small" data-field="outbox-results"></ul>
 
-      <!-- ================= OFFERS ================= -->
+      <!-- ============ OFFERS ============ -->
       <!-- A live deadline, derived from expiresAt and the page's own clock.
            Online only: forty-five seconds cannot be answered from a queue that
            drains ten minutes later, and the card says so when the signal is
            gone rather than swallowing the tap. -->
       <div data-panel="offers" class="mb-4"></div>
 
-      <!-- ================= THE JOB IN HAND ================= -->
-      <div data-panel="ladder" class="mb-4"></div>
+      <!-- ============ THE JOB IN HAND ============ -->
+      <!-- The rung track, the pause, the money on this job, and the detour
+           context. aria-live="polite" because a socket event can move the rung
+           under somebody who is not looking at the screen. -->
+      <div data-panel="ladder" class="mb-4" aria-live="polite"></div>
 
-      <!-- ================= THE VAN ================= -->
+      <!-- ============ WHAT I AM OWED (Phase 15c / 22b) ============ -->
+      <!-- Collapsed by default: it is not what somebody standing next to a
+           broken car came to this screen for, and it matters enormously once a
+           shift ends. There was no view of this at all before Phase 22b. -->
+      <details class="mb-4">
+        <summary class="h6">What I am owed</summary>
+        <div data-panel="earnings" class="mt-2"></div>
+      </details>
+
+      <!-- ============ THE VAN ============ -->
       <!-- Quantities AND how long ago somebody counted them. The badge is the
            point: a number nobody has checked since yesterday is a claim, not a
-           fact, and Phase 19 will refuse to dispatch on it. -->
+           fact, and Phase 19 refuses to dispatch on it. -->
       <div data-panel="van-stock" class="mb-4"></div>
 
       <!-- Location and access corrections a driver's message proposed. The
@@ -72,19 +117,26 @@
            appears here. -->
       <div data-panel="promotions"></div>
 
-      <h2 class="h6">Messages</h2>
+      <h2 class="h6 mt-4">Messages</h2>
       <div class="card mb-4" data-panel="chat">
         <div class="card-body">
           <div class="chat-thread" data-field="chat-messages"></div>
           <div class="d-flex gap-2 mt-2">
+            <label class="sr-only" for="chat-input">Message the driver</label>
             <input id="chat-input" class="form-control" placeholder="Message the driver" />
             <button class="btn btn-primary" data-action="send-message">Send</button>
           </div>
         </div>
       </div>
 
-      <h2 class="h6">Event trail</h2>
-      <ul class="list-group" data-panel="job-events"></ul>
+      <!-- ============ WHAT HAS HAPPENED ============ -->
+      <!-- Sentences, not the audit trail. This heading used to render the
+           DISPATCHER's debug panel — SCREAMING_CASE event types, ISO timestamps
+           and raw JSON payloads — on a field phone. The wording now comes from
+           src/domain/technicianUpdates.ts, whitelisted the same way the
+           driver's feed is. -->
+      <h2 class="h6 mt-4">What has happened on this job</h2>
+      <ul class="list-group" data-panel="technician-updates"></ul>
     </div>
 
     <script src="https://cdn.jsdelivr.net/npm/morphdom@2.7.4/dist/morphdom-umd.min.js"></script>

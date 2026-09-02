@@ -1,5 +1,5 @@
 <!doctype html>
-<html lang="en">
+<html lang="en" data-bs-theme="dark">
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
@@ -15,6 +15,7 @@
       rel="stylesheet"
     />
     <link href="/css/tokens.css" rel="stylesheet" />
+    <link href="/css/console.css" rel="stylesheet" />
   </head>
   <body class="p-3 console">
     <div class="d-flex align-items-center gap-2 mb-3">
@@ -176,6 +177,12 @@
           <!-- WHEN THERE IS NO PLAN AT ALL. UNSERVICEABLE is a handover, not
                an end state: the reason with its feasibility code, the option
                that came closest, and three things a dispatcher can do. -->
+          <!-- THE ACTION QUEUE (Phase 13). RECOMMEND and APPROVE rows waiting
+               on a person. The backend has served these since Phase 13 and
+               nothing rendered them until Phase 22b's audit — a queue nobody
+               can see is a queue nobody works. -->
+          <div data-panel="actions"></div>
+
           <div data-panel="escalation" class="card mt-3 border-danger" hidden>
             <div class="card-header text-danger">No plan for this job</div>
             <div class="card-body p-2">

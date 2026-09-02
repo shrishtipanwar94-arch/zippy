@@ -3,18 +3,21 @@
 // green after the socket has gone.
 
 const CONNECTION_CLASS = {
-  connected: 'bg-success',
-  connecting: 'bg-warning text-dark',
-  disconnected: 'bg-secondary',
+  connected: 'text-bg-success',
+  connecting: 'text-bg-warning',
+  disconnected: 'text-bg-secondary',
+};
+
+// The same three states, in the words a person reads rather than the lowercase
+// keys the socket uses.
+const CONNECTION_WORDS = {
+  connected: 'Connected',
+  connecting: 'Reconnecting…',
+  disconnected: 'No connection',
 };
 
 export function render(state) {
-  const badge = document.querySelector('[data-field="connection"]');
-  if (badge) {
-    if (badge.textContent !== state.connection) badge.textContent = state.connection;
-    const className = `badge ${CONNECTION_CLASS[state.connection]}`;
-    if (badge.className !== className) badge.className = className;
-  }
+  renderConnection(state);
 
   const who = document.querySelector('[data-field="session"]');
   if (who) {
@@ -36,4 +39,32 @@ export function render(state) {
     if (error.textContent !== text) error.textContent = text;
     error.hidden = !state.error;
   }
+}
+
+// TWO SHAPES FOR ONE FACT, and the difference is not decorative.
+//
+// The console shows a BADGE that spells the state out: an operator is watching
+// many things and "disconnected" has to be legible without interpretation. The
+// two field surfaces show a DOT, because a phone header that permanently reads
+// "connected" in the same weight as everything else trains a driver to ignore
+// the one time it matters. The dot still carries the word in its title and in
+// visually hidden text, so a screen reader and a hover both get the sentence
+// and colour is never the only signal.
+function renderConnection(state) {
+  const node = document.querySelector('[data-field="connection"]');
+  if (!node) return;
+
+  const words = CONNECTION_WORDS[state.connection] ?? state.connection;
+
+  if (node.classList.contains('conn-dot')) {
+    if (node.title !== words) node.title = words;
+    node.classList.toggle('is-down', state.connection !== 'connected');
+    const spoken = document.querySelector('[data-field="connection-text"]');
+    if (spoken && spoken.textContent !== words) spoken.textContent = words;
+    return;
+  }
+
+  if (node.textContent !== words) node.textContent = words;
+  const className = `badge ${CONNECTION_CLASS[state.connection]}`;
+  if (node.className !== className) node.className = className;
 }

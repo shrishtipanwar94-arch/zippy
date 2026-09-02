@@ -158,6 +158,56 @@ const envSchema = z.object({
   // a slow answer is worth less than a fast picker: past this we give up and
   // degrade rather than hold the screen.
   LLM_TIMEOUT_MS: z.coerce.number().int().positive().default(8_000),
+
+  // RAZORPAY (Phase 22b) — TEST MODE ONLY, and the schema is where that is
+  // enforced rather than a comment somebody can ignore.
+  //
+  // OPTIONAL, for the same reason LLM_API_KEY is: with no keys the payment
+  // provider stays the Phase 15c stub, every settlement rule still runs in the
+  // fast suite, and nothing about dispatch changes. A required key would make
+  // a payment vendor a startup dependency of a breakdown service.
+  //
+  // A LIVE KEY IS REFUSED AT STARTUP. Razorpay's own prefixes tell the two
+  // apart — `rzp_test_` and `rzp_live_` — so "this project never moves real
+  // money" is a validation rule the process enforces on itself, not a promise
+  // in a README. Nothing in this codebase can lift it without an edit here
+  // that would show up in a diff.
+  RAZORPAY_KEY_ID: z
+    .string()
+    .optional()
+    .transform((value) => (value && value.length > 0 ? value : undefined))
+    .refine((value) => value === undefined || value.startsWith('rzp_test_'), {
+      message: 'RAZORPAY_KEY_ID must be a test-mode key (rzp_test_...). Live mode is not supported.',
+    }),
+  RAZORPAY_KEY_SECRET: z
+    .string()
+    .optional()
+    .transform((value) => (value && value.length > 0 ? value : undefined)),
+  // A DIFFERENT SECRET FROM THE API SECRET, and Razorpay treats them
+  // separately: this one is set per webhook endpoint in their dashboard and is
+  // the only thing that proves a POST to /webhooks/razorpay came from them.
+  RAZORPAY_WEBHOOK_SECRET: z
+    .string()
+    .optional()
+    .transform((value) => (value && value.length > 0 ? value : undefined)),
+  RAZORPAY_API_BASE_URL: urlString('RAZORPAY_API_BASE_URL').default('https://api.razorpay.com'),
+  // Short, because a capture happens while a technician stands waiting for the
+  // screen to say the job is done. A slow gateway becomes a reconciliation
+  // problem, which we have a worker for, rather than a hung request.
+  RAZORPAY_TIMEOUT_MS: z.coerce.number().int().positive().default(8_000),
+  // The RazorpayX source account payouts are drawn from. Separate from the
+  // Payments API entirely — different product, different account number — and
+  // absent it the payout executor reports itself unconfigured instead of
+  // guessing.
+  RAZORPAY_PAYOUT_ACCOUNT_NUMBER: z
+    .string()
+    .optional()
+    .transform((value) => (value && value.length > 0 ? value : undefined)),
+  // HOW LONG A PAYMENT MAY SIT IN A NON-TERMINAL STATE before reconciliation
+  // asks the gateway what really happened. Long enough that a driver part-way
+  // through a checkout is not chased, short enough that a lost write is found
+  // in one sweep rather than one day.
+  RECONCILIATION_STALE_AFTER_MINUTES: z.coerce.number().int().positive().default(10),
 });
 
 function loadConfig() {

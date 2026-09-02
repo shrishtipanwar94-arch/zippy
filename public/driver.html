@@ -1,14 +1,17 @@
 <!doctype html>
-<html lang="en">
+<html lang="en" data-bs-theme="dark">
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="theme-color" content="#0f172a" />
     <title>Zippy — Help with your vehicle</title>
     <link
       href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css"
       rel="stylesheet"
     />
     <link href="/css/tokens.css" rel="stylesheet" />
+    <link href="/css/field.css" rel="stylesheet" />
+    <link href="/css/driver.css" rel="stylesheet" />
   </head>
   <!--
     THE DRIVER'S PAGE. Mobile-first, one thing per screen, large type.
@@ -19,189 +22,241 @@
     strings; it never maps a status to words, because a second translation map
     in the browser is a second place for SCREAMING_CASE to leak out.
 
+    NOR IS THERE A DATABASE ID ANYWHERE A PERSON CAN SEE. This page used to ask
+    a stranded driver to type `vehicle-metrocab-1` into a text box. They know
+    their number plate; they do not know our primary keys. The picker below is
+    filled from GET /vehicles and the id travels in a value attribute.
+
     The complaint buttons DO carry enum values, in data attributes, because the
     intake API takes them — but what the driver reads is the label, and the
     value is never displayed.
   -->
   <body class="p-3 driver">
-    <div class="d-flex align-items-center gap-2 mb-3">
-      <h1 class="h4 mb-0">Zippy</h1>
-      <!-- NO SESSION LINE HERE. The dispatcher's and technician's headers show
-           `ROLE · user-id`, which is useful to an operator and is an enum and
-           an internal id on a driver's screen — the browser walk-through caught
-           it reading "DRIVER · user-driver-metrocab-1" above the sentences this
-           phase spent its effort wording. session.js skips the field when it is
-           absent, so removing it is the whole fix. -->
-      <span data-field="connection" class="badge bg-secondary">disconnected</span>
-      <a href="/" class="ms-auto small">index</a>
-    </div>
+    <header class="app-bar">
+      <h1>Zippy</h1>
+      <!-- A DOT, NOT A BADGE. "connected" is not news; losing the connection
+           is. The word lives in the title and in screen-reader text so colour
+           is never the only signal. -->
+      <span class="conn-dot" data-field="connection" title="Connected"></span>
+      <span class="sr-only" data-field="connection-text">Connected</span>
+      <a href="/" class="ms-auto small link-secondary">Index</a>
+    </header>
 
-    <div data-field="error" class="alert alert-danger" hidden></div>
+    <div data-field="error" class="alert alert-danger" role="alert" hidden></div>
 
-    <form data-panel="login" class="row g-2 mb-3" onsubmit="return false">
-      <div class="col-12 col-sm-auto">
-        <input id="email" class="form-control" value="driver-metrocab-1@zippy.internal" />
-      </div>
-      <div class="col-12 col-sm-auto">
-        <input id="password" type="password" class="form-control" value="password-dev-only" />
-      </div>
-      <div class="col-12 col-sm-auto">
-        <button data-action="login" class="btn btn-primary w-100">Sign in</button>
+    <form data-panel="login" class="card mb-3" onsubmit="return false">
+      <div class="card-body">
+        <h2 class="h6 mb-3">Sign in</h2>
+        <div class="mb-2">
+          <label class="form-label small text-secondary" for="email">Email</label>
+          <input id="email" class="form-control" value="driver-metrocab-1@zippy.internal" />
+        </div>
+        <div class="mb-3">
+          <label class="form-label small text-secondary" for="password">Password</label>
+          <input id="password" type="password" class="form-control" value="password-dev-only" />
+        </div>
+        <button data-action="login" class="btn btn-primary btn-lg w-100">Sign in</button>
       </div>
     </form>
 
     <div data-panel="workspace" hidden>
-      <!-- ================= THE REQUEST FLOW — three steps ================= -->
+      <!-- ================= THE REQUEST FLOW ================= -->
       <div data-panel="request">
+        <!-- HOW MUCH IS LEFT. Four screens with no sense of progress is what
+             made this feel endless; a person who cannot see the end assumes the
+             worst. Filled segments plus "Step 2 of 4" — the bar is the
+             impression, the words are the fact. -->
+        <div class="stepper" data-field="stepper">
+          <span class="stepper-dot" data-dot="0"></span>
+          <span class="stepper-dot" data-dot="1"></span>
+          <span class="stepper-dot" data-dot="2"></span>
+          <span class="stepper-dot" data-dot="3"></span>
+          <span class="stepper-label" data-field="step-label">Step 1 of 4</span>
+        </div>
+
         <!-- STEP 0 — say it in your own words. Optional, and skippable in one
              tap: the picker underneath is the whole product when the assistant
              is unavailable, so it can never become the only way in. -->
         <section data-step="describe" class="mb-3" hidden>
-          <h2 class="h5">Tell us what happened</h2>
-          <p class="text-muted">
-            In your own words, in English or Hindi. Or skip this and answer a few
-            questions instead.
+          <h2 class="h4 mb-2">What has happened?</h2>
+          <p class="text-secondary">
+            Tell us in your own words — English or Hindi. Or skip this and
+            answer a few quick questions instead.
           </p>
           <textarea
             id="describeText"
-            class="form-control mb-2"
+            class="form-control mb-3"
             rows="4"
             placeholder="Gaadi start nahi ho rahi, dashboard pe battery ka light aa raha hai"
           ></textarea>
           <div class="d-grid gap-2">
-            <button class="btn btn-primary" data-action="describe">Continue</button>
-            <button class="btn btn-outline-light" data-action="skip-describe">
-              Skip — I will answer questions
+            <button class="btn btn-primary btn-lg" data-action="describe">Continue</button>
+            <button class="btn btn-outline-secondary btn-lg" data-action="skip-describe">
+              Skip — I'll answer questions
             </button>
           </div>
-          <p data-field="describing" class="text-muted mt-2" hidden>Reading what you wrote…</p>
+          <p data-field="describing" class="text-secondary mt-3" hidden>
+            <span class="spinner-border spinner-border-sm me-2" aria-hidden="true"></span>
+            Reading what you wrote…
+          </p>
         </section>
 
         <!-- STEP 1 — what is happening. -->
         <section data-step="symptoms" class="mb-3" hidden>
-          <h2 class="h5">What has happened to your vehicle?</h2>
-          <p class="text-muted">Pick whichever is closest. We can ask more in a moment.</p>
-          <!-- WHAT THE ASSISTANT READ, for the driver to confirm or correct. It
-               is a sentence above the same buttons they would have used anyway,
-               never a screen of its own: confirming is one tap, and correcting
-               is one tap on a different button. -->
+          <h2 class="h4 mb-2">What's wrong with the vehicle?</h2>
+          <p class="text-secondary">Pick whichever is closest. We can ask more in a moment.</p>
+
+          <!-- WHAT THE ASSISTANT READ, for the driver to confirm or correct. A
+               sentence above the same buttons they would have used anyway,
+               never a screen of its own. -->
           <div data-field="ai-note" class="alert alert-info" hidden></div>
           <!-- INVARIANT 8 — the degraded state is never silent. -->
           <div data-field="ai-degraded" class="alert alert-warning" hidden>
-            Our assistant is unavailable right now, so we will ask you a few
-            questions instead. This does not delay anyone reaching you.
+            Our assistant is unavailable right now, so we'll ask a few questions
+            instead. This does not delay anyone reaching you.
           </div>
+
           <div class="d-grid gap-2" data-field="complaints">
-            <button class="btn btn-outline-light btn-lg text-start" data-complaint="WONT_START">
-              It will not start
+            <button class="choice" data-complaint="WONT_START">
+              <span class="choice-icon" aria-hidden="true">🔑</span>
+              <span>It will not start</span>
             </button>
-            <button class="btn btn-outline-light btn-lg text-start" data-complaint="FLAT_TYRE">
-              I have a flat tyre
+            <button class="choice" data-complaint="FLAT_TYRE">
+              <span class="choice-icon" aria-hidden="true">🛞</span>
+              <span>I have a flat tyre</span>
             </button>
-            <button class="btn btn-outline-light btn-lg text-start" data-complaint="LOCKED_OUT">
-              I am locked out of the car
+            <button class="choice" data-complaint="LOCKED_OUT">
+              <span class="choice-icon" aria-hidden="true">🚪</span>
+              <span>I am locked out of the car</span>
             </button>
-            <button class="btn btn-outline-light btn-lg text-start" data-complaint="WARNING_LIGHT">
-              A warning light has come on
+            <button class="choice" data-complaint="WARNING_LIGHT">
+              <span class="choice-icon" aria-hidden="true">⚠️</span>
+              <span>A warning light has come on</span>
             </button>
-            <button class="btn btn-outline-light btn-lg text-start" data-complaint="NOISE_OR_SMELL">
-              There is an odd noise or smell
+            <button class="choice" data-complaint="NOISE_OR_SMELL">
+              <span class="choice-icon" aria-hidden="true">👃</span>
+              <span>There is an odd noise or smell</span>
             </button>
-            <button class="btn btn-outline-light btn-lg text-start" data-complaint="STUCK_OR_DAMAGED">
-              The car is stuck or damaged
+            <button class="choice" data-complaint="STUCK_OR_DAMAGED">
+              <span class="choice-icon" aria-hidden="true">🪨</span>
+              <span>The car is stuck or damaged</span>
             </button>
-            <button class="btn btn-outline-light btn-lg text-start" data-complaint="UNKNOWN">
-              I am not sure
+            <button class="choice" data-complaint="UNKNOWN">
+              <span class="choice-icon" aria-hidden="true">🤷</span>
+              <span>I am not sure</span>
             </button>
           </div>
-          <div class="mt-3">
-            <label class="form-label small text-muted" for="vehicleId">Which vehicle?</label>
-            <input id="vehicleId" class="form-control" value="vehicle-metrocab-1" />
+
+          <div class="mt-4">
+            <label class="form-label" for="vehicleId">Which vehicle?</label>
+            <!-- Filled from GET /vehicles. Number plates, never ids. -->
+            <select id="vehicleId" class="form-select form-select-lg"></select>
           </div>
         </section>
 
         <!-- STEP 2 — safety triage. Only the driver can answer any of this,
              which is exactly why it is asked here and not inferred. -->
         <section data-step="safety" class="mb-3" hidden>
-          <h2 class="h5">Are you safe where you are?</h2>
-          <p class="text-muted">This changes how quickly we come and who we send.</p>
+          <h2 class="h4 mb-2">Are you safe where you are?</h2>
+          <p class="text-secondary">This changes how quickly we come and who we send.</p>
           <div class="d-grid gap-2">
-            <label class="form-check card-check">
+            <label class="card-check">
               <input class="form-check-input" type="checkbox" id="blockingLiveLane" />
               <span class="form-check-label">My car is blocking moving traffic</span>
             </label>
-            <label class="form-check card-check">
+            <label class="card-check">
               <input class="form-check-input" type="checkbox" id="smokeOrBurningSmell" />
               <span class="form-check-label">I can see smoke or smell burning</span>
             </label>
-            <label class="form-check card-check">
+            <label class="card-check">
               <input class="form-check-input" type="checkbox" id="fuelSmell" />
               <span class="form-check-label">I can smell fuel</span>
             </label>
-            <label class="form-check card-check">
+            <label class="card-check">
               <input class="form-check-input" type="checkbox" id="overheating" />
               <span class="form-check-label">The engine is overheating</span>
             </label>
-            <label class="form-check card-check">
+            <label class="card-check">
               <input class="form-check-input" type="checkbox" id="driverAlone" checked />
               <span class="form-check-label">I am on my own</span>
             </label>
-            <label class="form-check card-check">
+            <label class="card-check">
               <input class="form-check-input" type="checkbox" id="vulnerablePassengers" />
-              <span class="form-check-label">There are children or elderly passengers with me</span>
+              <span class="form-check-label">Children or elderly passengers are with me</span>
             </label>
           </div>
-          <div class="d-flex gap-2 mt-3">
-            <button class="btn btn-outline-light" data-action="back">Back</button>
-            <button class="btn btn-primary flex-grow-1" data-action="to-location">Continue</button>
+          <div class="d-flex gap-2 mt-4">
+            <button class="btn btn-outline-secondary btn-lg" data-action="back">Back</button>
+            <button class="btn btn-primary btn-lg flex-grow-1" data-action="to-location">
+              Continue
+            </button>
           </div>
         </section>
 
-        <!-- STEP 3 — location refinement. Coordinates alone are not enough:
-             which side of a divided road you are on changes a 200m drive into
-             a 20km one, so the position is asked as well as measured. -->
+        <!-- STEP 3 — location. Coordinates alone are not enough: which side of
+             a divided road you are on changes a 200m drive into a 20km one, so
+             the position is asked as well as measured. -->
         <section data-step="location" class="mb-3" hidden>
-          <h2 class="h5">Where are you?</h2>
-          <p class="text-muted">
-            The more precise this is, the sooner someone reaches you.
-          </p>
-          <button class="btn btn-outline-light mb-2" data-action="locate">
-            Use my current location
+          <h2 class="h4 mb-2">Where are you?</h2>
+          <p class="text-secondary">The more precise this is, the sooner someone reaches you.</p>
+
+          <button class="btn btn-outline-primary btn-lg w-100 mb-3" data-action="locate">
+            📍 Use my current location
           </button>
-          <div class="row g-2 mb-2">
-            <div class="col-6">
-              <label class="form-label small text-muted" for="lat">Latitude</label>
-              <input id="lat" class="form-control" value="12.9352" />
-            </div>
-            <div class="col-6">
-              <label class="form-label small text-muted" for="lng">Longitude</label>
-              <input id="lng" class="form-control" value="77.6245" />
-            </div>
-          </div>
-          <p class="mb-1">Which best describes where the car is standing?</p>
+
+          <p class="mb-2">Which best describes where the car is standing?</p>
           <div class="d-grid gap-2" data-field="positions">
-            <button class="btn btn-outline-light text-start" data-position="LANE">
-              In a lane of moving traffic
+            <button class="choice" data-position="LANE">
+              <span class="choice-icon" aria-hidden="true">🚦</span>
+              <span>In a lane of moving traffic</span>
             </button>
-            <button class="btn btn-outline-light text-start" data-position="SHOULDER">
-              On the hard shoulder of a highway
+            <button class="choice" data-position="SHOULDER">
+              <span class="choice-icon" aria-hidden="true">🛣️</span>
+              <span>On the hard shoulder of a highway</span>
             </button>
-            <button class="btn btn-outline-light text-start" data-position="SERVICE_ROAD">
-              On a service road or side street
+            <button class="choice" data-position="SERVICE_ROAD">
+              <span class="choice-icon" aria-hidden="true">🏘️</span>
+              <span>On a service road or side street</span>
             </button>
-            <button class="btn btn-outline-light text-start" data-position="PARKING">
-              In a car park or driveway
+            <button class="choice" data-position="PARKING">
+              <span class="choice-icon" aria-hidden="true">🅿️</span>
+              <span>In a car park or driveway</span>
             </button>
           </div>
-          <div class="mt-2">
-            <label class="form-label small text-muted" for="landmark">
+
+          <div class="mt-3">
+            <label class="form-label" for="landmark">
               Anything nearby that would help us find you?
             </label>
-            <input id="landmark" class="form-control" placeholder="Petrol pump, flyover, gate number" />
+            <input
+              id="landmark"
+              class="form-control form-control-lg"
+              placeholder="Petrol pump, flyover, gate number"
+            />
           </div>
-          <div class="d-flex gap-2 mt-3">
-            <button class="btn btn-outline-light" data-action="back">Back</button>
-            <button class="btn btn-danger flex-grow-1 btn-lg" data-action="report">
+
+          <!-- THE RAW COORDINATES, FOLDED AWAY. They are real inputs the flow
+               depends on, and they are also two decimal numbers nobody at a
+               roadside wants to look at. Collapsed rather than removed: a
+               dispatcher on the phone to a driver sometimes needs to read them
+               out, and a demo needs to set them by hand. -->
+          <details class="mt-3">
+            <summary class="small text-secondary">Enter coordinates manually</summary>
+            <div class="row g-2 mt-1">
+              <div class="col-6">
+                <label class="form-label small text-secondary" for="lat">Latitude</label>
+                <input id="lat" class="form-control" value="12.9352" />
+              </div>
+              <div class="col-6">
+                <label class="form-label small text-secondary" for="lng">Longitude</label>
+                <input id="lng" class="form-control" value="77.6245" />
+              </div>
+            </div>
+          </details>
+
+          <div class="d-flex gap-2 mt-4">
+            <button class="btn btn-outline-secondary btn-lg" data-action="back">Back</button>
+            <button class="btn btn-danger btn-lg flex-grow-1" data-action="report">
               Send for help
             </button>
           </div>
@@ -218,14 +273,21 @@
 
       <!-- ================= THE LIVE PANEL ================= -->
       <!-- Every string in here is set from the server's already-worded
-           response. The markup carries no status vocabulary at all. -->
-      <div data-panel="driver-status" hidden>
-        <div class="card status-card mb-3">
-          <div class="card-body">
-            <p class="h4 mb-2" data-field="headline"></p>
-            <p class="mb-2" data-field="detail"></p>
-            <p class="arrival mb-0" data-field="arrival" hidden></p>
-            <p class="small text-muted mb-0" data-field="helper" hidden></p>
+           response. The markup carries no status vocabulary at all.
+
+           aria-live="polite" so a screen-reader user hears the job change
+           without having to go looking for it — this region updates on a socket
+           event, with nothing on screen to tell them it happened. -->
+      <div data-panel="driver-status" aria-live="polite" hidden>
+        <div class="status-hero">
+          <p class="headline" data-field="headline"></p>
+          <p class="mb-2 text-secondary" data-field="detail"></p>
+          <p class="arrival mb-0" data-field="arrival" hidden></p>
+          <!-- WHO IS COMING, as a person. The initial is decorative; the name
+               beside it is the message. -->
+          <div class="helper-row" data-field="helper-row" hidden>
+            <span class="helper-avatar" data-field="helper-initial" aria-hidden="true"></span>
+            <span data-field="helper"></span>
           </div>
         </div>
 
@@ -233,7 +295,7 @@
           <div class="card-body">
             <h2 class="h6" data-field="guidance-headline"></h2>
             <ul class="mb-2" data-field="guidance-points"></ul>
-            <p class="small text-muted mb-0" data-field="guidance-note"></p>
+            <p class="small text-secondary mb-0" data-field="guidance-note"></p>
           </div>
         </div>
 
@@ -242,18 +304,16 @@
         <div class="card mb-3" data-field="estimate-card" hidden>
           <div class="card-body">
             <h2 class="h6">What this comes to</h2>
-            <ul class="list-unstyled mb-2" data-field="estimate-lines"></ul>
-            <p class="h5 mb-2">Total <span data-field="estimate-total"></span></p>
+            <ul class="list-unstyled mb-3" data-field="estimate-lines"></ul>
+            <p class="h4 mb-3">Total <span data-field="estimate-total"></span></p>
             <!-- Only shown while an estimate is actually waiting on an answer.
                  Declining means "finish what I already agreed", so it appears
-                 only when there IS something to fall back to — the server
-                 refuses it otherwise, and a button that always fails is worse
-                 than no button. -->
+                 only when there IS something to fall back to. -->
             <div data-field="estimate-actions" class="d-grid gap-2" hidden>
               <button class="btn btn-success btn-lg" data-action="approve-estimate">
                 Approve this cost
               </button>
-              <button class="btn btn-outline-light" data-action="decline-estimate" hidden>
+              <button class="btn btn-outline-secondary" data-action="decline-estimate" hidden>
                 Just do what I already approved
               </button>
               <button class="btn btn-outline-danger" data-action="cancel-estimate">
@@ -264,44 +324,66 @@
         </div>
 
         <div class="card code-card mb-3" data-field="code-card" hidden>
-          <div class="card-body text-center">
-            <h2 class="h6">Your completion code</h2>
-            <p class="display-6 mb-1" data-field="code"></p>
-            <p class="small text-muted mb-0" data-field="code-explain"></p>
+          <div class="card-body">
+            <h2 class="h6 text-secondary">Your completion code</h2>
+            <p class="code mb-2" data-field="code"></p>
+            <p class="small text-secondary mb-0" data-field="code-explain"></p>
           </div>
         </div>
 
-        <!-- THE CONFIRMATION CARD. A flagged message sits here until the
-             driver answers it, and NOTHING about the job has changed while it
-             is on screen. The question and the button labels come from the
-             server's policy table, not from this markup — see
-             src/domain/promotionPolicy.ts. -->
+        <!-- THE CONFIRMATION CARD. A flagged message sits here until the driver
+             answers it, and NOTHING about the job has changed while it is on
+             screen. The question and the button labels come from the server's
+             policy table — see src/domain/promotionPolicy.ts. -->
         <div data-panel="promotions"></div>
+
+        <!-- THE CALLOUT FEE (Phase 22b). Hidden unless there is something to pay
+             AND a test-mode gateway to pay it through — help is already on its
+             way by the time this appears, and it never gates anything. -->
+        <div class="card pay-card mb-3" data-panel="checkout" hidden>
+          <div class="card-body">
+            <div class="d-flex align-items-center justify-content-between gap-3">
+              <div>
+                <div class="text-secondary small">Callout fee</div>
+                <div class="pay-amount" data-field="checkout-amount"></div>
+              </div>
+              <button class="btn btn-primary btn-lg" data-action="pay-callout">Pay now</button>
+            </div>
+            <p class="small text-secondary mb-0 mt-2">
+              Paying now is optional — help is already on the way either way.
+            </p>
+          </div>
+        </div>
 
         <!-- ONE coalesced update per re-plan, never six. -->
         <div class="alert alert-info" data-field="notification" hidden></div>
 
-        <h2 class="h6">Messages</h2>
+        <h2 class="h6 mt-4">Messages</h2>
         <div class="card mb-3" data-panel="chat">
           <div class="card-body">
             <div class="chat-thread" data-field="chat-messages"></div>
             <div class="d-flex gap-2 mt-2">
-              <input id="chat-input" class="form-control" placeholder="Tell us anything that would help" />
+              <label class="sr-only" for="chat-input">Message</label>
+              <input
+                id="chat-input"
+                class="form-control"
+                placeholder="Tell us anything that would help"
+              />
               <button class="btn btn-primary" data-action="send-message">Send</button>
             </div>
             <div class="d-flex gap-2 mt-2">
-              <button class="btn btn-outline-light btn-sm" data-action="send-location">
-                Send my exact location
+              <button class="btn btn-outline-secondary btn-sm" data-action="send-location">
+                📍 Send my exact location
               </button>
-              <label class="btn btn-outline-light btn-sm mb-0">
-                Send a photo
+              <label class="btn btn-outline-secondary btn-sm mb-0">
+                📷 Send a photo
                 <input id="chat-photo" type="file" accept="image/*" hidden />
               </label>
             </div>
           </div>
         </div>
 
-        <h2 class="h6">What has happened so far</h2>
+        <h2 class="h6 mt-4">What has happened so far</h2>
         <ul class="list-group" data-panel="driver-updates"></ul>
       </div>
     </div>

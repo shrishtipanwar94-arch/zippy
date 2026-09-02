@@ -1,0 +1,100 @@
+/* THE DRIVER'S SURFACE — everything only their phone uses.
+ *
+ * Split out of field.css in Phase 22b when that file passed 400 lines and
+ * stopped being one concept. field.css now holds what BOTH field surfaces share
+ * (the app bar, the connection dot, the choice rows, chat); this holds the
+ * driver's alone, and technician.css holds theirs.
+ *
+ * The brief is unchanged: one stressed person reading one sentence, large type,
+ * generous targets, and the two facts that reduce anxiety most — who is coming
+ * and when — as the largest things on the screen.
+ */
+
+/* ---------------------------------------------------------------------------
+ * THE DRIVER'S HERO. The two facts that reduce anxiety most are who is coming
+ * and when (docs/UI.md), so they are the largest things on the screen and
+ * everything else is subordinate to them.
+ */
+
+.status-hero {
+  background: linear-gradient(160deg, var(--surface-raised), var(--surface-alt));
+  border: 1px solid var(--border);
+  border-left: 4px solid var(--accent);
+  border-radius: var(--radius);
+  padding: 1.25rem;
+  box-shadow: var(--lift-high);
+  margin-bottom: 1rem;
+}
+
+.status-hero .headline {
+  font-size: 1.375rem;
+  font-weight: 650;
+  line-height: 1.3;
+  margin-bottom: 0.5rem;
+}
+
+.status-hero .arrival {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 0.4rem;
+  font-size: 1.5rem;
+  font-weight: 650;
+  color: var(--accent);
+}
+
+/* WHO IS COMING, as a person rather than a field. A name and a vehicle beside
+ * an initial, because "Ramesh is on his way" is a different message from a row
+ * in a table that happens to contain the word Ramesh. */
+.helper-row {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  margin-top: 1rem;
+  padding-top: 1rem;
+  border-top: 1px solid var(--border);
+}
+
+.helper-avatar {
+  width: 2.75rem;
+  height: 2.75rem;
+  border-radius: 50%;
+  background: var(--accent);
+  color: #1f1300;
+  display: grid;
+  place-items: center;
+  font-weight: 700;
+  font-size: 1.125rem;
+  flex: none;
+}
+
+/* Guidance is green-bordered rather than red: it is advice for the wait, not
+ * an alarm, and red is reserved for HIGH_RISK and for failures. */
+.guidance-card {
+  border-left: 4px solid var(--ok);
+}
+
+.code-card {
+  border: 1px solid var(--accent);
+  text-align: center;
+}
+
+.code-card .code {
+  font-family: var(--mono);
+  font-size: 2.5rem;
+  letter-spacing: 0.2em;
+  color: var(--accent);
+  font-weight: 700;
+}
+
+/* THE MONEY ROW. Amount on the left, action on the right, and never a card
+ * that could be mistaken for something blocking help — it appears only once
+ * somebody is already on their way. */
+.pay-card {
+  border: 1px solid var(--accent);
+  background: var(--surface-raised);
+}
+
+.pay-amount {
+  font-size: 1.5rem;
+  font-weight: 650;
+}

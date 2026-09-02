@@ -1,297 +1,184 @@
-/* THE PALETTE, defined once.
+/* THE PALETTE, DEFINED ONCE — and mapped onto Bootstrap rather than fought.
  *
- * docs/UI.md has specified this file since Phase 0 — "defined once as CSS
- * custom properties in /public/css/tokens.css and referenced everywhere, no
- * hardcoded hex in panel code". The file itself was never created, because
- * the Phase 4 pages were deliberately unstyled Bootstrap defaults and nothing
- * needed a colour. Phase 14 is the first surface that does, so it exists now,
- * with exactly the tokens the brief named and nothing else.
+ * docs/UI.md has specified this file since Phase 0: "defined once as CSS custom
+ * properties and referenced everywhere, no hardcoded hex in panel code".
  *
- * Hazard amber accent against a neutral slate base. The dispatcher console is
- * dense and dark on purpose: it is a control room, not a consumer app.
+ * WHAT CHANGED IN PHASE 22b, and why it is less code rather than more.
+ *
+ * This file used to re-skin Bootstrap by hand — `.driver .card`,
+ * `.technician .form-control`, `.console .table` and so on — one override per
+ * component per surface. That list can only ever be incomplete: every Bootstrap
+ * component nobody had thought of yet (dropdowns, list groups, modals, the
+ * focus ring) kept its light-mode colours and looked broken on a dark ground,
+ * and every new panel meant another override.
+ *
+ * Bootstrap 5.3 supports dark mode natively through `data-bs-theme="dark"` on
+ * the html element, with the whole component library reading from `--bs-*`
+ * custom properties. So the palette below is mapped onto THOSE, once, and every
+ * component is themed for free — including the ones this project has not used
+ * yet. The per-surface override blocks are gone.
  *
  * NEVER USE COLOUR AS THE ONLY SIGNAL — docs/UI.md is explicit, and it is an
  * accessibility rule rather than a stylistic one. Every coloured thing in the
  * panels pairs the colour with a word: a HIGH_RISK row says HIGH_RISK, a
  * rejection reason shows its code, a feasible option is labelled chosen.
+ *
+ * The surfaces themselves live in console.css (the dispatcher) and field.css
+ * (the driver and the technician).
  */
 
 :root {
   --surface: #0f172a;
   --surface-alt: #1e293b;
+  /* One step lighter than surface-alt. Introduced in Phase 22b so a card can
+   * sit on a panel that sits on the page and all three read as distinct — with
+   * two greys the field surfaces were flat and nothing looked grouped. */
+  --surface-raised: #273449;
   --text: #e2e8f0;
   --text-muted: #94a3b8;
   --border: #334155;
 
   --accent: #f59e0b; /* amber — primary actions and live status */
+  --accent-strong: #fbbf24; /* hover and focus only, never a fill */
   --danger: #ef4444; /* red — HIGH_RISK and failures, nothing else */
   --ok: #22c55e; /* green — confirmed / resolved only */
 
   --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+
+  /* Elevation, as two named steps rather than a shadow invented per card.
+   * Subtle on purpose: on a dark ground a heavy shadow reads as a smudge. */
+  --lift: 0 1px 2px rgb(0 0 0 / 0.4);
+  --lift-high: 0 8px 24px rgb(0 0 0 / 0.45);
+
+  --radius: 0.75rem;
 }
 
 /* ---------------------------------------------------------------------------
- * The console shell. Bootstrap supplies layout and spacing; these rules only
- * re-skin it onto the tokens above. Deliberately small — the brief says
- * information density, not a design system.
+ * THE BOOTSTRAP MAPPING. Everything above, expressed in the variables the
+ * framework actually reads. Nothing below this line is Zippy-specific styling —
+ * it is the palette, translated.
  */
 
-body.console {
-  background: var(--surface);
-  color: var(--text);
-  font-size: 0.875rem;
+[data-bs-theme='dark'] {
+  --bs-body-bg: var(--surface);
+  --bs-body-color: var(--text);
+  --bs-emphasis-color: #f8fafc;
+  --bs-secondary-color: var(--text-muted);
+  --bs-secondary-bg: var(--surface-alt);
+  --bs-tertiary-bg: var(--surface-raised);
+  --bs-tertiary-color: var(--text-muted);
+  --bs-border-color: var(--border);
+  --bs-border-radius: var(--radius);
+  --bs-link-color: var(--accent);
+  --bs-link-hover-color: var(--accent-strong);
+
+  /* The framework's own primary becomes the hazard amber, so `btn-primary`
+   * needs no override anywhere. Dark text on amber: amber against white fails
+   * contrast badly, and this is the one button a driver must not miss. */
+  --bs-primary: var(--accent);
+  --bs-primary-rgb: 245, 158, 11;
+  --bs-danger: var(--danger);
+  --bs-danger-rgb: 239, 68, 68;
+  --bs-success: var(--ok);
+  --bs-success-rgb: 34, 197, 94;
+
+  --bs-card-bg: var(--surface-alt);
+  --bs-card-border-color: var(--border);
 }
 
-.console .card,
-.console .table,
-.console .form-control,
-.console .form-select {
-  background: var(--surface-alt);
-  color: var(--text);
-  border-color: var(--border);
+/* Amber is a light colour: white text on it is unreadable. Bootstrap picks the
+ * foreground from its own contrast table, which it computes at build time from
+ * the Sass variable rather than from the custom property above — so this pair
+ * has to be stated. */
+[data-bs-theme='dark'] .btn-primary {
+  --bs-btn-color: #1f1300;
+  --bs-btn-hover-color: #1f1300;
+  --bs-btn-active-color: #1f1300;
+  --bs-btn-bg: var(--accent);
+  --bs-btn-hover-bg: var(--accent-strong);
+  --bs-btn-border-color: var(--accent);
+  --bs-btn-hover-border-color: var(--accent-strong);
 }
 
-.console .table > :not(caption) > * > * {
-  background: transparent;
-  color: var(--text);
-  border-color: var(--border);
-}
-
-.console .text-muted {
-  color: var(--text-muted) !important;
-}
-
-.console .card-header {
-  background: var(--surface);
-  border-color: var(--border);
-  color: var(--text-muted);
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
-  font-size: 0.75rem;
-}
-
-/* ---------------------------------------------------------------------------
- * Console-specific pieces.
- */
-
-/* The timeline is a long scrolling region that must NOT move under the
- * operator while events arrive — see the panels for how that is achieved. */
-.timeline-scroll {
-  max-height: 26rem;
-  overflow-y: auto;
-}
-
-.timeline-row {
-  border-bottom: 1px solid var(--border);
-  padding: 0.25rem 0;
-  font-size: 0.8125rem;
-}
-
-.timeline-row.is-selected {
-  background: rgba(245, 158, 11, 0.12);
-}
-
-.event-type {
-  font-family: var(--mono);
-  font-size: 0.75rem;
-  color: var(--accent);
-}
-
-.mono {
-  font-family: var(--mono);
-  font-size: 0.75rem;
-}
-
-.safety-HIGH_RISK {
-  color: var(--danger);
-  font-weight: 600;
-}
-
-.safety-ELEVATED {
-  color: var(--accent);
-}
-
-.term-bar {
-  height: 0.5rem;
-  background: var(--accent);
-  border-radius: 2px;
-}
-
-/* A rejected option's reason code. Bordered rather than filled so a long list
- * of them does not read as a wall of alarm — most rejections are ordinary. */
-.reason-code {
-  font-family: var(--mono);
-  font-size: 0.6875rem;
-  border: 1px solid var(--border);
-  border-radius: 3px;
-  padding: 0 0.25rem;
-  color: var(--text-muted);
-}
-
-.chosen-row {
-  border-left: 3px solid var(--ok);
-}
-
-/* ---------------------------------------------------------------------------
- * PHASE 15 — the two field surfaces.
+/* THE OUTLINE VARIANT NEEDS THE REAL PROPERTIES, not just the variables, and
+ * that difference cost a browser check to find. `.btn-primary` picks its
+ * background up from `--bs-btn-bg` and re-themes cleanly; `.btn-outline-primary`
+ * emits a literal `color` and `border-color` alongside its variables, so
+ * remapping the variables alone left every outline button rendering Bootstrap
+ * blue on an amber page while the variable itself read as amber. Setting both
+ * is what actually re-themes it.
  *
- * Same tokens, opposite briefs. The dispatcher's console is dense because an
- * operator is reading many jobs at once; these two are the reverse. A driver is
- * stressed and reading one sentence, a technician is one-handed in daylight
- * holding a cracked phone, and both want large type, generous targets and one
- * obvious thing to press.
+ * No `!important`: this selector is (0,2,0) against Bootstrap's (0,1,0) and
+ * this file loads after theirs, so it wins on its own. */
+[data-bs-theme='dark'] .btn-outline-primary {
+  color: var(--accent);
+  border-color: var(--accent);
+  --bs-btn-color: var(--accent);
+  --bs-btn-border-color: var(--accent);
+  --bs-btn-hover-bg: var(--accent);
+  --bs-btn-hover-color: #1f1300;
+  --bs-btn-hover-border-color: var(--accent);
+  --bs-btn-active-bg: var(--accent);
+  --bs-btn-active-color: #1f1300;
+  --bs-btn-active-border-color: var(--accent);
+}
+
+[data-bs-theme='dark'] .btn-outline-primary:hover,
+[data-bs-theme='dark'] .btn-outline-primary:active {
+  color: #1f1300;
+  background-color: var(--accent);
+  border-color: var(--accent);
+}
+
+/* A TICKED BOX IS AMBER, NOT BLUE. Bootstrap compiles the checked colour into
+ * its stylesheet from the Sass primary rather than reading the custom property,
+ * so remapping `--bs-primary` above does not reach it and this pair has to be
+ * stated — the same reason `.btn-primary` needs its own block.
  *
- * Both share the console's dark ground. That is a deliberate choice for a
- * product used at night on a roadside — a white screen at 2am destroys the
- * night vision of the person who has to watch traffic.
+ * The tick itself is redrawn dark. The default is a white glyph, and white on
+ * amber is around 2:1 — a tick nobody can see is a checkbox with no visible
+ * state, which on the safety questions would be a real problem rather than a
+ * cosmetic one.
  */
-
-body.driver,
-body.technician {
-  background: var(--surface);
-  color: var(--text);
-  font-size: 1rem;
-  max-width: 34rem;
-  margin: 0 auto;
-}
-
-.driver .card,
-.technician .card,
-.driver .form-control,
-.technician .form-control,
-.driver .form-select,
-.technician .form-select {
-  background: var(--surface-alt);
-  color: var(--text);
-  border-color: var(--border);
-}
-
-.driver .text-muted,
-.technician .text-muted {
-  color: var(--text-muted) !important;
-}
-
-.driver .list-group-item,
-.technician .list-group-item {
-  background: var(--surface-alt);
-  color: var(--text);
-  border-color: var(--border);
-}
-
-/* Tap targets. 3rem is the smallest a gloved thumb finds reliably, and every
- * primary action on both surfaces clears it. */
-.driver .btn-lg,
-.technician .btn-lg {
-  min-height: 3rem;
-  font-size: 1.0625rem;
-}
-
-/* A checkbox row that is a whole tappable card rather than a 1rem square —
- * the safety questions are answered at the roadside, not at a desk. */
-.driver .card-check {
-  background: var(--surface-alt);
-  border: 1px solid var(--border);
-  border-radius: 0.5rem;
-  padding: 0.75rem 0.75rem 0.75rem 2.25rem;
-}
-
-/* THE DRIVER'S HEADLINE. The largest thing on the screen, because the two
- * facts that reduce anxiety most are who is coming and when (docs/UI.md). */
-.driver .status-card {
-  border-left: 4px solid var(--accent);
-}
-
-.driver .arrival {
-  font-size: 1.25rem;
-  color: var(--accent);
-}
-
-/* The while-you-wait card is green-bordered rather than red: it is guidance,
- * not an alarm, and red is reserved for HIGH_RISK and failures. */
-.driver .guidance-card {
-  border-left: 4px solid var(--ok);
-}
-
-.driver .code-card {
-  border: 1px solid var(--accent);
-}
-
-.driver .code-card .display-6 {
-  font-family: var(--mono);
-  letter-spacing: 0.15em;
-  color: var(--accent);
-}
-
-/* THE TECHNICIAN'S COUNTDOWN. Amber while there is time, red under fifteen
- * seconds — and always paired with the words "seconds left", because colour is
- * never the only signal. */
-.technician .countdown {
-  font-size: 1.125rem;
-  color: var(--accent);
-}
-
-.technician .offer-card {
-  border-left: 4px solid var(--accent);
-}
-
-.technician .offer-urgent {
-  border-left-color: var(--danger);
-}
-
-.technician .offer-urgent .countdown {
-  color: var(--danger);
-}
-
-.technician .job-card {
-  border-left: 4px solid var(--ok);
+[data-bs-theme='dark'] .form-check-input:checked {
+  background-color: var(--accent);
+  border-color: var(--accent);
+  --bs-form-check-bg-image: url("data:image/svg+xml,%3csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 20 20'%3e%3cpath fill='none' stroke='%231f1300' stroke-linecap='round' stroke-linejoin='round' stroke-width='3' d='m6 10 3 3 6-6'/%3e%3c/svg%3e");
 }
 
 /* ---------------------------------------------------------------------------
- * PHASE 15b — chat, and the card that asks a human.
+ * FOCUS. Its own block because keyboard focus is the single most common thing
+ * a dark re-skin breaks: Bootstrap's default ring is a translucent blue that
+ * disappears against slate, and a focus ring nobody can see is the same as no
+ * keyboard support at all.
  *
- * The confirmation card is deliberately the loudest thing on either screen. It
- * is the one place in the product where a person is being asked to turn a
- * sentence into a dispatch change, and a card people skim past defeats the
- * entire design — the machinery underneath is built so that nothing happens
- * until somebody answers it.
+ * `:focus-visible` rather than `:focus` so a mouse click does not leave a ring
+ * behind, and an outline rather than a box-shadow so it survives Windows high
+ * contrast mode.
  */
 
-.chat-thread {
-  max-height: 16rem;
-  overflow-y: auto;
+:focus-visible {
+  outline: 3px solid var(--accent-strong);
+  outline-offset: 2px;
+  border-radius: 4px;
 }
 
-.chat-bubble {
-  border-radius: 0.5rem;
-  padding: 0.5rem 0.75rem;
-  margin-bottom: 0.5rem;
-  max-width: 85%;
+.btn:focus-visible,
+.form-control:focus,
+.form-select:focus {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px rgb(245 158 11 / 0.35);
 }
 
-/* Sides, not colours alone: the sender is also named on every bubble, because
- * colour is never the only signal (docs/UI.md). */
-.chat-mine {
-  background: var(--surface);
-  border: 1px solid var(--accent);
-  margin-left: auto;
-}
-
-.chat-theirs {
-  background: var(--surface-alt);
-  border: 1px solid var(--border);
-}
-
-.chat-photo {
-  display: block;
-  max-width: 100%;
-  border-radius: 0.375rem;
-  margin: 0.25rem 0;
-}
-
-/* Amber, not red. This is a question, not a failure — red is reserved for
- * HIGH_RISK and for things that have gone wrong. The card asks; only the
- * driver's answer makes the job high risk. */
-.promotion-card {
-  border: 2px solid var(--accent);
-  background: var(--surface-alt);
+/* People who have asked their operating system to stop animating things are
+ * not asking for a subtler animation. */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
 }

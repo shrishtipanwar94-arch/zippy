@@ -1,0 +1,122 @@
+// WHAT A TECHNICIAN IS OWED — the read side of the ledger they never saw.
+//
+// Phase 15c built the whole earnings model and Phase 22b built the rail that
+// pays it out. Neither built a way for the person earning the money to look at
+// it: `technicianBalance` existed in src/commit/ledger.ts with no route, and the
+// technician's page had no view of it at all. That was the largest single gap
+// the Phase 22b audit found.
+//
+// THE NEGATIVE BALANCE IS THE INTERESTING CASE, and it is why this is a
+// statement rather than a number. A technician who takes cash from a driver is
+// holding money that is mostly not theirs: the customer's debt is discharged
+// and their own claim on the platform drops by the FULL amount collected, so
+// their balance goes negative by roughly the platform's commission
+// (src/domain/ledger.ts, cashCollectionLines). Nothing is "taken back" — no
+// rail will pull money out of somebody's account and nobody agreed to that —
+// the debt simply nets against what they earn next, because a balance is a SUM
+// over an append-only log.
+//
+// Somebody seeing a negative number on their phone with no explanation would
+// reasonably think they had been charged. So the API returns the standing, the
+// entries that produced it, and what the next payout run will do about it.
+//
+// NOTHING IS COMPUTED THAT THE LEDGER DOES NOT ALREADY SAY. The balance is the
+// same aggregate `runPayoutBatch` reads, and the decision is the same pure
+// `payoutDecision` the run itself applies — a second opinion here would be a
+// second answer to "will I be paid tomorrow".
+
+import type { PrismaClient } from '@prisma/client';
+import { config } from '../infra/config.js';
+import { payoutDecision, technicianAccountCode } from '../domain/ledger.js';
+import { technicianBalance } from './ledger.js';
+
+const ENTRY_LIMIT = 20;
+
+export type EarningsStatement = {
+  balancePaise: number;
+  minimumPaise: number;
+  // PAY | HOLD_BELOW_MINIMUM | CARRY_DEBT, straight from the domain rule.
+  standing: string;
+  // One sentence a person can act on, rather than a status word.
+  explanation: string;
+  entries: { at: string; memo: string; amountPaise: number }[];
+  pendingPayouts: { reference: string | null; amountPaise: number; status: string }[];
+};
+
+export async function earningsStatementFor(
+  db: PrismaClient,
+  technicianId: string,
+): Promise<EarningsStatement> {
+  const minimumPaise = config.PAYOUT_MINIMUM_PAISE;
+  const [balancePaise, entries, pendingPayouts] = await Promise.all([
+    technicianBalance(db, technicianId),
+    recentEntries(db, technicianId),
+    db.payout.findMany({
+      where: { technicianId, status: { in: ['PENDING', 'SENT'] } },
+      orderBy: { createdAt: 'desc' },
+      take: 5,
+      select: { amountPaise: true, status: true, batch: { select: { reference: true } } },
+    }),
+  ]);
+
+  const decision = payoutDecision(balancePaise, minimumPaise);
+
+  return {
+    balancePaise,
+    minimumPaise,
+    standing: decision.outcome,
+    explanation: explain(decision.outcome, balancePaise, minimumPaise),
+    entries,
+    pendingPayouts: pendingPayouts.map((payout) => ({
+      reference: payout.batch?.reference ?? null,
+      amountPaise: payout.amountPaise,
+      status: payout.status,
+    })),
+  };
+}
+
+// THE THREE OUTCOMES, IN THE SECOND PERSON. The wording for CARRY_DEBT is the
+// one that matters: it has to say "netted against what you earn next" and never
+// anything that sounds like money being taken.
+function explain(outcome: string, balancePaise: number, minimumPaise: number): string {
+  if (outcome === 'CARRY_DEBT') {
+    return (
+      'You are holding cash that is not all yours — the platform’s share of jobs ' +
+      'you collected on. Nothing will be taken from your account. It comes off ' +
+      'the top of what you earn next.'
+    );
+  }
+  if (outcome === 'HOLD_BELOW_MINIMUM') {
+    const shortfall = minimumPaise - balancePaise;
+    return `This rolls over to the next run — payouts start at ${rupees(minimumPaise)}, so you need ${rupees(shortfall)} more.`;
+  }
+  return 'This is due in the next payout run.';
+}
+
+function rupees(paise: number): string {
+  return `₹${Math.round(paise / 100).toLocaleString('en-IN')}`;
+}
+
+// The entries behind the number, so a technician can see WHICH job moved it.
+// Read straight off the append-only log — there is no balance column and there
+// must not be one.
+async function recentEntries(db: PrismaClient, technicianId: string) {
+  const account = await db.ledgerAccount.findUnique({
+    where: { code: technicianAccountCode(technicianId) },
+    select: { id: true },
+  });
+  if (!account) return [];
+
+  const entries = await db.ledgerEntry.findMany({
+    where: { accountId: account.id },
+    orderBy: { eventTime: 'desc' },
+    take: ENTRY_LIMIT,
+    select: { amountPaise: true, memo: true, eventTime: true },
+  });
+
+  return entries.map((entry) => ({
+    at: entry.eventTime.toISOString(),
+    memo: entry.memo ?? 'ledger entry',
+    amountPaise: entry.amountPaise,
+  }));
+}

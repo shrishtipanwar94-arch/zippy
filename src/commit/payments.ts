@@ -29,7 +29,8 @@
 // monthly and a covered consumer owes nothing — asking either for a card would
 // be wrong, not merely unnecessary.
 
-import type { Prisma, PrismaClient } from '@prisma/client';
+import type { PaymentStatus, Prisma, PrismaClient } from '@prisma/client';
+import { isUniqueViolation } from '../infra/prismaErrors.js';
 import { logger } from '../infra/logger.js';
 import { usesGateway } from '../domain/settlementPath.js';
 import { cancellationCharge, cancellationStageFor } from '../domain/cancellationPolicy.js';
@@ -89,7 +90,7 @@ export async function authoriseCallout(
 
   const existing = await db.payment.findFirst({
     where: { jobId: job.id },
-    select: { id: true, status: true },
+    select: { id: true, status: true, gatewayOrderRef: true },
   });
   if (existing && existing.status !== 'PENDING_AUTHORISATION') {
     return { outcome: 'ALREADY_AUTHORISED', paymentId: existing.id };
@@ -108,28 +109,46 @@ export async function authoriseCallout(
   // never answers still leaves us something to show an operator and something
   // for the retry sweep to find. A row created only on success would make an
   // unreachable gateway indistinguishable from a job nobody tried to charge.
-  const payment =
-    existing ??
-    (await db.payment.create({
-      data: {
-        jobId: job.id,
-        tenantId: job.tenantId,
-        method: 'CARD',
-        status: 'PENDING',
-        amountPaise: callout.feePaise,
-        // ONE KEY PER JOB'S AUTHORISATION. Derived from the job id rather than
-        // random, so a retry of this whole function reuses it and the provider
-        // recognises the repeat instead of placing a second hold.
-        idempotencyKey: `auth-${job.id}`,
-      },
-      select: { id: true, status: true },
-    }));
+  //
+  // FIND-OR-CREATE, DECIDED BY THE UNIQUE INDEX — and this is a race the Phase
+  // 22b checkout route made reachable.
+  //
+  // TWO CALLERS now authorise the same job. The dispatch path calls
+  // `authoriseCalloutQuietly` when the reservation commits, and the driver's
+  // phone calls POST /jobs/:id/checkout when they tap Pay now. Both can be in
+  // flight at once — a driver watching the page tap the button while the saga
+  // is still committing is not a contrived interleaving, it is somebody being
+  // quick — and read-then-create means both read "no payment", both insert, and
+  // the loser dies on `idempotency_key` with a 500 in the driver's face for a
+  // payment that was in fact created correctly by the other caller.
+  //
+  // PRISMA'S `upsert` IS NOT THE FIX, which was worth discovering: it compiles
+  // to a select followed by an insert rather than to `INSERT ... ON CONFLICT`,
+  // so it narrows the window without closing it. Three concurrent callers still
+  // collide, and tests/concurrency/payments.test.ts proves it against a real
+  // Postgres.
+  //
+  // Catching the violation and re-reading is the shape the rest of this
+  // codebase already uses — `postTransaction` returns ALREADY_POSTED the same
+  // way, and so do the completion code and the stock confirmations. The
+  // constraint is the arbiter, and the loser simply reads the winner's row.
+  const payment = existing ?? (await findOrCreatePayment(db, {
+    jobId: job.id,
+    tenantId: job.tenantId,
+    amountPaise: callout.feePaise,
+  }));
 
   const result = await provider.authorise({
     idempotencyKey: `auth-${job.id}`,
     amountPaise: callout.feePaise,
     currency: 'INR',
     reference: job.id,
+    // WHAT WE ALREADY OPENED. A gateway that cannot place a hold synchronously
+    // opens an order instead, and this row is the record of that — so a retry
+    // reuses it rather than opening a second one. The stub ignores this; see
+    // `knownOrderRef` in src/payments/provider.ts for the Stage 2 measurement
+    // that made our own row the authority rather than a query against Razorpay.
+    knownOrderRef: payment.gatewayOrderRef ?? undefined,
   });
 
   if (result.outcome !== 'AUTHORISED') {
@@ -138,6 +157,15 @@ export async function authoriseCallout(
       paymentId: payment.id,
       reason: result.reason,
       outcome: result.outcome,
+      // PHASE 22b. A real gateway cannot place a hold synchronously — Razorpay
+      // opens an ORDER and the customer completes a checkout afterwards — so
+      // the reference to that order arrives on a non-AUTHORISED outcome and is
+      // the only handle the checkout screen, the webhook and the reconciliation
+      // sweep have on this payment. Storing it does not change what this
+      // function DECIDES: an order awaiting a customer is a flagged
+      // PENDING_AUTHORISATION and the job dispatches anyway, exactly as an
+      // unreachable gateway always did.
+      orderRef: result.outcome === 'AWAITING_CUSTOMER' ? result.orderRef : null,
     });
     return { outcome: 'PENDING_AUTHORISATION', paymentId: payment.id, reason: result.reason };
   }
@@ -179,17 +207,64 @@ export async function authoriseCallout(
   return { outcome: 'AUTHORISED', paymentId: payment.id, amountPaise: callout.feePaise };
 }
 
+// The insert, and the read that follows losing the race for it. Returns the
+// same shape either way, so the caller cannot tell — and does not need to —
+// whether it made the row or found it.
+type PaymentRow = { id: string; status: PaymentStatus; gatewayOrderRef: string | null };
+
+async function findOrCreatePayment(
+  db: PrismaClient,
+  input: { jobId: string; tenantId: string | null; amountPaise: number },
+): Promise<PaymentRow> {
+  // ONE KEY PER JOB'S AUTHORISATION. Derived from the job id rather than
+  // random, so a retry of this whole function reuses it and the provider
+  // recognises the repeat instead of placing a second hold — and so this
+  // insert has something stable to collide on.
+  const idempotencyKey = `auth-${input.jobId}`;
+  const select = { id: true, status: true, gatewayOrderRef: true } as const;
+
+  try {
+    return await db.payment.create({
+      data: {
+        jobId: input.jobId,
+        tenantId: input.tenantId,
+        method: 'CARD',
+        status: 'PENDING',
+        amountPaise: input.amountPaise,
+        idempotencyKey,
+      },
+      select,
+    });
+  } catch (error) {
+    if (!isUniqueViolation(error)) throw error;
+    // Somebody else got there between our read and our insert. The row we
+    // wanted exists; it is simply theirs.
+    return db.payment.findUniqueOrThrow({ where: { idempotencyKey }, select });
+  }
+}
+
 // THE DEGRADED STATE, MADE VISIBLE. Invariant 8: an operator sees it. The job
 // event is what puts it on the dispatcher's incident timeline; the payment
 // status is what the retry sweep looks for.
 async function flagPendingAuthorisation(
   db: PrismaClient,
-  input: { jobId: string; paymentId: string; reason: string; outcome: string },
+  input: {
+    jobId: string;
+    paymentId: string;
+    reason: string;
+    outcome: string;
+    orderRef?: string | null;
+  },
 ): Promise<void> {
   await runPublishingTransaction(db, async (tx) => {
     await tx.payment.update({
       where: { id: input.paymentId },
-      data: { status: 'PENDING_AUTHORISATION' },
+      data: {
+        status: 'PENDING_AUTHORISATION',
+        // Only ever written, never cleared: an order we opened stays findable
+        // even after a later attempt failed to reach the gateway at all.
+        ...(input.orderRef ? { gatewayOrderRef: input.orderRef } : {}),
+      },
     });
     await recordPaymentEvent(tx, input.paymentId, 'AUTHORISATION_FAILED', {
       reason: input.reason,

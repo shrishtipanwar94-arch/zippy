@@ -26,6 +26,7 @@ import type { Prisma } from '@prisma/client';
 import { runIdempotently } from '../queues/idempotent.js';
 import { escalateClosedSlaWindows } from '../commit/slaEscalation.js';
 import { retryPendingAuthorisations } from '../commit/authorisationRetry.js';
+import { runReconciliationSweep } from './reconciliation.js';
 import { prismaBase } from '../infra/prismaBase.js';
 
 export const CLEANUP_SCHEDULER_ID = 'cleanup-sweep';
@@ -82,4 +83,10 @@ export async function processCleanup(job: Job): Promise<void> {
   // reached waiting a full interval for no reason.
   const authorised = await retryPendingAuthorisations(prismaBase);
   if (authorised > 0) await job.log(`recovered ${authorised} pending callout authorisations`);
+
+  // Phase 22b. Also outside the transaction, and for the same reason. It asks
+  // the gateway about payments this database may have lost the write for —
+  // see src/payments/reconciliationDecision.ts for why a webhook alone cannot
+  // do that job.
+  await runReconciliationSweep(job);
 }

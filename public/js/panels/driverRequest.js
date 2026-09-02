@@ -58,6 +58,7 @@ export function render(state) {
   const describing = panel.querySelector('[data-field="describing"]');
   if (describing) describing.hidden = !state.request.describing;
 
+  renderStepper(panel, state.request.step);
   renderAssistantNote(panel, state.request);
   prefillSafety(panel, state.request);
 
@@ -106,16 +107,31 @@ function prefillSafety(panel, request) {
   }
 }
 
-// A chosen option is shown by swapping the outline for a solid fill AND by the
-// button being the only one still emphasised — colour is never the only signal
-// (docs/UI.md).
+// HOW FAR THROUGH, in filled segments and in words. Four screens with no sense
+// of progress is what made this flow feel endless — someone who cannot see the
+// end assumes the worst. The bar is the impression and "Step 2 of 4" is the
+// fact, because a three-quarters-full bar is not information.
+function renderStepper(panel, step) {
+  const index = STEPS.indexOf(step);
+  if (index < 0) return;
+
+  for (const dot of panel.querySelectorAll('[data-dot]')) {
+    dot.classList.toggle('is-done', Number(dot.dataset.dot) <= index);
+  }
+
+  const label = panel.querySelector('[data-field="step-label"]');
+  const text = `Step ${index + 1} of ${STEPS.length}`;
+  if (label && label.textContent !== text) label.textContent = text;
+}
+
+// A chosen option keeps its own shape and gains a border and a lighter ground —
+// it is never colour alone (docs/UI.md), and `aria-pressed` is what carries the
+// same fact to a screen reader, which cannot see either.
 function markSelected(panel, selector, attribute, chosen) {
   for (const button of panel.querySelectorAll(selector)) {
     const isChosen = button.dataset[attribute] === chosen;
-    const className = isChosen
-      ? 'btn btn-warning text-start'
-      : `btn btn-outline-light text-start${selector === '[data-complaint]' ? ' btn-lg' : ''}`;
-    if (button.className !== className) button.className = className;
+    button.classList.toggle('is-chosen', isChosen);
+    button.setAttribute('aria-pressed', String(isChosen));
   }
 }
 

@@ -293,17 +293,17 @@ model ContractTier {
 }
 
 model SlaPolicy {
-  id                String   @id @default(cuid())
-  contractId        String   @map("contract_id")
-  serviceType       String   @map("service_type")
-  responseMinutes   Int      @map("response_minutes")
-  resolutionMinutes Int      @map("resolution_minutes")
+  id                 String   @id @default(cuid())
+  contractId         String   @map("contract_id")
+  serviceType        String   @map("service_type")
+  responseMinutes    Int      @map("response_minutes")
+  resolutionMinutes  Int      @map("resolution_minutes")
   // WHAT MISSING THE WINDOW COSTS, in paise. This is the number that lets a
   // contract obligation enter the cost function as arithmetic rather than as a
   // preference: P(breach) x penalty is a quantity of money, and money is
   // already what `operational_cost` is measured in.
-  breachPenaltyPaise Int     @default(0) @map("breach_penalty_paise")
-  createdAt         DateTime @default(now()) @map("created_at")
+  breachPenaltyPaise Int      @default(0) @map("breach_penalty_paise")
+  createdAt          DateTime @default(now()) @map("created_at")
 
   contract  Contract   @relation(fields: [contractId], references: [id], onDelete: Cascade)
   jobs      Job[]
@@ -443,13 +443,20 @@ model Capability {
 }
 
 model Technician {
-  id           String   @id @default(cuid())
-  userId       String   @unique @map("user_id")
-  homeZoneId   String?  @map("home_zone_id")
-  employeeCode String   @unique @map("employee_code")
-  active       Boolean  @default(true)
-  ratingBps    Int?     @map("rating_bps")
-  createdAt    DateTime @default(now()) @map("created_at")
+  id                   String   @id @default(cuid())
+  userId               String   @unique @map("user_id")
+  homeZoneId           String?  @map("home_zone_id")
+  employeeCode         String   @unique @map("employee_code")
+  active               Boolean  @default(true)
+  ratingBps            Int?     @map("rating_bps")
+  // WHERE A PAYOUT WOULD GO. A RazorpayX fund account id (`fa_...`), created
+  // once per technician against their bank details and referenced by id
+  // afterwards — the bank account number itself is never stored here, which is
+  // the same reason no card details are stored anywhere in this schema. Null
+  // until somebody onboards them, and a payout for a technician with no fund
+  // account stays PENDING with a reason rather than failing the whole run.
+  payoutFundAccountRef String?  @map("payout_fund_account_ref")
+  createdAt            DateTime @default(now()) @map("created_at")
 
   user            User                   @relation(fields: [userId], references: [id], onDelete: Cascade)
   homeZone        Zone?                  @relation(fields: [homeZoneId], references: [id])
@@ -1284,17 +1291,27 @@ model CalloutFee {
 // ============================================================================
 
 model Payment {
-  id             String        @id @default(cuid())
-  jobId          String        @map("job_id")
-  tenantId       String?       @map("tenant_id")
-  method         PaymentMethod
-  status         PaymentStatus @default(PENDING)
-  amountPaise    Int           @map("amount_paise")
-  currency       String        @default("INR")
-  idempotencyKey String        @unique @map("idempotency_key")
-  externalRef    String?       @map("external_ref")
-  createdAt      DateTime      @default(now()) @map("created_at")
-  updatedAt      DateTime      @updatedAt @map("updated_at")
+  id              String        @id @default(cuid())
+  jobId           String        @map("job_id")
+  tenantId        String?       @map("tenant_id")
+  method          PaymentMethod
+  status          PaymentStatus @default(PENDING)
+  amountPaise     Int           @map("amount_paise")
+  currency        String        @default("INR")
+  idempotencyKey  String        @unique @map("idempotency_key")
+  // WHAT THE GATEWAY IS HOLDING, once it holds anything. `external_ref` is the
+  // AUTHORISATION — a Razorpay payment id — and only exists after the customer
+  // has actually paid. `gateway_order_ref` is the ORDER, which exists from the
+  // moment we ask, before anybody has touched a card. Two columns because they
+  // are two different objects with two different lifetimes: the order is what
+  // a checkout screen needs and what a webhook arrives quoting, and collapsing
+  // them would mean a payment awaiting the customer being indistinguishable
+  // from one already authorised. Null for the stub provider, which has no
+  // order concept at all.
+  gatewayOrderRef String?       @map("gateway_order_ref")
+  externalRef     String?       @map("external_ref")
+  createdAt       DateTime      @default(now()) @map("created_at")
+  updatedAt       DateTime      @updatedAt @map("updated_at")
 
   job           Job            @relation(fields: [jobId], references: [id])
   tenant        Tenant?        @relation(fields: [tenantId], references: [id])
@@ -1304,7 +1321,46 @@ model Payment {
   refunds       Refund[]
 
   @@index([jobId])
+  @@index([gatewayOrderRef])
   @@map("payments")
+}
+
+// EVERY WEBHOOK RAZORPAY HAS EVER SENT US, and the arbiter of whether we have
+// already acted on it.
+//
+// SEPARATE FROM `idempotency_keys` ON PURPOSE. That table is keyed by
+// (user, scope, key) and answers "did this CLIENT already ask for this?" — a
+// driver's phone retrying a request it is not sure landed. This one is keyed by
+// the GATEWAY's own event id and answers a different question: "did their
+// delivery already happen?" Razorpay retries a webhook until we 200 it, so the
+// same event id arrives repeatedly by design. Sharing one table would mean a
+// vendor's retry and a customer's retry competing for one key space, and there
+// is no user to scope a webhook by.
+//
+// THE ROW IS WRITTEN IN THE SAME TRANSACTION AS THE TRANSITION IT CAUSED, so
+// "we recorded it" and "we acted on it" cannot come apart. A duplicate collides
+// on the unique index, the transaction rolls back, and nothing is applied twice.
+model GatewayEvent {
+  id         String   @id @default(cuid())
+  provider   String
+  eventId    String   @map("event_id")
+  eventType  String   @map("event_type")
+  // The local payment or payout this was about, when we could find one.
+  // Deliberately nullable: a gateway event whose local row we cannot match is
+  // the exact divergence the reconciliation worker exists to close, and
+  // refusing to store it would throw away the evidence.
+  paymentId  String?  @map("payment_id")
+  payoutId   String?  @map("payout_id")
+  // APPLIED | DUPLICATE_STATE | OUT_OF_ORDER | UNMATCHED — what we did about it.
+  outcome    String
+  payload    Json     @default("{}")
+  eventTime  DateTime @map("event_time")
+  receivedAt DateTime @default(now()) @map("received_at")
+
+  @@unique([provider, eventId])
+  @@index([paymentId])
+  @@index([outcome])
+  @@map("gateway_events")
 }
 
 // Gateway callbacks. External origin, so event_time and received_at both.
@@ -1488,14 +1544,24 @@ model Commission {
 }
 
 model Payout {
-  id           String    @id @default(cuid())
-  technicianId String    @map("technician_id")
-  batchId      String?   @map("batch_id")
-  amountPaise  Int       @map("amount_paise")
-  status       String    @default("PENDING")
-  periodStart  DateTime? @map("period_start")
-  periodEnd    DateTime? @map("period_end")
-  createdAt    DateTime  @default(now()) @map("created_at")
+  id            String    @id @default(cuid())
+  technicianId  String    @map("technician_id")
+  batchId       String?   @map("batch_id")
+  amountPaise   Int       @map("amount_paise")
+  // PENDING -> SENT -> PAID, and PENDING again if the transfer failed. A
+  // failure never becomes its own terminal status: the money is still owed,
+  // and the next run must pick it back up rather than need somebody to notice
+  // a FAILED row. `failure_reason` is what makes that visible (invariant 8)
+  // without inventing a state the run would have to special-case.
+  status        String    @default("PENDING")
+  // The gateway's payout id, once it has one. Also what makes re-sending safe
+  // to detect: a row with a provider ref has already been handed to the rail.
+  providerRef   String?   @map("provider_ref")
+  failureReason String?   @map("failure_reason")
+  sentAt        DateTime? @map("sent_at")
+  periodStart   DateTime? @map("period_start")
+  periodEnd     DateTime? @map("period_end")
+  createdAt     DateTime  @default(now()) @map("created_at")
 
   technician Technician   @relation(fields: [technicianId], references: [id])
   batch      PayoutBatch? @relation(fields: [batchId], references: [id])
@@ -1568,11 +1634,11 @@ model Workshop {
   active    Boolean  @default(true)
   createdAt DateTime @default(now()) @map("created_at")
 
-  zone              Zone?                   @relation(fields: [zoneId], references: [id])
-  capabilities      WorkshopCapability[]
-  authorisations    WorkshopAuthorisation[]
-  hours             WorkshopHours[]
-  destinationOffers DestinationOffer[]
+  zone               Zone?                   @relation(fields: [zoneId], references: [id])
+  capabilities       WorkshopCapability[]
+  authorisations     WorkshopAuthorisation[]
+  hours              WorkshopHours[]
+  destinationOffers  DestinationOffer[]
   acceptanceOutcomes AcceptanceOutcome[]
 
   @@map("workshops")
@@ -1649,7 +1715,7 @@ model AcceptanceOutcome {
   // that can never disagree with its source (both are written in the same
   // transaction, from the same offer) is a smaller cost than a join on every
   // solve.
-  workshopId String @map("workshop_id")
+  workshopId         String   @map("workshop_id")
   outcome            String
   reason             String?
   // WHAT THE LEARNED P(accept) IS GROUPED BY — the bucket this outcome counts
@@ -1657,8 +1723,8 @@ model AcceptanceOutcome {
   // from `recorded_at`. A bucket boundary changing (four hour-parts becoming
   // six, say) must not silently reclassify history nobody asked to reclassify
   // — see src/domain/workshopAcceptance.ts.
-  hourBucket   String @map("hour_bucket")
-  vehicleClass String @map("vehicle_class")
+  hourBucket         String   @map("hour_bucket")
+  vehicleClass       String   @map("vehicle_class")
   recordedAt         DateTime @default(now()) @map("recorded_at")
 
   destinationOffer DestinationOffer @relation(fields: [destinationOfferId], references: [id], onDelete: Cascade)

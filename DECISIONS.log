@@ -6,3 +6,112 @@ each checkpoint (end of Phases 4, 9, 13, 17, 22).
 Cleared at the Phase 22 checkpoint — Phases 18 through 22 now live in
 INTERVIEW.md (§9 concurrency, §13 decisions, §14 questions, §15 weaknesses,
 §17 claims, §19 state).
+
+## Phase 22b — Razorpay adapter, and the field-surface audit / 2026-09-02 / (this commit)
+
+### Built
+- `src/payments/`: `razorpayProvider.ts` (authorise/capture/void/refund behind
+  Phase 15c's `PaymentProvider`), `razorpayOrders.ts`, `razorpayClient.ts`
+  (OK/REFUSED/UNREACHABLE, swappable transport), `razorpaySignature.ts` (webhook
+  HMAC + checkout handshake), `razorpayEvents.ts`, `gatewayState.ts` (the rank
+  scale), `reconciliationDecision.ts` (pure), `razorpayPayouts.ts`,
+  `selectProvider.ts`.
+- `src/commit/`: `razorpayWebhook.ts`, `gatewayTransition.ts`,
+  `paymentReconciliation.ts`, `payoutExecution.ts`, `technicianBoard.ts`,
+  `technicianEarnings.ts`.
+- Routes: `POST /webhooks/razorpay`, `POST /jobs/:id/checkout`,
+  `POST /jobs/:id/checkout/callback`, `GET /vehicles`,
+  `GET /technician/earnings`; `/technician/work` re-modelled.
+- Tables: `gateway_events` (unique on `(provider, event_id)`),
+  `payments.gateway_order_ref`, `payouts.provider_ref/failure_reason/sent_at`,
+  `technicians.payout_fund_account_ref`. Ledger gains `platform:bank` and
+  `payoutSettlementLines`.
+- UI: driver page rebuilt (stepper, vehicle picker, hero card); technician page
+  rebuilt (rung track, estimate, part-sourcing/destination context, release
+  notice, earnings); dispatcher action queue; `tokens.css` remapped onto
+  Bootstrap 5.3's `data-bs-theme`, split into console/field/driver/technician.
+- Tests: `razorpayAdapter`, `razorpayWebhook`, `razorpayPayouts`,
+  `concurrency/payments`. 854 fast + 12 concurrency, all green.
+
+### Decisions
+- Decision: our own `payments.gateway_order_ref` is the authority for whether an
+  order exists, passed back in as `knownOrderRef`.
+  Why: Stage 2 measured `GET /v1/orders?receipt=X` returning count 0 for an
+  order created seconds earlier with that receipt.
+  Alternative: trust the vendor's receipt filter. Why not: it opened a second
+  order on every retry — one job, two checkout screens.
+  Tradeoff: a lost write between creating an order and storing its ref orphans
+  an unpaid order. Costs nothing (no money is held) and is not detectable.
+- Decision: `AWAITING_CUSTOMER` added to `AuthoriseResult`; `refund` added as an
+  OPTIONAL interface method.
+  Why: Razorpay cannot hold money synchronously, and has no void endpoint — a
+  captured payment is released only by refunding.
+  Alternative: reuse UNREACHABLE. Why not: it means "we never got an answer",
+  which is a different operational fact.
+  Tradeoff: the interface grew. No business rule moved — Phase 15c's suite
+  passes unchanged, which is the check that matters.
+- Decision: the reconciliation sweep, not the webhook, is the correctness
+  mechanism. See `reconciliationDecision.ts`.
+- Decision: technician-facing wording is a server-side whitelist
+  (`technicianUpdates.ts`), mirroring `driverUpdates.ts`.
+  Why: the technician page was rendering the dispatcher's raw audit panel.
+  Alternative: a formatter with a `default:` branch. Why not: the failure mode
+  of forgetting becomes SCREAMING_CASE on a phone.
+
+### Concurrency
+- Scenario: a driver taps Pay now while the dispatch saga is still committing.
+  What races: `authoriseCallout` from `POST /jobs/:id/checkout` and from
+  `authoriseCalloutQuietly`, both read-then-create on `payments`.
+  Why dangerous: the loser died on `idempotency_key` and returned a 500 for a
+  payment that had in fact been created correctly.
+  How handled: catch the unique violation and re-read the winner's row — the
+  shape `postTransaction` already used. Prisma's `upsert` was tried FIRST and
+  rejected by the new test: it compiles to select-then-insert, not
+  `INSERT ... ON CONFLICT`, so three concurrent callers still collided.
+  Assumption relied on: the unique index on `payments.idempotency_key`.
+- Scenario: Razorpay redelivers a webhook. Handled by inserting the
+  `gateway_events` row in the same transaction as the transition it causes.
+- Scenario: `payment.captured` arrives before `payment.authorized`. Handled by
+  `movesForward` — a transition applies only if it moves the payment forward.
+
+### Weaknesses introduced
+- Payout execution is verified against a SCRIPTED rail only. RazorpayX
+  credentials reach the API (`GET /v1/payouts` returns 200 with the configured
+  account number) but no payout has been sent. Matters: yes, at any real scale.
+- `payment_capture: false` is UNVERIFIED against a completed checkout. If the
+  account auto-captures, the callout fee is taken at checkout and there is
+  nothing left to capture on completion — the two-stage split becomes fiction.
+  Matters: yes. It is the single largest untested assumption in the phase.
+- A 401 from Razorpay still surfaces to callers as UNREACHABLE. It is now
+  logged distinctly, but the retry sweep cannot tell a credential problem from
+  an outage and will keep retrying. Does not matter at current scale.
+- The reconciliation sweep is unbounded per pass beyond `SWEEP_LIMIT = 25`; a
+  long outage clears at 25 payments per five minutes.
+- The dispatcher readability pass is PARTIAL — see below.
+
+### What broke
+- The audit's own finding: the previous UI round was DRIVER-PAGE-ONLY. The
+  dispatcher got three lines (`data-bs-theme`, a stylesheet link). Reported
+  rather than quietly fixed.
+- `GET /v1/orders?receipt=` does not filter. Found on the first live call.
+- The payment race above — found by clicking Pay now on a real page, not by
+  the fast suite, which calls `authoriseCallout` once.
+- Bootstrap 5.3's `.btn-outline-*` emits a literal `color`, so remapping
+  `--bs-btn-color` left outline buttons blue while the variable read amber.
+  Only a screenshot caught it.
+- `MARUTI_SUZUKI` reached both the driver's vehicle picker and the technician's
+  job card. Now `src/domain/vehicleWords.ts`, shared.
+- `data-panel="job-events"` on the technician page rendered `jobDetail.js` —
+  the dispatcher's raw JSON audit panel — on a field phone.
+
+### Concepts now genuinely in use
+HMAC request signing over a raw body; vendor idempotency (three different
+mechanisms in one integration); the dual-write problem and convergent
+reconciliation as its only real answer; a monotonic state rank for out-of-order
+message delivery; Bootstrap 5.3 colour modes; WCAG 2.2 target sizing.
+
+### Interview angle
+"Your payment gateway returns success and your database write is lost. What
+happens?" — answerable with the reconciliation worker and, more importantly,
+with why a webhook is not sufficient. And: "how did you find the concurrency bug
+in your own payment path?" — by adding a second caller and clicking the button.

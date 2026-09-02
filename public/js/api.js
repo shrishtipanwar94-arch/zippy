@@ -50,6 +50,25 @@ export function resetChaos() {
   return request('POST', '/chaos/reset');
 }
 
+// THE ACTION QUEUE (Phase 13). Everything the system would like to do and is
+// waiting on a person for. RECOMMEND is executed; APPROVE has to be signed off,
+// and the two are separate routes because they are different acts — see
+// src/api/actions.ts.
+export function listActions() {
+  return request('GET', '/actions');
+}
+
+export function executeAction(actionId, note) {
+  return request('POST', `/actions/${actionId}/execute`, note ? { note } : {});
+}
+
+export function approveAction(actionId, decision, note) {
+  return request('POST', `/actions/${actionId}/approve`, {
+    decision,
+    ...(note ? { note } : {}),
+  });
+}
+
 export function getEscalation(jobId) {
   return request('GET', `/jobs/${jobId}/escalation`);
 }
@@ -116,12 +135,34 @@ export function answerQuestion(jobId, questionCode, answer) {
   return request('POST', `/jobs/${jobId}/answers`, { questionCode, answer });
 }
 
+// The caller's own vehicles, as number plates. A driver never types a database
+// id — see the comment on GET /vehicles in src/api/vehicles.ts.
+export function listVehicles() {
+  return request('GET', '/vehicles');
+}
+
 // --- the driver's live page ------------------------------------------------
 
 // One request for the whole panel, already in English. See src/api/driver.ts
 // for why the translation is the server's job and not this file's.
 export function getDriverView(jobId) {
   return request('GET', `/jobs/${jobId}/driver-view`);
+}
+
+// --- the callout fee, through Razorpay's test-mode checkout (Phase 22b) -----
+
+// Opens the order, or finds the one this job already has. Safe to call as often
+// as the driver taps the button: the order is looked up by an idempotency key
+// derived from the job, so there is only ever one.
+export function startCheckout(jobId) {
+  return request('POST', `/jobs/${jobId}/checkout`);
+}
+
+// What Razorpay's widget handed the browser. The server verifies the signature
+// and then goes and asks the gateway itself — nothing the browser says is
+// written down. See src/api/checkout.ts.
+export function confirmCheckout(jobId, result) {
+  return request('POST', `/jobs/${jobId}/checkout/callback`, result);
 }
 
 // --- the technician's field surface ----------------------------------------
@@ -148,6 +189,13 @@ export function sendTechnicianAction(action) {
 }
 
 // --- the van, and what came out of it (Phase 18) -----------------------------
+
+// The technician's own running account: balance, why it stands where it does,
+// and what the next payout run will do about it. See
+// src/commit/technicianEarnings.ts for why a negative balance needs a sentence.
+export function getTechnicianEarnings() {
+  return request('GET', '/technician/earnings');
+}
 
 export function getVanStock() {
   return request('GET', '/technician/stock');

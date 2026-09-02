@@ -1,8 +1,15 @@
-// THE TECHNICIAN'S THREE ENDPOINTS.
+// THE TECHNICIAN'S FOUR ENDPOINTS.
 //
 // GET  /technician/work              open offers, and the job in hand
+// GET  /technician/earnings          what they are owed, and why
 // POST /technician/offers/:id/respond  accept or decline, with a live deadline
 // POST /jobs/:id/actions             one rung of the status ladder
+//
+// WHAT THE BOARD RETURNS moved to src/commit/technicianBoard.ts in Phase 22b.
+// The route was returning nine fields while four phases' worth of work — the
+// estimate the driver is deciding on, the part-sourcing detour, the workshop a
+// tow is going to, and the fact that a re-plan had released them — sat in
+// tables nobody selected from. Assembling that read model is not a route's job.
 //
 // The split between the last two is the phase's offline story in one line.
 // A ladder action is queued on the phone with a key the phone generated and
@@ -22,25 +29,11 @@ import { applyTechnicianAction } from '../commit/technicianActions.js';
 import { recordArrivalEstimateQuietly } from '../commit/arrivalEstimate.js';
 import { authoriseCalloutQuietly, captureOnCompletionQuietly } from '../commit/payments.js';
 import { recordJobCompletionQuietly } from '../commit/earnings.js';
-import { LADDER_STEPS, nextStepFor } from '../domain/jobLadder.js';
+import { LADDER_STEPS } from '../domain/jobLadder.js';
+import { buildTechnicianBoard } from '../commit/technicianBoard.js';
+import { earningsStatementFor } from '../commit/technicianEarnings.js';
 
 export const technicianRouter = Router();
-
-// The statuses a technician still has work to do on. A RESOLVED or CANCELLED
-// job drops off their screen; the dispatcher keeps it.
-//
-// AWAITING_APPROVAL IS ON THIS LIST even though the technician cannot advance
-// it. A paused job is still theirs — they are standing next to the car — and
-// dropping it off the board would tell them it had been taken away. What they
-// see instead is why it is stopped and who it is waiting on.
-const OPEN_STATUSES = [
-  'COMMITTED',
-  'EN_ROUTE',
-  'ON_SITE',
-  'DIAGNOSING',
-  'WORKING',
-  'AWAITING_APPROVAL',
-] as const;
 
 // Gated on `technicianAction`, not on `job`. A DRIVER may `read` `job` — it is
 // how they see their own incident — so guarding this board on `job` let a
@@ -57,80 +50,30 @@ technicianRouter.get(
       // A TECHNICIAN token with no Technician row. Fails closed with an empty
       // board rather than falling back to "every job", the same rule NO_OWNER
       // follows in the permission layer.
-      res.json({ offers: [], jobs: [] });
+      res.json({ offers: [], jobs: [], releases: [] });
       return;
     }
-
-    const [offers, jobs] = await Promise.all([
-      prismaBase.technicianOffer.findMany({
-        where: { technicianId, status: 'PROPOSED', expiresAt: { gt: new Date() } },
-        orderBy: { sentAt: 'asc' },
-        select: {
-          id: true,
-          expiresAt: true,
-          job: {
-            select: {
-              id: true,
-              safetyLevel: true,
-              landmark: true,
-              roadPosition: true,
-              zone: { select: { name: true } },
-              vehicle: { select: { registration: true, profile: { select: { make: true, model: true } } } },
-            },
-          },
-        },
-      }),
-      prismaBase.job.findMany({
-        where: { assignedTechnicianId: technicianId, status: { in: [...OPEN_STATUSES] } },
-        orderBy: { updatedAt: 'desc' },
-        select: {
-          id: true,
-          status: true,
-          safetyLevel: true,
-          lat: true,
-          lng: true,
-          landmark: true,
-          zone: { select: { name: true } },
-          vehicle: { select: { registration: true, profile: { select: { make: true, model: true } } } },
-        },
-      }),
-    ]);
-
-    res.json({
-      offers: offers.map((offer) => ({
-        offerId: offer.id,
-        jobId: offer.job.id,
-        // The deadline as an instant, never a countdown from the server: the
-        // page derives seconds remaining from this and its own clock, so a
-        // slow response shows a shorter countdown rather than a wrong one.
-        expiresAt: offer.expiresAt.toISOString(),
-        safetyLevel: offer.job.safetyLevel,
-        zone: offer.job.zone.name,
-        where: offer.job.landmark ?? offer.job.roadPosition ?? null,
-        vehicle: describeVehicle(offer.job.vehicle),
-      })),
-      jobs: jobs.map((job) => ({
-        jobId: job.id,
-        status: job.status,
-        nextStep: nextStepFor(job.status),
-        safetyLevel: job.safetyLevel,
-        zone: job.zone.name,
-        landmark: job.landmark,
-        lat: job.lat,
-        lng: job.lng,
-        vehicle: describeVehicle(job.vehicle),
-      })),
-    });
+    res.json(await buildTechnicianBoard(prismaBase, technicianId));
   },
 );
 
-function describeVehicle(
-  vehicle: { registration: string; profile: { make: string; model: string } | null } | null,
-): string {
-  if (!vehicle) return 'unknown vehicle';
-  const profile = vehicle.profile;
-  return profile ? `${profile.make} ${profile.model} · ${vehicle.registration}` : vehicle.registration;
-}
+// WHAT THEY ARE OWED. Its own endpoint rather than a field on the board,
+// because it is not about a job: it is a running account that outlives every
+// job on the screen, and it is read when somebody wants to check it rather than
+// on every board poll.
+technicianRouter.get(
+  '/technician/earnings',
+  authenticate,
+  requirePermission('read', 'technicianAction'),
+  async (req, res) => {
+    const technicianId = req.auth?.actorId;
+    if (!technicianId) {
+      res.status(404).json({ error: 'not_found' });
+      return;
+    }
+    res.json(await earningsStatementFor(prismaBase, technicianId));
+  },
+);
 
 // ---------------------------------------------------------------------------
 

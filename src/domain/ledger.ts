@@ -59,6 +59,15 @@ export const PAYOUTS_PAYABLE_ACCOUNT = 'payouts:payable';
 // this job and the platform absorbs it. An expense line rather than a
 // receivable, because a receivable nobody will ever pay is not an asset.
 export const PLATFORM_COVERAGE_COST_ACCOUNT = 'platform:coverage-cost';
+// THE PLATFORM'S OWN BANK, and the counterparty to a payout that actually
+// leaves. Under this file's sign convention an account is NEGATIVE when it
+// holds value belonging to others, so the bank runs negative by whatever it is
+// sitting on for technicians it has not yet paid. Sending a payout moves the
+// bank toward zero (+) as the payable it was holding against is discharged (−),
+// and the two halves sum to zero exactly as every other transaction does.
+// Written for the first time in Phase 22b, which is when a payout stopped being
+// an accrual and became a transfer.
+export const PLATFORM_BANK_ACCOUNT = 'platform:bank';
 
 export function technicianAccountCode(technicianId: string): string {
   return `technician:${technicianId}`;
@@ -70,6 +79,7 @@ export const PLATFORM_ACCOUNTS: { code: string; name: string; kind: AccountKind 
   { code: CASH_IN_TRANSIT_ACCOUNT, name: 'Cash in transit', kind: 'CLEARING' },
   { code: PAYOUTS_PAYABLE_ACCOUNT, name: 'Payouts payable', kind: 'LIABILITY' },
   { code: PLATFORM_COVERAGE_COST_ACCOUNT, name: 'Coverage cost', kind: 'EXPENSE' },
+  { code: PLATFORM_BANK_ACCOUNT, name: 'Platform bank', kind: 'ASSET' },
 ];
 
 // A FLEET IS INVOICED, SO ITS DEBT IS ITS OWN. Per tenant rather than pooled,
@@ -309,6 +319,33 @@ export function payoutAccrualLines(input: {
       accountCode: PAYOUTS_PAYABLE_ACCOUNT,
       amountPaise: input.amountPaise,
       memo: 'payout awaiting transfer',
+    },
+  ];
+}
+
+// A PAYOUT ACTUALLY LEFT — Phase 22b, and the other half of the accrual above.
+//
+// The accrual said "the platform has committed to sending this"; this says "it
+// has gone". Two transactions rather than one because there are genuinely two
+// moments, they can be days apart, and the second one can FAIL: a bank rejects
+// a transfer and the money comes back. Booking the transfer at accrual time
+// would make a failed payout a correction to something that was never true.
+//
+// NOTHING IS POSTED WHEN A TRANSFER FAILS. The technician is still owed, the
+// payable still stands, and the Payout row goes back to PENDING for the next
+// run to pick up — which is exactly the state the accrual already describes, so
+// the right ledger entry for a failed payout is no entry at all.
+export function payoutSettlementLines(input: { amountPaise: Paise }): LedgerLine[] {
+  return [
+    {
+      accountCode: PAYOUTS_PAYABLE_ACCOUNT,
+      amountPaise: -input.amountPaise,
+      memo: 'payout transferred',
+    },
+    {
+      accountCode: PLATFORM_BANK_ACCOUNT,
+      amountPaise: input.amountPaise,
+      memo: 'money left the platform’s bank',
     },
   ];
 }

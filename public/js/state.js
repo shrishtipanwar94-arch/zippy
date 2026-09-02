@@ -147,8 +147,13 @@ const state = {
   // only ever hold one thing.
   notification: null,
 
-  // The technician's board: open offers and the job in hand.
-  work: { offers: [], jobs: [] },
+  // The technician's board: open offers, the job in hand, and any job a re-plan
+  // has released them from (Phase 13, surfaced in Phase 22b).
+  work: { offers: [], jobs: [], releases: [] },
+
+  // What the technician is owed. Read on demand rather than on every board
+  // poll: it is a running account that outlives every job on the screen.
+  earnings: null,
 
   // THE VAN (Phase 18). `stock` is the server's answer — quantities and how
   // long ago each shelf was counted. `counts` is what the technician has typed
@@ -169,7 +174,24 @@ const state = {
   // on demand — the same treatment scarcity and queue get, and for the same
   // reason: this is a summary a person checks, not a live feed a socket event
   // should be patching mid-glance.
+  // THE ACTION QUEUE (Phase 13). RECOMMEND and APPROVE rows waiting on a
+  // dispatcher. The backend has had these since Phase 13; nothing rendered them
+  // until Phase 22b's audit.
+  actions: [],
+
   fleetDashboard: null,
+
+  // THE CALLOUT FEE'S CHECKOUT (Phase 22b). The server's answer to "is there
+  // anything to pay, and can it be paid": READY, ALREADY_PAID, NOTHING_TO_PAY
+  // or UNAVAILABLE. Null until asked, and asking is never on the path to
+  // getting help.
+  checkout: null,
+
+  // THE DRIVER'S OWN VEHICLES, for the picker on the request screen. Loaded
+  // once at sign-in: a person's cars do not change while they are standing at
+  // the roadside, and re-fetching on every render would be a request per
+  // keystroke.
+  vehicles: [],
 
   error: null,
 };
@@ -389,8 +411,24 @@ export function setDriverView(view) {
   state.driverView = view;
 }
 
+export function setActions(actions) {
+  state.actions = actions;
+}
+
+export function setCheckout(checkout) {
+  state.checkout = checkout;
+}
+
+export function setVehicles(vehicles) {
+  state.vehicles = vehicles;
+}
+
 export function setWork(work) {
-  state.work = work;
+  state.work = { releases: [], ...work };
+}
+
+export function setEarnings(earnings) {
+  state.earnings = earnings;
 }
 
 export function setVanStock(stock) {

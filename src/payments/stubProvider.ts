@@ -24,6 +24,8 @@ import type {
   CaptureRequest,
   CaptureResult,
   PaymentProvider,
+  RefundRequest,
+  RefundResult,
   VoidRequest,
   VoidResult,
 } from './provider.js';
@@ -36,6 +38,7 @@ const AUTHORISATION_TTL_MS = 7 * 24 * 60 * 60 * 1000;
 type StubbedAuthorisation = {
   amountPaise: number;
   capturedPaise: number;
+  refundedPaise: number;
   voided: boolean;
 };
 
@@ -59,6 +62,7 @@ export class StubProvider implements PaymentProvider {
     this.authorisations.set(externalRef, {
       amountPaise: request.amountPaise,
       capturedPaise: 0,
+      refundedPaise: 0,
       voided: false,
     });
 
@@ -99,6 +103,35 @@ export class StubProvider implements PaymentProvider {
     // A void is a release, and "it is not held" is the state a caller wanted.
     if (held) held.voided = true;
     return { outcome: 'VOIDED' };
+  }
+
+  // REFUND — giving back money already taken. Optional on the interface and
+  // implemented here so the behaviour has a home in the fast suite: a refund
+  // can only exceed nothing that was captured, and refunding twice with one
+  // key gives the money back once.
+  private readonly refundsByKey = new Map<string, RefundResult>();
+
+  async refund(request: RefundRequest): Promise<RefundResult> {
+    const seen = this.refundsByKey.get(request.idempotencyKey);
+    if (seen) return seen;
+
+    const held = this.authorisations.get(request.paymentRef);
+    if (!held) return { outcome: 'DECLINED', reason: 'no such payment' };
+
+    const refundable = held.capturedPaise - held.refundedPaise;
+    const amountPaise = request.amountPaise ?? refundable;
+    if (amountPaise <= 0 || amountPaise > refundable) {
+      return { outcome: 'DECLINED', reason: 'refund exceeds what was captured' };
+    }
+
+    held.refundedPaise += amountPaise;
+    const result: RefundResult = {
+      outcome: 'REFUNDED',
+      externalRef: `stub-ref-${randomUUID()}`,
+      amountPaise,
+    };
+    this.refundsByKey.set(request.idempotencyKey, result);
+    return result;
   }
 
   // Test affordance, not part of the interface: what the provider believes it

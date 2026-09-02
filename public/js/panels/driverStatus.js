@@ -44,20 +44,35 @@ export function render(state) {
     arrival.hidden = !view.arrival;
   }
 
-  const helper = panel.querySelector('[data-field="helper"]');
-  if (helper) {
-    const text = view.helper
-      ? [view.helper.name, view.helper.vehicle].filter(Boolean).join(' · ')
-      : '';
-    if (helper.textContent !== text) helper.textContent = text;
-    helper.hidden = !view.helper;
-  }
+  renderHelper(panel, view.helper);
 
   renderNotification(state.notification);
   renderGuidance(panel, view.guidance);
   renderEstimate(panel, view.estimate);
   renderCode(panel, view.completionCode);
   renderUpdates(view.updates);
+}
+
+// WHO IS COMING, as a person rather than a field. The initial in the circle is
+// decoration and is hidden from assistive technology; the name beside it is the
+// message, and it is the second of the two facts that reduce a stranded
+// driver's anxiety most (docs/UI.md — the first is when).
+//
+// The server sends a first name only. That is deliberate and is src/api/driver.ts's
+// decision, not this file's: it is what a stranger walking up to your car
+// introduces themselves with, and the employee code is the dispatcher's business.
+function renderHelper(panel, helper) {
+  const row = panel.querySelector('[data-field="helper-row"]');
+  const name = panel.querySelector('[data-field="helper"]');
+  if (row) row.hidden = !helper;
+  if (!helper || !name) return;
+
+  const text = [helper.name, helper.vehicle].filter(Boolean).join(' · ');
+  if (name.textContent !== text) name.textContent = text;
+
+  const initial = panel.querySelector('[data-field="helper-initial"]');
+  const letter = helper.name ? helper.name.trim().charAt(0).toUpperCase() : '?';
+  if (initial && initial.textContent !== letter) initial.textContent = letter;
 }
 
 // ONE COALESCED UPDATE, never a feed. A re-plan fires six events in ninety

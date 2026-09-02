@@ -88,7 +88,13 @@ export type Resource =
   // exposure, spend, per-vehicle history. FLEET_MANAGER-only — a DISPATCHER
   // has no tenant to read it as, and reading somebody else's the DISPATCHER
   // way would be exactly the cross-tenant visibility the phase brief forbids.
-  | 'fleetDashboard';
+  | 'fleetDashboard'
+  // The driver's own checkout (Phase 22b). Its own resource rather than part of
+  // `estimate`, because approving what a repair costs and paying for it are
+  // different acts by the same person — and because a DISPATCHER may answer an
+  // estimate on a driver's behalf over the phone, which is exactly the thing
+  // nobody may do with somebody else's card.
+  | 'payment';
 
 type PermissionTable = Record<Role, Partial<Record<Resource, Action[]>>>;
 
@@ -103,6 +109,13 @@ const PERMISSIONS: PermissionTable = {
     // They see what it costs, and they are the only role that can answer.
     estimate: ['read'],
     estimateApproval: ['update'],
+    // Opens their own checkout and reports back from it. DRIVER-only: nobody
+    // pays on somebody else's behalf.
+    payment: ['read', 'create', 'update'],
+    // READ, never create. A driver picks which of their cars has broken down
+    // from a list of number plates; registering one is a fleet manager's or a
+    // dispatcher's act.
+    vehicle: ['read'],
   },
   TECHNICIAN: {
     job: ['read', 'update'],

@@ -37,6 +37,19 @@ export default defineConfig({
       // non-deterministic integration test against a provider. An empty value
       // reads as "not configured" (src/infra/config.ts).
       LLM_API_KEY: '',
+      // RAZORPAY, PINNED THE SAME WAY AND FOR A STRONGER REASON. The keys below
+      // are fake but well-formed, so `isRazorpayConfigured()` is true and every
+      // adapter path is reachable in the fast suite; the BASE URL points at a
+      // port nothing listens on, so any call a test forgot to fake fails
+      // instantly with a connection refused rather than reaching
+      // api.razorpay.com. A developer's real test-mode keys in .env are
+      // overridden here for exactly the reason LLM_API_KEY is: a test suite
+      // that talks to a vendor is neither reproducible nor free.
+      RAZORPAY_KEY_ID: 'rzp_test_suite',
+      RAZORPAY_KEY_SECRET: 'test-key-secret',
+      RAZORPAY_WEBHOOK_SECRET: 'test-webhook-secret',
+      RAZORPAY_API_BASE_URL: 'http://127.0.0.1:9',
+      RAZORPAY_PAYOUT_ACCOUNT_NUMBER: '0000000000000000',
     },
   },
 });

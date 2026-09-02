@@ -4,6 +4,7 @@ import { logger } from './infra/logger.js';
 import { prisma } from './infra/db.js';
 import { redis } from './infra/redis.js';
 import { createRealtimeServer, closeRealtimeAdapter } from './realtime/server.js';
+import { installConfiguredPaymentProvider } from './payments/selectProvider.js';
 
 /**
  * The web process. Serves the HTTP API and Socket.IO (and, from later in
@@ -11,6 +12,8 @@ import { createRealtimeServer, closeRealtimeAdapter } from './realtime/server.js
  * src/worker.ts is the other. They are started, deployed and scaled separately
  * because they fail differently.
  */
+installConfiguredPaymentProvider();
+
 const app = createApp();
 
 const server = app.listen(config.PORT, () => {

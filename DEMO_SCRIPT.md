@@ -75,14 +75,21 @@ server runs."
 
 1. Driver tab → the free-text box on "Tell us what happened" → type *"car
    won't start, no lights at all, engine doesn't turn over"* → **Continue**.
-2. Symptom picker ("What has happened…") — the extractor pre-lights *"It will
-   not start"*, leave it; **"Which vehicle?"** is pre-filled, leave it. (With
+2. Symptom picker ("What's wrong with the vehicle?") — the extractor pre-lights
+   *"It will not start"*, leave it; **"Which vehicle?"** is now a dropdown of
+   the driver's own number plates (`KA04GH4001 · Grey Maruti Suzuki Swift`),
+   pre-selected — leave it. (Phase 22b: it used to be a text box you typed a
+   database id into. If you want an aside, that is the "no key ever reaches a
+   person" rule applied to a picker.) (With
    no LLM key configured you'll see *"Our assistant is unavailable right now,
    so we will ask you a few questions instead"* — the keyword fallback still
    lights the complaint; it's a fair aside about the DEGRADED intake path.)
    → the entropy question ("What do you hear…"), answer or skip → safety
    checkboxes, leave the high-risk ones **unchecked** → location: pick a road
    position (e.g. *"On a service road or side street"*) → **Send for help**.
+   The bar at the top reads **Step 1 of 4 … Step 4 of 4** as you go; the raw
+   latitude/longitude boxes are folded under *"Enter coordinates manually"* if
+   a question forces you to show them.
 3. Dispatcher tab → **Solve — plan every pending job** → then click the job's
    id in the **LIVE INCIDENT TIMELINE** (or the priority queue) to load the
    inspector.
@@ -208,6 +215,15 @@ console and a toy. Under this load the global policy resolves roughly twice
 what the greedy policies do."
 
 ---
+
+> **The technician tab changed in Phase 22b.** The job card now carries a rung
+> track (Assigned → On the way → On scene → Diagnosing → Working), the itemised
+> cost the driver is deciding on, and — when the plan sends them via a workshop
+> — why. The completion-code box now says in words that entering it **takes
+> payment**. "What I am owed" is a collapsed section with the technician's own
+> balance; open it if somebody asks what the ledger is for. If a re-plan
+> releases a technician mid-job, a red **"You have been released from a job"**
+> card appears on their tab — before Phase 22b their board just went empty.
 
 ## Beat 7 — technician-dropout via the chaos panel  ·  ~75s
 

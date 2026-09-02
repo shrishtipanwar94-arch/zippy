@@ -22,6 +22,8 @@ import { chatRouter } from './chat.js';
 import { estimatesRouter } from './estimates.js';
 import { consoleRouter } from './console.js';
 import { escalationRouter } from './escalation.js';
+import { webhooksRouter } from './webhooks.js';
+import { checkoutRouter } from './checkout.js';
 import { mountChaosRoutes } from './chaos.js';
 import { authenticate, requirePermission } from './middleware/authenticate.js';
 import { createQueueAdminRouter, BULL_BOARD_PATH } from '../queues/board.js';
@@ -74,6 +76,14 @@ export function createApp(): Express {
     next();
   });
 
+  // BEFORE THE JSON PARSER, and that ordering is load-bearing rather than
+  // stylistic. A Razorpay webhook is authenticated by an HMAC over the exact
+  // bytes that arrived, and `express.json` consumes the stream and leaves only a
+  // parsed object — re-serialising it does not reproduce those bytes, so the
+  // signature would never verify. The webhook router mounts `express.raw` on its
+  // own path; every other route is unaffected. See src/api/webhooks.ts.
+  app.use(webhooksRouter);
+
   app.use(express.json({ limit: '1mb' }));
 
   app.use(healthRouter);
@@ -92,6 +102,7 @@ export function createApp(): Express {
   app.use(estimatesRouter);
   app.use(consoleRouter);
   app.use(escalationRouter);
+  app.use(checkoutRouter);
   // Registers nothing in a production build — see src/api/chaos.ts.
   mountChaosRoutes(app);
 
