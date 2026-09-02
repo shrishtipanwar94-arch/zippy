@@ -1,14 +1,26 @@
 # DEMO_SCRIPT.md
 
-The live walk-through. Ten beats, one clean seed, target **under twelve
-minutes**. If a run goes long, cut a beat (candidates for the axe are marked
-`[CUT FIRST]`) — do not talk faster.
+The live walk-through. One clean seed, target **under twelve minutes**.
 
-> **Status: DRAFT, not yet rehearsed.** Every click path below is written from
-> the code, not from a timed run. Phase 25's actual check — "the full demo runs
-> clean twice in a row from a reset database" — still has to be done with a
-> stopwatch, and the per-beat times are estimates. Walk it end to end once,
-> correct what is wrong here, then time it.
+**The twelve-minute run is beats 1, 2, 4, 5, 6, 7, 8, 9** — the per-beat
+estimates below sum to ~10.5 min plus ~1 min of open/close. **Beats 3 and 10
+(`[CUT FIRST]`) are backup**, not part of the timed run: keeping all ten puts
+the paper budget at ~13.5 min, over the limit before a word is spoken. Pull 3
+back in if the room wants the honest-loss story; pull 10 in if they push on
+tenancy. Do not talk faster to fit them.
+
+> **Status: click paths spot-checked against a live build, not yet timed.**
+> From a fresh `db:reset`: beats 1, 2, 4 walked end to end in the browser;
+> beat 5 confirmed over HTTP (a `STUCK_OR_DAMAGED` job returns a `CHOSEN`
+> destination with a three-workshop `screened` shortlist); beat 6's simulator
+> confirmed to generate and write board load; beat 9's endpoint returns the
+> right shape. Beats 3, 7, 8, 10 are from the code and a chaos-panel DOM read
+> only. Phase 25's check — "runs clean twice from a reset database, under
+> twelve minutes" — still needs a human with a real Chrome window and a
+> stopwatch; automated runs from this repo hit browser-harness screenshot
+> timeouts and cannot be trusted for timing.
+>
+> **Beat 9 needs setup on a fresh seed** — see the note in that beat.
 
 ---
 
@@ -57,10 +69,13 @@ server runs."
 1. Driver tab → the free-text box on "Tell us what happened" → type *"car
    won't start, no lights at all, engine doesn't turn over"* → **Continue**.
 2. Symptom picker ("What has happened…") — the extractor pre-lights *"It will
-   not start"*, leave it → the entropy question ("What do you hear…"), answer
-   or skip → safety checkboxes, leave the high-risk ones **unchecked** →
-   location: pick a road position (e.g. *"On a service road or side street"*) →
-   **Send for help**.
+   not start"*, leave it; **"Which vehicle?"** is pre-filled, leave it. (With
+   no LLM key configured you'll see *"Our assistant is unavailable right now,
+   so we will ask you a few questions instead"* — the keyword fallback still
+   lights the complaint; it's a fair aside about the DEGRADED intake path.)
+   → the entropy question ("What do you hear…"), answer or skip → safety
+   checkboxes, leave the high-risk ones **unchecked** → location: pick a road
+   position (e.g. *"On a service road or side street"*) → **Send for help**.
 3. Dispatcher tab → **Solve — plan every pending job** → then click the job's
    id in the **LIVE INCIDENT TIMELINE** (or the priority queue) to load the
    inspector.
@@ -228,10 +243,19 @@ written from a real walk-through of all six components."
 
 **Objective:** the tenancy / fleet-manager surface.
 
+> **SETUP — do this before the demo, off screen.** On a fresh seed the
+> dashboard is empty of history: `slaMetPercent` and every `repeatPatternFlag`
+> come back `null`, so there is nothing to point at. To have a flag to show,
+> create and **resolve** two `FLAT_BATTERY` jobs on one metrocab vehicle
+> (`vehicle-metrocab-1`) inside the pattern window first — through intake, or a
+> small script — so the second one trips the rule. Confirm with
+> `GET /fleet/dashboard` as `fm-metrocab@zippy.internal` that a vehicle now has
+> `repeatPatternFlag` non-null before you go live.
+
 1. Fleet tab (logged in as `fm-metrocab@zippy.internal`) → **fleet
    dashboard**: this manager's own SLA %, a boolean current-exposure figure,
    spend, and incident history — scoped to their tenant only.
-2. Point at a vehicle carrying the **repeat-incident flag** — a rule, not a
+2. Point at the vehicle carrying the **repeat-incident flag** — a rule, not a
    model: the same exact fault code seen more than once inside the window.
 
 **Say:** "A fleet manager sees only their own vehicles — the Prisma extension
