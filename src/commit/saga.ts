@@ -11,8 +11,8 @@
 // THE THREE LEGS, in acquisition order:
 //   1. Unit hold        local, version-checked (holds.ts). Cheapest to undo.
 //   2. Technician offer external actor: accept / decline / timeout.
-//   3. Destination offer external actor, tow jobs only. Workshop side stubbed
-//                       until Phase 22.
+//   3. Destination offer external actor, tow jobs only: accept / decline /
+//                       timeout, exactly like a technician offer.
 //
 // Compensations run in REVERSE order — destination, then technician, then hold
 // — because a later leg may depend on an earlier one still being in place.
@@ -35,6 +35,7 @@ import { appendJobEvent } from '../intake/events.js';
 import { createHold, releaseHold, consumeHold } from './holds.js';
 import { proposeOffer, respondToOffer } from './offers.js';
 import { recordReleaseCompensationQuietly } from './earnings.js';
+import { recordAcceptanceOutcome } from './destinationAcceptance.js';
 import { runPublishingTransaction } from '../realtime/transaction.js';
 
 export const TERMINAL_STATES: SagaState[] = ['COMMITTED', 'REQUEUED'];
@@ -149,10 +150,38 @@ export async function recordDestinationDecision(
   db: PrismaClient,
   input: { sagaId: string; decision: 'ACCEPTED' | 'DECLINED' },
 ): Promise<SagaState> {
-  await db.destinationOffer.updateMany({
-    where: { dispatchOfferId: input.sagaId, status: 'PROPOSED' },
-    data: { status: input.decision, respondedAt: new Date() },
+  // Read before the conditional update, not after: the update's WHERE clause
+  // is still what arbitrates the race (two answers landing for one offer),
+  // but this file also needs to know WHICH offer and workshop it just moved,
+  // to write the acceptance outcome below. Reading first and keying the
+  // update on the row's own id rather than re-running the same WHERE twice
+  // means both statements agree about which row they mean.
+  const offer = await db.destinationOffer.findFirst({
+    where: { dispatchOfferId: input.sagaId },
+    select: { id: true, jobId: true, workshopId: true },
   });
+
+  if (offer) {
+    const moved = await db.destinationOffer.updateMany({
+      where: { id: offer.id, status: 'PROPOSED' },
+      data: { status: input.decision, respondedAt: new Date() },
+    });
+
+    // ONLY THE WRITER THAT ACTUALLY MOVED THE ROW records an outcome — the
+    // same "whoever wins the conditional update owns the side effect" rule
+    // holds.ts and offers.ts both follow. A redelivery that finds the offer
+    // already resolved changes nothing here either.
+    if (moved.count > 0) {
+      await recordAcceptanceOutcome(db, {
+        destinationOfferId: offer.id,
+        jobId: offer.jobId,
+        workshopId: offer.workshopId,
+        outcome: input.decision,
+        at: new Date(),
+      });
+    }
+  }
+
   return advanceSaga(db, input.sagaId);
 }
 

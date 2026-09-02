@@ -361,6 +361,39 @@ async function buildFixture(): Promise<void> {
       keyType: 'SMART',
     },
   });
+  // A WORKSHOP AUTHORISED FOR THIS FIXTURE'S OWN BRAND (Phase 22). Every tow
+  // job now clears destination screening before anything else — a fixture
+  // whose vehicle make no real seeded workshop recognises would otherwise be
+  // NO_OPTION for every unit, not just VEHICLE_TYPE_INCOMPATIBLE ones. Same
+  // reasoning the project's own gotchas document gives for capabilities: this
+  // file owns what it needs rather than hoping it overlaps with the seed.
+  // Open every day, all day, so timing can never be the reason this rejects.
+  await prismaBase.workshop.upsert({
+    where: { id: `${PREFIX}-workshop` },
+    update: {},
+    create: {
+      id: `${PREFIX}-workshop`,
+      code: `${PREFIX}-WS`,
+      name: 'Redispatch Fixture Workshop',
+      zoneId: `${PREFIX}-zone`,
+      lat: FIXTURE_LAT,
+      lng: FIXTURE_LNG,
+      active: true,
+      authorisations: {
+        create: { id: `${PREFIX}-wsauth`, brand: 'TEST_REDISPATCH', level: 'STANDARD' },
+      },
+      hours: {
+        create: Array.from({ length: 7 }, (_, dayOfWeek) => ({
+          id: `${PREFIX}-wshours-${dayOfWeek}`,
+          dayOfWeek,
+          opens: '00:00',
+          closes: '23:59',
+          closed: false,
+        })),
+      },
+    },
+  });
+
   await prismaBase.user.upsert({
     where: { id: `${PREFIX}-driver-user` },
     update: {},

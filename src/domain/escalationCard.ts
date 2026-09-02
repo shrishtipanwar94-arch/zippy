@@ -104,9 +104,14 @@ const REASONS: Record<
     recommendation: 'Call round the destinations directly — this is an availability problem, not a routing one.',
   },
   DESTINATION_NOT_AUTHORISED: {
-    reason: "The vehicle's contract does not cover any reachable destination.",
-    alternative: 'An authorised destination further out, or a customer-paid tow.',
-    recommendation: 'Confirm with the customer whether they will pay for a destination their cover excludes.',
+    reason: 'No reachable, open workshop is authorised to service this brand.',
+    alternative: 'A workshop outside the brand list, or a longer tow to one that is authorised.',
+    recommendation: 'Call the manufacturer network for an exception, or confirm with the customer before sending it somewhere unauthorised.',
+  },
+  DESTINATION_EV_CLASS_MISMATCH: {
+    reason: 'A workshop is authorised for this brand, but none reachable is equipped for this EV class.',
+    alternative: 'A further-out workshop with the right EV certification.',
+    recommendation: 'Widen the search radius before anything else — this is usually a distance problem wearing an authorisation code.',
   },
   TENANT_CONTRACT_EXCLUDES: {
     reason: "This work is outside the customer's contract.",
@@ -127,6 +132,7 @@ const HUMANLY_CLEARABLE: RejectionCode[] = [
   'UNIT_UNAVAILABLE',
   'PART_UNAVAILABLE',
   'DESTINATION_NOT_AUTHORISED',
+  'DESTINATION_EV_CLASS_MISMATCH',
   'TENANT_CONTRACT_EXCLUDES',
   'NO_DESTINATION_AVAILABLE',
   'CAPABILITY_MISSING',

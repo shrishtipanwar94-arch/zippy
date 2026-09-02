@@ -163,6 +163,14 @@ export async function handleTrigger(
       solverRunId,
       from: { unitId: job.assignedUnitId, technicianId: job.assignedTechnicianId },
       to: { unitId: assignment.unitId, technicianId: assignment.technicianId },
+      // THE THIRD LEG'S TARGET, if this job is a tow and candidate generation
+      // found somewhere to send it. Null for every ordinary job, and also null
+      // for a tow where destination screening came back empty — feasibility
+      // already rejected that option, so `assignment` could never be one.
+      destinationWorkshopId:
+        assignment.option.destination.status === 'CHOSEN'
+          ? assignment.option.destination.workshopId
+          : null,
       expectedResolutionMinutes: assignment.cost.expectedTimeToResolution.value,
       totalCost: assignment.cost.total,
       // DOES THE CREW ALREADY ON SITE SURVIVE THE NEW PLAN? Computed here,
@@ -230,6 +238,9 @@ export type ExecuteOutcome =
 type ReassignImpact = {
   to?: { unitId?: string; technicianId?: string };
   from?: { unitId?: string | null; technicianId?: string | null };
+  // The workshop candidate generation chose for this job, if it is a tow —
+  // startSaga's third leg. Absent or null for every ordinary job.
+  destinationWorkshopId?: string | null;
   technicianRetained?: boolean;
   releasedTechnicianId?: string | null;
 };
@@ -275,6 +286,7 @@ export async function executeReassignment(
     unitId,
     technicianId,
     expectedUnitVersion: unit.version,
+    workshopId: impact?.destinationWorkshopId ?? null,
   });
 
   if (saga.outcome === 'REQUEUED') {

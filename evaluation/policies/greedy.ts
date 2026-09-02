@@ -53,7 +53,7 @@ export function greedyPolicy(rank: RankOption) {
     const snapshot = stockBlind(input.snapshot);
 
     for (const job of input.jobs) {
-      const options = await generateCandidates(job, snapshot, haversineTravelTimes);
+      const options = await generateCandidates(job, snapshot, haversineTravelTimes, input.now);
       const { feasible } = checkFeasibility(options, job, snapshot, input.now);
 
       const available = feasible.filter((option) => !taken.has(option.unitId));

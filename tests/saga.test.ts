@@ -23,6 +23,8 @@ import {
 } from '../src/commit/saga.js';
 import { timeoutOffer } from '../src/commit/offers.js';
 import { recoverSagas } from '../src/commit/sagaRecovery.js';
+import { processOfferExpiry } from '../src/workers/offerExpiry.js';
+import type { Job } from 'bullmq';
 
 const PREFIX = 'saga';
 let jobCounter = 0;
@@ -218,6 +220,15 @@ describe('a leg failing', () => {
     expect(finalState).toBe('REQUEUED');
     expect(await unitStatus(unitId)).toBe('AVAILABLE');
 
+    // PHASE 22. The decline is not only a saga event — it is a data point the
+    // learned P(accept) reads on every later solve.
+    const outcome = await prismaBase.acceptanceOutcome.findFirst({
+      where: { destinationOffer: { dispatchOfferId: started.sagaId } },
+      select: { outcome: true, workshopId: true, hourBucket: true, vehicleClass: true },
+    });
+    expect(outcome?.outcome).toBe('DECLINED');
+    expect(outcome?.workshopId).toBe(`${PREFIX}-workshop`);
+
     // The technician is told, in the durable record, that the job they
     // accepted is gone — a distinct event from an offer that was merely
     // withdrawn unanswered, because the two mean different things to the
@@ -327,6 +338,106 @@ describe('an offer that times out', () => {
     expect(state).toBe('REQUEUED');
     expect(await unitStatus(unitId)).toBe('AVAILABLE');
     expect(await prismaBase.unitHold.count({ where: { unitId, status: 'ACTIVE' } })).toBe(0);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// PHASE 22 — every destination offer's fate becomes a row in the learned
+// P(accept)'s count, however it resolves.
+describe('every destination outcome is recorded, not just its saga effect', () => {
+  it('records ACCEPTED when the workshop says yes', async () => {
+    const jobId = await freshJob();
+    const { unitId, technicianId, version } = await freshUnit('dest-accept');
+
+    const started = await startSaga(prismaBase, {
+      jobId,
+      unitId,
+      technicianId,
+      expectedUnitVersion: version,
+      workshopId: `${PREFIX}-workshop`,
+      scheduleExpiry: noSchedule,
+    });
+    if (started.outcome !== 'AWAITING_LEGS') throw new Error('setup failed');
+
+    await recordDestinationDecision(prismaBase, { sagaId: started.sagaId, decision: 'ACCEPTED' });
+
+    const outcome = await prismaBase.acceptanceOutcome.findFirst({
+      where: { destinationOffer: { dispatchOfferId: started.sagaId } },
+      select: { outcome: true },
+    });
+    expect(outcome?.outcome).toBe('ACCEPTED');
+  });
+
+  it('records nothing twice — a redelivered decision changes nothing', async () => {
+    const jobId = await freshJob();
+    const { unitId, technicianId, version } = await freshUnit('dest-idempotent');
+
+    const started = await startSaga(prismaBase, {
+      jobId,
+      unitId,
+      technicianId,
+      expectedUnitVersion: version,
+      workshopId: `${PREFIX}-workshop`,
+      scheduleExpiry: noSchedule,
+    });
+    if (started.outcome !== 'AWAITING_LEGS') throw new Error('setup failed');
+
+    await recordDestinationDecision(prismaBase, { sagaId: started.sagaId, decision: 'ACCEPTED' });
+    // A second decision for the same saga — the offer is no longer PROPOSED,
+    // so the conditional update this time moves nothing.
+    await recordDestinationDecision(prismaBase, { sagaId: started.sagaId, decision: 'DECLINED' });
+
+    const outcomes = await prismaBase.acceptanceOutcome.findMany({
+      where: { destinationOffer: { dispatchOfferId: started.sagaId } },
+      select: { outcome: true },
+    });
+    expect(outcomes).toHaveLength(1);
+    expect(outcomes[0]?.outcome).toBe('ACCEPTED');
+  });
+
+  // THE THIRD LEG SHARES THE TECHNICIAN OFFER'S DEADLINE — a workshop that
+  // never answers times out through the exact same queued job, not a second
+  // scheduled expiry (src/workers/offerExpiry.ts).
+  it('times out the destination leg alongside the technician leg, and records TIMEOUT', async () => {
+    const jobId = await freshJob();
+    const { unitId, technicianId, version } = await freshUnit('dest-timeout');
+
+    const started = await startSaga(prismaBase, {
+      jobId,
+      unitId,
+      technicianId,
+      expectedUnitVersion: version,
+      workshopId: `${PREFIX}-workshop`,
+      offerTtlMs: -1_000, // born expired
+      scheduleExpiry: noSchedule,
+    });
+    if (started.outcome !== 'AWAITING_LEGS') throw new Error('setup failed');
+
+    const technicianOffer = await prismaBase.technicianOffer.findFirstOrThrow({
+      where: { dispatchOfferId: started.sagaId },
+      select: { id: true },
+    });
+
+    // The real worker path, not `timeoutOffer` called directly — the
+    // destination-timeout logic lives in this processor, not in `timeoutOffer`
+    // itself.
+    await processOfferExpiry({ id: `test-${technicianOffer.id}`, data: { offerId: technicianOffer.id }, log: async () => 0 } as unknown as Job);
+
+    const destination = await prismaBase.destinationOffer.findFirstOrThrow({
+      where: { dispatchOfferId: started.sagaId },
+      select: { status: true },
+    });
+    expect(destination.status).toBe('TIMEOUT');
+
+    const outcome = await prismaBase.acceptanceOutcome.findFirst({
+      where: { destinationOffer: { dispatchOfferId: started.sagaId } },
+      select: { outcome: true },
+    });
+    expect(outcome?.outcome).toBe('TIMEOUT');
+
+    // And the saga itself is compensated, the same as a technician timeout —
+    // one shared deadline, one shared consequence.
+    expect(await unitStatus(unitId)).toBe('AVAILABLE');
   });
 });
 

@@ -104,6 +104,8 @@ function makeJob(
       contract: null,
       parkingLevel: null,
       onHighway: false,
+      vehicleMake: 'MARUTI_SUZUKI',
+      vehicleEvClass: null,
       safetyLevel: 'NORMAL',
     },
   };

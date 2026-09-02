@@ -20,6 +20,7 @@ import {
   NO_PARTS_MODELLED,
 } from '../src/engine/partSourcing.js';
 import type { PartSourcing } from '../src/engine/partSourcing.js';
+import { NO_DESTINATION_NEEDED } from '../src/engine/destinationSelection.js';
 import { FAULT_CODES } from '../src/domain/faults.js';
 import type { FaultDistribution } from '../src/domain/faults.js';
 
@@ -42,6 +43,8 @@ function job(overrides: Partial<JobForDispatch> = {}): JobForDispatch {
     contract: null,
     parkingLevel: null,
     onHighway: false,
+    vehicleMake: 'MARUTI_SUZUKI',
+    vehicleEvClass: null,
     safetyLevel: 'NORMAL',
     ...overrides,
   };
@@ -99,6 +102,7 @@ function option(overrides: Partial<DispatchOption> = {}): DispatchOption {
     resolvableFaults: ['FLAT_BATTERY'],
     skillResolvableFaults: ['FLAT_BATTERY'],
     partSourcing: NO_PARTS_MODELLED,
+    destination: NO_DESTINATION_NEEDED,
     coveredFaultProbability: 1,
     missingCapabilities: [],
     ...overrides,
@@ -466,18 +470,117 @@ describe('PART_UNAVAILABLE', () => {
   });
 });
 
+// DESTINATION — real from Phase 22. The screening decision was made in
+// candidate generation (src/engine/destinationSelection.ts); this filter only
+// reads the DestinationChoice's own `status`, so these tests set the status
+// directly rather than building a fleet of workshops.
+describe('the three destination codes', () => {
+  it('is feasible for an ordinary job — NOT_NEEDED never rejects', () => {
+    const result = checkFeasibility([option()], job(), snapshot(), NOW);
+    expect(result.rejected).toEqual([]);
+  });
+
+  it('is feasible for a tow job when the snapshot does not model workshops — NOT_MODELLED never rejects', () => {
+    const result = checkFeasibility(
+      [option({ destination: { status: 'NOT_MODELLED', workshopId: null, distanceKm: 0, pAccept: 1, detail: '', screened: [] } })],
+      job(),
+      snapshot(),
+      NOW,
+    );
+    expect(result.rejected).toEqual([]);
+  });
+
+  it('maps NO_BRAND_MATCH to DESTINATION_NOT_AUTHORISED', () => {
+    const result = checkFeasibility(
+      [
+        option({
+          destination: {
+            status: 'NO_BRAND_MATCH',
+            workshopId: null,
+            distanceKm: 0,
+            pAccept: 0,
+            detail: 'no active workshop is authorised for FERRARI',
+            screened: [],
+          },
+        }),
+      ],
+      job(),
+      snapshot(),
+      NOW,
+    );
+    expect(result.feasible).toEqual([]);
+    expect(result.rejected[0]!.code).toBe('DESTINATION_NOT_AUTHORISED');
+    expect(result.rejected[0]!.detail).toContain('FERRARI');
+  });
+
+  it('maps NO_EV_CLASS_MATCH to its own code, distinct from brand authorisation', () => {
+    const result = checkFeasibility(
+      [
+        option({
+          destination: {
+            status: 'NO_EV_CLASS_MATCH',
+            workshopId: null,
+            distanceKm: 0,
+            pAccept: 0,
+            detail: 'authorised for MARUTI_SUZUKI but none equipped for HV vehicles',
+            screened: [],
+          },
+        }),
+      ],
+      job(),
+      snapshot(),
+      NOW,
+    );
+    expect(result.rejected[0]!.code).toBe('DESTINATION_EV_CLASS_MISMATCH');
+    expect(result.rejected[0]!.code).not.toBe('DESTINATION_NOT_AUTHORISED');
+  });
+
+  it('maps NO_DESTINATION_REACHABLE to NO_DESTINATION_AVAILABLE', () => {
+    const result = checkFeasibility(
+      [
+        option({
+          destination: {
+            status: 'NO_DESTINATION_REACHABLE',
+            workshopId: null,
+            distanceKm: 0,
+            pAccept: 0,
+            detail: 'none open at this hour',
+            screened: [],
+          },
+        }),
+      ],
+      job(),
+      snapshot(),
+      NOW,
+    );
+    expect(result.rejected[0]!.code).toBe('NO_DESTINATION_AVAILABLE');
+  });
+
+  it('is feasible when a destination was actually CHOSEN', () => {
+    const result = checkFeasibility(
+      [
+        option({
+          destination: {
+            status: 'CHOSEN',
+            workshopId: 'ws-1',
+            distanceKm: 4.2,
+            pAccept: 0.87,
+            detail: 'authorised for MARUTI_SUZUKI',
+            screened: [],
+          },
+        }),
+      ],
+      job(),
+      snapshot(),
+      NOW,
+    );
+    expect(result.rejected).toEqual([]);
+    expect(result.feasible).toHaveLength(1);
+  });
+});
+
 describe('stub codes — never fire yet, on purpose', () => {
-  it('NO_DESTINATION_AVAILABLE does not exist until Phase 22', () => {
-    const result = checkFeasibility([option()], job(), snapshot(), NOW);
-    expect(result.rejected.find((rejection) => rejection.code === 'NO_DESTINATION_AVAILABLE')).toBeUndefined();
-  });
-
-  it('DESTINATION_NOT_AUTHORISED does not exist until Phase 22', () => {
-    const result = checkFeasibility([option()], job(), snapshot(), NOW);
-    expect(result.rejected.find((rejection) => rejection.code === 'DESTINATION_NOT_AUTHORISED')).toBeUndefined();
-  });
-
-  it('TENANT_CONTRACT_EXCLUDES does not exist until Phase 20', () => {
+  it('TENANT_CONTRACT_EXCLUDES does not exist until Phase 20 gives it teeth', () => {
     const result = checkFeasibility([option()], job(), snapshot(), NOW);
     expect(result.rejected.find((rejection) => rejection.code === 'TENANT_CONTRACT_EXCLUDES')).toBeUndefined();
   });

@@ -31,6 +31,8 @@ function job(overrides: Partial<JobForDispatch> = {}): JobForDispatch {
     contract: null,
     parkingLevel: null,
     onHighway: false,
+    vehicleMake: 'MARUTI_SUZUKI',
+    vehicleEvClass: null,
     safetyLevel: 'NORMAL',
     ...overrides,
   };

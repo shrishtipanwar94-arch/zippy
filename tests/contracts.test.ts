@@ -23,6 +23,7 @@ import { solve } from '../src/engine/solve.js';
 import type { DispatchOption, DispatchSnapshot, JobForDispatch } from '../src/engine/candidates.js';
 import { scoreOption } from '../src/engine/cost.js';
 import { NO_PARTS_MODELLED } from '../src/engine/partSourcing.js';
+import { NO_DESTINATION_NEEDED } from '../src/engine/destinationSelection.js';
 import {
   avoidedBreachPenaltyPaise,
   breachProbability,
@@ -114,6 +115,7 @@ const OPTION: DispatchOption = {
   resolvableFaults: ['FLAT_BATTERY'],
   skillResolvableFaults: ['FLAT_BATTERY'],
   partSourcing: NO_PARTS_MODELLED,
+  destination: NO_DESTINATION_NEEDED,
   coveredFaultProbability: 1,
   missingCapabilities: [],
 };
@@ -129,6 +131,8 @@ function engineJob(overrides: Partial<JobForDispatch> = {}): JobForDispatch {
     contract: null,
     parkingLevel: null,
     onHighway: false,
+    vehicleMake: 'MARUTI_SUZUKI',
+    vehicleEvClass: null,
     safetyLevel: 'NORMAL',
     ...overrides,
   };

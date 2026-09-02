@@ -113,6 +113,36 @@ function partSourcingLine(sourcing) {
     </div>`;
 }
 
+// THE DESTINATION SCREENING PANEL (Phase 22) — every workshop the shortlist
+// actually priced, not just the one chosen. "Why Workshop B and not the
+// closer Workshop A?" is answered by seeing both rows: A is nearer and less
+// likely to say yes, B is further and more likely to, and the ✓ marks which
+// one this option is actually betting on. Empty for anything but a CHOSEN
+// destination — a job that needs no tow, or one where nowhere qualified, has
+// nothing to screen.
+function destinationScreeningPanel(destination) {
+  if (!destination || destination.status !== 'CHOSEN' || !destination.screened?.length) return '';
+
+  const rows = [...destination.screened]
+    .sort((a, b) => (b.chosen ? 1 : 0) - (a.chosen ? 1 : 0) || a.distanceKm - b.distanceKm)
+    .map(
+      (row) => `
+        <div class="small">
+          ${row.chosen ? '<span class="text-success">✓</span>' : '<span class="text-muted">✕</span>'}
+          <span class="mono">${escapeHtml(row.workshopId)}</span>
+          P(accept) ${row.pAccept.toFixed(2)} ·
+          ${row.distanceKm.toFixed(1)} km
+        </div>`,
+    )
+    .join('');
+
+  return `
+    <div class="mb-2">
+      <div class="small text-muted">destination screening</div>
+      ${rows}
+    </div>`;
+}
+
 // The cost breakdown, term by term. Each term carries its own unit because
 // they are not commensurable — minutes, kilometres, two probabilities and
 // paise — and the weights are what convert them, so showing a bare number per
@@ -152,6 +182,7 @@ function chosenOption(option) {
         covers ${escapeHtml(((option.coveredFaultProbability ?? 0) * 100).toFixed(0))}% of the fault distribution
       </div>
       ${partSourcingLine(option.partSourcing)}
+      ${destinationScreeningPanel(option.destination)}
       <table class="table table-sm mb-0">
         <thead><tr><th>term</th><th class="text-end">value</th><th class="text-end">weighted</th><th></th></tr></thead>
         <tbody>${terms || '<tr><td colspan="4" class="text-muted">no breakdown recorded</td></tr>'}</tbody>

@@ -24,6 +24,7 @@ import { runIdempotently } from '../queues/idempotent.js';
 import { prismaBase } from '../infra/prismaBase.js';
 import { timeoutOffer } from '../commit/offers.js';
 import { advanceSaga } from '../commit/saga.js';
+import { recordAcceptanceOutcome } from '../commit/destinationAcceptance.js';
 
 // A HYPHEN, NOT A COLON. BullMQ rejects a custom job id containing `:` — it
 // uses colons as separators in its own Redis key layout, so one inside an id
@@ -71,6 +72,36 @@ export async function processOfferExpiry(job: Job<{ offerId: string }>): Promise
       select: { dispatchOfferId: true },
     });
     if (offer?.dispatchOfferId) {
+      // THE THIRD LEG SHARES THIS DEADLINE (Phase 22) — startSaga gives a
+      // destination offer the SAME `expiresAt` as the technician offer it
+      // rides alongside (saga.ts's own comment says so), so one scheduled
+      // expiry is enough for both: there is no separate destination-expiry
+      // queue to keep in sync with this one. A workshop that has gone quiet
+      // times out here, exactly like a technician who has.
+      const destination = await prismaBase.destinationOffer.findFirst({
+        where: { dispatchOfferId: offer.dispatchOfferId, status: 'PROPOSED' },
+        select: { id: true, jobId: true, workshopId: true },
+      });
+      if (destination) {
+        const at = new Date();
+        const moved = await prismaBase.destinationOffer.updateMany({
+          where: { id: destination.id, status: 'PROPOSED' },
+          data: { status: 'TIMEOUT', respondedAt: at },
+        });
+        // Same "only the writer that actually moved the row" rule
+        // recordDestinationDecision follows — a redelivery that finds this
+        // already resolved must not record a second outcome for it.
+        if (moved.count > 0) {
+          await recordAcceptanceOutcome(prismaBase, {
+            destinationOfferId: destination.id,
+            jobId: destination.jobId,
+            workshopId: destination.workshopId,
+            outcome: 'TIMEOUT',
+            at,
+          });
+        }
+      }
+
       await advanceSaga(prismaBase, offer.dispatchOfferId);
     }
 

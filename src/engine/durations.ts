@@ -101,3 +101,15 @@ export const SECOND_DISPATCH_TRAVEL_MINUTES = 25;
 export function escalationMinutes(fault: FaultCode): number {
   return REDISPATCH_COORDINATION_MINUTES + SECOND_DISPATCH_TRAVEL_MINUTES + resolveMinutes(fault);
 }
+
+// PHASE 22 — WHAT A WORKSHOP SAYING NO COSTS, in minutes. A destination that
+// declines does not need a second UNIT the way a mis-diagnosed fault does —
+// the crew and the vehicle are both still there — it needs a second
+// DESTINATION, found and offered to. That is coordination
+// (REDISPATCH_COORDINATION_MINUTES, the same gap `escalationMinutes` charges
+// for noticing a failure and re-planning) plus a drive to wherever the second
+// choice turns out to be. No `resolveMinutes` term here: a tow has no
+// on-scene repair time of its own to add, and the eventual repair at
+// whichever workshop it lands on is a separate, later dispatch this cost
+// function does not attempt to price today.
+export const DESTINATION_REFUSAL_MINUTES = REDISPATCH_COORDINATION_MINUTES + SECOND_DISPATCH_TRAVEL_MINUTES;

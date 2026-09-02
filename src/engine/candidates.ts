@@ -28,6 +28,8 @@ import { requiredCapabilities } from '../domain/capabilitySet.js';
 import type { ContractTerms } from '../domain/contractExposure.js';
 import { sourcePartsForPairs } from './partSourcing.js';
 import type { PartsSnapshot, PartSourcing } from './partSourcing.js';
+import { resolveDestinationForJob } from './destinationSelection.js';
+import type { DestinationChoice, WorkshopsSnapshot } from './destinationSelection.js';
 import { travelTimeMatrix } from '../infra/routing.js';
 import type { LatLng, TravelTimeSource } from '../infra/routing.js';
 
@@ -68,6 +70,15 @@ export type JobForDispatch = {
   // invariant 4 puts it ABOVE cost in a lexicographic ordering rather than
   // inside it as a weighted term.
   safetyLevel: SafetyLevelSnapshot;
+  // WHO THE VEHICLE IS, for destination selection (Phase 22) only — nothing
+  // else in this file reads either field. `vehicleMake` is the same string
+  // WorkshopAuthorisation.brand carries (MARUTI_SUZUKI, HYUNDAI, ...), and
+  // `vehicleEvClass` mirrors Workshop.evClass: null for an ordinary vehicle,
+  // 'LV' or 'HV' for one that needs EV-specific service. One fact, one home —
+  // read once here rather than re-derived per pair, the same reasoning as
+  // JobForDispatch's other passenger fields.
+  vehicleMake: string;
+  vehicleEvClass: string | null;
 };
 
 // Mirrors Prisma's SafetyLevel enum as a plain union, for the same reason
@@ -139,6 +150,10 @@ export type DispatchSnapshot = {
   // dispatching with no idea what is on the van is precisely the behaviour
   // they exist to measure against.
   parts?: PartsSnapshot | null;
+  // The workshop network (Phase 22) — same absent-means-not-modelled rule as
+  // `parts` above, for the same reason: a tow job in a snapshot with no
+  // workshops data is NOT_MODELLED, never silently "no workshop exists".
+  workshops?: WorkshopsSnapshot | null;
 };
 
 // ---------------------------------------------------------------------------
@@ -188,6 +203,11 @@ export type DispatchOption = {
   // that this pair's intersected skills do not have. Empty means this pair
   // can fully handle every fault still seriously in contention.
   missingCapabilities: string[];
+  // Where a tow goes, already collapsed to one answer — see
+  // destinationSelection.ts for why this is resolved once PER JOB rather than
+  // per pair, unlike partSourcing above it. Every option for the same job
+  // carries the identical value.
+  destination: DestinationChoice;
 };
 
 // ---------------------------------------------------------------------------
@@ -273,10 +293,20 @@ export function unitLocation(unit: UnitSnapshot, zonesById: Map<string, ZoneSnap
 // and needs travel time to come from somewhere local, instant and identical
 // on every run (invariant 10). It passes `haversineTravelTimes`. Nothing else
 // overrides it, and the default means no other call site had to change.
+//
+// `now` DEFAULTS TO THE WALL CLOCK, the same non-purity trade-off
+// `travelTimes` already makes for production, and for the same reason: a
+// workshop's open/closed state and its P(accept) bucket are both functions of
+// the actual hour, and callers that need determinism already pass their own
+// (src/engine/solve.ts threads through the `now` it was given; the Phase 10
+// harness passes a fixed instant). Existing callers that pass neither
+// `travelTimes` nor `now` are jobs that never need a tow, so the default
+// changes nothing for them.
 export async function generateCandidates(
   job: JobForDispatch,
   snapshot: DispatchSnapshot,
   travelTimes: TravelTimeSource = travelTimeMatrix,
+  now: Date = new Date(),
 ): Promise<DispatchOption[]> {
   const pairs = crewedPairs(snapshot);
   if (pairs.length === 0) return [];
@@ -310,6 +340,18 @@ export async function generateCandidates(
     travelTimes,
   });
 
+  // ONE DESTINATION FOR THE WHOLE JOB — see destinationSelection.ts's own
+  // header for why this call sits outside the per-pair map below rather than
+  // inside it, unlike parts.
+  const destinationChoice = await resolveDestinationForJob({
+    job,
+    vehicleMake: job.vehicleMake,
+    vehicleEvClass: job.vehicleEvClass,
+    workshops: snapshot.workshops,
+    now,
+    travelTimes,
+  });
+
   return pairs.map((pair, index) => {
     const capabilities = skills[index]!;
     const estimate = travel[index]!;
@@ -326,6 +368,7 @@ export async function generateCandidates(
       partSourcing: sourced[index]!.sourcing,
       coveredFaultProbability: coveredFaultProbability(job.faultDistribution, resolvable),
       missingCapabilities: required.filter((code) => !capabilities.has(code)),
+      destination: destinationChoice,
     };
   });
 }

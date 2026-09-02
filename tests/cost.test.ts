@@ -11,15 +11,18 @@ import { describe, expect, it } from 'vitest';
 import {
   WEIGHT_VECTORS,
   capabilityShortfallRisk,
+  destinationRefusalRiskMinutes,
   expectedTimeToResolutionMinutes,
   operationalCostPaise,
   partSourcingCostPaise,
   scoreOption,
   slaRisk,
 } from '../src/engine/cost.js';
+import { DESTINATION_REFUSAL_MINUTES } from '../src/engine/durations.js';
 import { comparatorFor, rankOptions } from '../src/engine/ranking.js';
 import type { DispatchOption, JobForDispatch } from '../src/engine/candidates.js';
 import { NO_PARTS_MODELLED } from '../src/engine/partSourcing.js';
+import { NO_DESTINATION_NEEDED } from '../src/engine/destinationSelection.js';
 import { FAULT_CODES } from '../src/domain/faults.js';
 import type { FaultDistribution } from '../src/domain/faults.js';
 import {
@@ -49,6 +52,8 @@ function job(overrides: Partial<JobForDispatch> = {}): JobForDispatch {
     contract: null,
     parkingLevel: null,
     onHighway: false,
+    vehicleMake: 'MARUTI_SUZUKI',
+    vehicleEvClass: null,
     safetyLevel: 'NORMAL',
     ...overrides,
   };
@@ -64,6 +69,7 @@ function option(overrides: Partial<DispatchOption> = {}): DispatchOption {
     resolvableFaults: ['FLAT_BATTERY'],
     skillResolvableFaults: ['FLAT_BATTERY'],
     partSourcing: NO_PARTS_MODELLED,
+    destination: NO_DESTINATION_NEEDED,
     coveredFaultProbability: 1,
     missingCapabilities: [],
     ...overrides,
@@ -255,6 +261,68 @@ describe('partSourcingCost', () => {
     );
 
     expect(fetching.total).toBeLessThan(stockedButFar.total);
+  });
+});
+
+describe('destinationRefusalRisk', () => {
+  it('is zero when nothing is being risked — NOT_NEEDED prices at zero', () => {
+    expect(destinationRefusalRiskMinutes(option())).toBe(0);
+  });
+
+  it('is zero for a workshop certain to accept', () => {
+    const chosen = {
+      status: 'CHOSEN' as const,
+      workshopId: 'ws-1',
+      distanceKm: 4.2,
+      pAccept: 1,
+      detail: '',
+      screened: [],
+    };
+    expect(destinationRefusalRiskMinutes(option({ destination: chosen }))).toBe(0);
+  });
+
+  it('is the full re-solve cost for a workshop certain to refuse', () => {
+    const chosen = {
+      status: 'CHOSEN' as const,
+      workshopId: 'ws-1',
+      distanceKm: 4.2,
+      pAccept: 0,
+      detail: '',
+      screened: [],
+    };
+    expect(destinationRefusalRiskMinutes(option({ destination: chosen }))).toBeCloseTo(
+      DESTINATION_REFUSAL_MINUTES,
+      10,
+    );
+  });
+
+  it('scales linearly with refusal probability in between', () => {
+    const chosen = {
+      status: 'CHOSEN' as const,
+      workshopId: 'ws-1',
+      distanceKm: 4.2,
+      pAccept: 0.7,
+      detail: '',
+      screened: [],
+    };
+    expect(destinationRefusalRiskMinutes(option({ destination: chosen }))).toBeCloseTo(
+      0.3 * DESTINATION_REFUSAL_MINUTES,
+      10,
+    );
+  });
+
+  // THE SYSTEM NOW PREFERS WORKSHOPS THAT ACTUALLY SAY YES — the phase
+  // brief's own sentence, proved directly: two options identical in every
+  // other way, differing only in which workshop they resolved to, must not
+  // score the same.
+  it('makes an otherwise-identical option to a reliable workshop cheaper than one to an unreliable one', () => {
+    const reliable = { status: 'CHOSEN' as const, workshopId: 'ws-reliable', distanceKm: 4, pAccept: 0.95, detail: '', screened: [] };
+    const risky = { status: 'CHOSEN' as const, workshopId: 'ws-risky', distanceKm: 4, pAccept: 0.2, detail: '', screened: [] };
+
+    const toReliable = scoreOption(option({ destination: reliable }), job(), NOW);
+    const toRisky = scoreOption(option({ destination: risky }), job(), NOW);
+
+    expect(toReliable.total).toBeLessThan(toRisky.total);
   });
 });
 

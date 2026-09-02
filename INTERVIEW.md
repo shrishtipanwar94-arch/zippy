@@ -5,18 +5,23 @@ automatically: one structured entry per phase goes into DECISIONS.log, and at
 checkpoints (end of Phases 4, 9, 13, 17, 22) that log is consolidated in here
 and cleared.
 
-**State after Phase 17 (checkpoint — core complete).** The thesis is
-implemented, measured, surfaced and breakable on purpose. A job goes from free
-text (or a symptom picker) to three ranked, globally assigned plans through a
-pure engine; a dispatcher turns one into a real reservation through a three-leg
-saga; a technician who finds something different triggers a re-solve; the work
-is priced, approved, paid, booked to a double-entry ledger and paid out. Three
+**State after Phase 22 (checkpoint — recommended ship point).** The thesis is
+implemented, measured, surfaced and breakable on purpose, and the platform now
+has a real inventory, a real tenancy layer and a real network of tow
+destinations behind it. A job goes from free text (or a symptom picker) to
+several ranked, globally assigned plans — up to four now that a contract-
+protecting vector exists — through a pure engine that also resolves what part
+a crew needs and where a tow goes, inside the same candidate-generation pass
+that never grows the assignment matrix; a dispatcher turns one plan into a
+real three-leg reservation; a technician who finds something different
+triggers a re-solve; the work is priced, approved, paid, booked to a
+double-entry ledger and paid out; a fleet manager reads their own SLA
+performance, exposure and per-vehicle history off the same event stream. Four
 browser surfaces exist and have been used. An LLM fills in the intake form and
-has been measured against a keyword control. Every failure mode has a rung on a
-degradation ladder, a switch that forces it, and a banner that names it.
+has been measured against a keyword control. Every failure mode has a rung on
+a degradation ladder, a switch that forces it, and a banner that names it.
 
-What does not exist: parts and inventory (18), the parts-aware feasibility that
-depends on it (19), and everything after.
+What does not exist: the Razorpay adapter (22b) and anything after.
 
 ---
 
@@ -52,10 +57,16 @@ been taken by an earlier, marginally better match is not stranded.
   routing reproducible.
 - Layers, in dependency order:
   - `src/domain/` — pure. Fault rules, entropy, safety, geo, **replan
-    triggers**, **action tiers**. No Prisma, no clock, no `Math.random`.
+    triggers**, **action tiers**, contract exposure, contract contention,
+    fleet metrics, repeat-pattern flag, the learned P(accept) formula
+    (`workshopAcceptance.ts`) and workshop opening hours. No Prisma, no
+    clock, no `Math.random`.
   - `src/engine/` — the solver. Candidates, feasibility, durations, cost,
-    ranking, allocation, solve. **Zero imports from prisma or redis**, checked
-    by a standing grep, and it writes nothing.
+    ranking, allocation, solve, **part sourcing** (19) and **destination
+    selection** (22), both resolved inside candidate generation so the
+    assignment matrix never grows past jobs × (unit, technician). **Zero
+    imports from prisma or redis**, checked by a standing grep, and it
+    writes nothing.
   - `src/intake/` — the domain applied to the database in transactions.
   - `src/commit/` — everything that mutates, and the reads that feed the
     engine: `dispatchSnapshot`, `persistSolverRun`, `holds`, `offers`, `saga`,
@@ -96,20 +107,36 @@ resolution time, cost, and whether the current crew survives the new plan.
 
 **Reservation** (`POST /actions/:id/execute`) is where a plan becomes real. The
 saga acquires a version-checked unit hold, offers the job to the technician,
-and — for tows — offers a destination. Any leg failing compensates the rest in
+and — for tows, since Phase 22 — offers the workshop candidate generation
+actually resolved (brand-authorised, EV-class-compatible, open, screened by
+distance and the learned P(accept)). Any leg failing compensates the rest in
 reverse. If the new plan does not use the crew already on site, they are
 explicitly released at this point, not when the recommendation was raised.
+Whatever a workshop answers — or does not, before the same deadline the
+technician offer shares — becomes one more row the next solve's P(accept)
+reads.
 
-Money, chat, and the completion ladder: **not implemented**.
+**Money** (Phase 15c) is not on the dispatch critical path by design: a price
+list is pinned at intake, an estimate is raised and approved with a
+re-approval tolerance, capture and cash collection both discharge the same
+customer debt, and every movement posts to a double-entry ledger asserted to
+balance after every money test. **Chat** (15b) never changes a job directly —
+a flagged message becomes a proposal a human confirms. Both are implemented;
+the Razorpay adapter behind the payment interface (22b) is not.
 
 ## 4. Database
 
-**85 tables** (`grep -c '^model ' prisma/schema.prisma`), 83 of them from
-Phase 1's schema and two added since: `chaos_switches` at Phase 17, and one
-earlier phase's addition the Phase 13 count had already missed. Exercised after
-Phase 17: everything the intake, auth, solver, commit, chat, money, AI and
-health paths touch — roughly forty of the eighty-five still have no reader, and
-that is item 28 in §15.
+**85 tables** (`grep -c '^model ' prisma/schema.prisma`), unchanged in count
+since Phase 17 — Phases 18–22 added COLUMNS to existing Phase 1 tables far
+more often than new tables (`unit_stock.starting_qty`,
+`sla_policies.breach_penalty_paise`, `acceptance_outcomes.workshop_id` /
+`.hour_bucket` / `.vehicle_class`, `dispatch_options.part_sourcing` /
+`.destination`), because the schema was largely drawn at Phase 1 and later
+phases gave its tables real readers and writers rather than new shapes.
+Exercised through Phase 22: intake, auth, solver, commit, chat, money, AI,
+health, parts, tenancy, fleet and the workshop network — most of the
+remaining unread tables are the Razorpay-adapter ones (22b) and a few
+genuinely speculative Phase 1 columns. See §15.28.
 
 Four patterns carry the design:
 
@@ -145,6 +172,8 @@ GET  /actions                 the RECOMMEND and APPROVE queues, DISPATCHER
 POST /actions/:id/execute     take a RECOMMEND — starts the reservation saga
 POST /actions/:id/approve     sign off (or reject) an APPROVE, approver recorded
 GET  /admin/queues            Bull Board, DISPATCHER only
+POST /vehicles                register a vehicle to one tenant, tenant off the token
+GET  /fleet/dashboard         a fleet manager's own SLA%, exposure, spend, history
 ```
 
 Conventions held: typed errors mapped to status codes in one place per module,
@@ -217,6 +246,39 @@ Only what the code actually exercises:
 17. **Transactional outbox**, **AsyncLocalStorage request context**, **Prisma
     extensions as an enforcement point**, **capped exponential backoff and a
     real dead-letter queue**, **testcontainers**.
+18. **A cached aggregate with a reconciliation invariant** (18) —
+    `unit_stock.quantity` is a running total of an append-only movement
+    ledger, checked by `starting_qty + SUM(delta) = quantity`, the same shape
+    as the double-entry balance check applied to counts instead of money.
+19. **Dimensionality collapse inside candidate generation** (19, 22) — a
+    genuine choice (which part source, which workshop) resolved to ONE answer
+    per option before the assignment problem is built, so the matrix stays
+    jobs × (unit, technician) regardless of how many real alternatives were
+    considered. Parts collapse per PAIR (stock differs by van); destinations
+    collapse per JOB (the answer does not depend on the crew at all) — the
+    same technique, two different granularities, for a reason worth being
+    able to state.
+20. **A cost term as a CREDIT rather than a penalty** (20) — a contract
+    breach is priced as what a dispatch AVOIDS, not what it risks, because
+    the assignment prices an unserved job with one flat sentinel and the only
+    way the cost of not serving it can enter the objective is as a discount
+    on the cells that do serve it. Getting the sign backwards was caught
+    before the code ran, designing the phase's own required test.
+21. **Lexicographic ordering applied to a MATCHING, not a sort** (20) — safety
+    solved as a SEQUENCE of assignment problems, most dangerous first, each
+    band seeing only the units the band above left, rather than as a
+    tie-break inside one comparator.
+22. **A Beta-Bernoulli conjugate prior** (22) — `(priorAlpha + successes) /
+    (priorAlpha + priorBeta + total)`. The textbook answer to "estimate a
+    probability from counts without a training loop": cold start is exactly
+    the prior with zero substituted for both counts, and a cell with a
+    hundred outcomes moves less per new one than a cell with three, provably,
+    from the same one-line formula.
+23. **Reusing one belief-revision mechanism for two kinds of evidence** (21)
+    — a fleet vehicle's own incident history is folded into its starting
+    fault distribution through the SAME `applyLikelihood` Bayes update a
+    symptom answer already goes through, rather than a second "how much does
+    this move the belief" formula invented for history specifically.
 
 ## 8. Engineering Problems
 
@@ -235,9 +297,22 @@ Only what the code actually exercises:
   grant exactly 10, against a real Postgres in a container.
 - *How do you stop a burst of triggers becoming a burst of solves?* Debounce by
   zone. Ten triggers in 32ms → one solver run.
+- *Does giving a fleet vehicle its own history actually change intake?*
+  Measured directly: a vehicle with two prior battery incidents and a stated
+  "will not start" needed **zero** further questions (`CAPABILITY_SET_STABLE`
+  fired immediately); the identical stated symptom on a vehicle with no
+  history still needed one.
+- *Does the learned P(accept) actually move, and does it change which
+  workshop is picked?* `scripts/simulate-200-offers.js --decline-evenings`
+  against a real workshop produced 5 accepted / 50 refused in the evening
+  bucket at a 20% ground-truth rate; the `workshop_acceptance` view returned
+  `p_accept = 0.2` exactly, matching `betaAcceptMean`'s own formula to the
+  decimal. The ranking flip is proved directly in
+  `tests/destinationSelection.test.ts`: an otherwise-nearer, unreliable
+  workshop loses to a farther, reliable one once the acceptance-history gap
+  is large enough to outweigh `REFUSAL_DISTANCE_PENALTY_KM`.
 
-**Ahead:** the console (14), the driver and technician surfaces (15), chat and
-event promotion (15b), money (15c), the LLM (16), chaos (17).
+**Ahead:** the Razorpay adapter (22b).
 
 ## 9. Concurrency
 
@@ -298,6 +373,52 @@ runs if someone remembered to start a database is not a proof.
   unique index behind it: the worst case is two OPEN escalations with one
   decision each rather than a lost decision. Named in §15.
 
+**From Phases 18–22:**
+
+- **A part declaration races a replenishment on the same shelf** (18). Two
+  writers on `unit_stock.quantity`; a conditional UPDATE on the version read,
+  re-read and retried up to three times. A double tap or an offline-queue
+  replay races nothing — the movement id is client-minted and the primary
+  key, so a duplicate insert fails on the constraint and the caller is told
+  REPLAYED.
+- **Two dispatchers solve at the same instant over the same last battery**
+  (19). Not handled by the parts layer at all, deliberately — invariant 7
+  (one active job per unit) means the loser of the saga's version-checked
+  hold never reaches the shelf, so stock is not separately reserved.
+- **A contract is edited while a technician is driving to a job priced under
+  it** (20). Not handled by locking — `jobs.sla_policy_id` is pinned once at
+  intake and never re-read, the same pattern `price_list_id` and
+  `settlement_path` already use. Pinning the ID freezes WHICH policy applies,
+  not that policy's own numbers; an in-place edit to an `sla_policies` row
+  would still reach every live job that pinned it, and nothing in this
+  system edits one in place today.
+- **Two dispatchers, or a dispatcher and the debounced zone re-plan, raise a
+  cross-tenant contention card for the same losing job at once** (20).
+  Read-then-write, NOT atomic — `findFirst` for a PENDING card, then insert.
+  Two identical cards is the worst case, and it is cosmetic (approving one
+  executes nothing) rather than harmful. The honest fix is a partial unique
+  index Prisma cannot model; §15 says so rather than the code claiming a
+  guarantee it does not have.
+- **A fleet manager notification fires for a tenant with two FLEET_MANAGER
+  users** (21). `Promise.all` over per-recipient `notification.create`
+  calls, each independently idempotent through one outer `runIdempotently`
+  keyed on the queue job id — a crash mid-`Promise.all` and a redelivery
+  both replay as a whole retry, unchanged by there being more than one
+  recipient.
+- **A workshop's answer and its saga's shared deadline fire at nearly the
+  same instant** (22) — a human replies as the offer-expiry worker wakes.
+  The same conditional-update shape as everything else: `WHERE id = ? AND
+  status = 'PROPOSED'`. Whichever writer's UPDATE commits first wins;
+  the loser's `updateMany` returns `count: 0` and records no
+  `AcceptanceOutcome` — the guard is on the WRITE, not a prior read.
+- **The same tow job is re-solved twice, an hour apart** (22). Not a bug to
+  fix — the learned P(accept) and the workshop's opening hours are read
+  FRESH on every solve, so the same job can genuinely be routed to a
+  different workshop as the hour bucket or the acceptance history shifts.
+  Handled by the saga machinery already in place: a destination change is
+  exactly the `NO_CHANGE` vs `REASSIGNMENT_PROPOSED` branch `handleTrigger`
+  already has.
+
 Assumption relied on throughout: **READ COMMITTED**, Postgres's default. At
 that level a blocked UPDATE re-reads the row rather than failing; the guarantee
 would be different under REPEATABLE READ.
@@ -335,6 +456,18 @@ would be different under REPEATABLE READ.
   gives the dispatcher the feasibility reason code, the closest option a human
   could actually clear and why it was refused, an alternative outside the
   fleet, a recommendation, and three audited actions.
+- **"We did not look" and "we looked and found nothing" are different states,
+  never conflated** (19, 22). `PartsSnapshot`/`WorkshopsSnapshot` absent means
+  NOT_MODELLED and never rejects; UNVERIFIED stock or no authorised workshop
+  is a real, fail-CLOSED rejection. The two failure directions are not
+  symmetric: assuming a part or a destination exists when it does not sends a
+  crew who arrives to nothing, which is worse than the conservative miss.
+- **A degraded read never blocks dispatch, only prices it worse** (20, 21).
+  A job with no pinned SLA policy, no learned P(accept) history, or no
+  destination screening simply carries a neutral value (no exposure, the
+  prior probability, "not needed") rather than failing the request — the
+  same "payment failure never blocks dispatch" principle applied to three
+  more inputs.
 
 ## 11. Security
 
@@ -486,6 +619,85 @@ visible failure. The AI's health is read from the append-only attempt log
 rather than from its own summary row — the first version read the row it was
 about to write, refreshed its own timestamp every tick, and could never clear.
 
+**Parts and inventory (18).** `unit_stock.quantity` is a CACHE of an
+append-only movement ledger, anchored by `starting_qty` so
+`starting_qty + SUM(delta) = quantity` is checkable rather than trusted —
+Phase 19 needs that number inside candidate generation, per option, and a
+derived-on-read sum would be too slow to ask that often. Consumption does NOT
+refresh `confirmed_at`: fitting a belt is not counting the belts, and
+refreshing it would let a busy van read VERIFIED without anybody having
+looked. A count that disagrees writes an ADJUSTED movement, never an
+overwrite — the ledger keeps explaining the number. No cross-van part
+transfer: the phase names it as a cliff (a second unit's version, a custody
+state while the part is in neither van, a rendezvous the solver would have
+to price), and Phase 19 prices a workshop run instead — one leg, one owner.
+
+**Part-aware feasibility (19).** `canResolve(option, fault) = hasSkill ∧
+hasPart`, resolved inside candidate generation and collapsed to ONE
+`PartSourcing` per (unit, technician) pair — the assignment matrix stays jobs
+× units regardless of how many ways a part could be sourced, asserted by an
+`option count` test. UNVERIFIED stock counts as absent: believing a part is
+there when it may not be sends a crew who opens an empty shelf and leaves,
+which is worse than a detour that turns out to be unnecessary — the two
+mistakes are not symmetric, and invariant 3 keeps that asymmetry a FILTER
+rather than a cost a big enough SLA pressure could eventually outvote. A
+detour past `MAX_PART_SOURCING_DETOUR_MINUTES` (45) is a rejection, not an
+expensive option, for the same reason: a threshold long enough to make a
+two-hour detour reliably lose is a threshold acting as a constraint. The
+evaluation harness's three greedy baselines are deliberately stock-BLIND —
+handing them an inventory model an incumbent nearest-unit dispatcher does not
+have would rig `stockoutInducedFailures` in the parts layer's favour, and the
+metric would then measure nothing.
+
+**Tenancy and contracts (20).** A contract breach enters the cost function as
+a CREDIT — `-(1 - P(breach)) × penalty`, what the dispatch AVOIDS — never as
+a positive cost, because the assignment prices an unserved job with one flat
+sentinel identical for every job; pricing exposure as a positive cost on the
+served cell would make a GOLD job the EXPENSIVE one and hand the last van to
+a walk-in while the contract breaches. Safety became a lexicographic ordering
+in the GLOBAL assignment, not only inside one job's ranking — the assignment
+is now solved once PER SAFETY BAND, most dangerous first, because a
+₹2,500 penalty is the first term in the cost function large enough to have
+exploited the gap invariant 4 always had at the plan level. Cross-tenant
+contention ESCALATES rather than resolving: at the same safety level the
+objective will always prefer the priced obligation, and a system that
+silently chooses which paying customer to disappoint is a system nobody
+deploys. `PROTECT_CONTRACTS` changes exactly one weight from `BALANCED` — the
+contract-exposure weight, ×10 — so the two plan cards differ in exactly the
+question a dispatcher is actually being asked.
+
+**Fleet dashboard (21).** SLA met % is a FOUR-state answer per incident (MET
+/ BREACHED / UNDECIDED / NOT_APPLICABLE), because a job still inside its
+window is neither a success nor a failure and counting it either way would
+make the percentage swing on jobs still in progress — the same "only jobs
+that finished have a resolution time" move applied to a binary outcome.
+Current exposure is a BOOLEAN "already breached", never a probability: the
+dashboard has no candidate option to price uncertainty about, unlike the
+cost function's own `contractSlaExposure`, and inventing one from a possibly
+stale or absent ETA would be claiming precision the data does not support. A
+fleet vehicle's own incident history sharpens its intake prior through the
+SAME `applyLikelihood` mechanism a symptom answer already goes through,
+capped at the five most recent incidents — measured directly: two prior
+battery incidents plus an identical stated symptom needs zero further
+questions where a stranger's identical vehicle needs one.
+
+**Workshop network (22).** Destination selection resolves ONCE PER JOB, not
+once per pair the way parts sourcing does — a workshop choice depends on the
+vehicle, the location and the hour, none of which change with which crew is
+sent, so recomputing it per pair would answer the identical question
+repeatedly for nothing. Brand authorisation and EV class are separate
+reason codes (an eleventh added to the ten named at Phase 7), because
+"authorised for Maruti but not for EVs" is a distinct, actionable failure a
+dispatcher needs to be able to tell apart from a manufacturer exclusion.
+P(accept) is a Beta-Bernoulli conjugate prior — a counter and a formula, no
+training loop, cold start exactly the prior with zero counts substituted —
+and `destinationRefusalRisk` prices a refusal in MINUTES, not paise, because
+a refusal is fundamentally a delay event and reuses `escalationMinutes`'s own
+re-dispatch constants rather than inventing a new estimate. `startSaga`'s
+`workshopId` parameter, real since Phase 12, is threaded from the solved
+option's own `destination.workshopId` — the first production caller it has
+ever had.
+
 ## 14. Interview Questions
 
 - *Why does "flat tyre" ask no questions and "my car will not start" ask three?*
@@ -596,6 +808,59 @@ about to write, refreshed its own timestamp every tick, and could never clear.
   ladder shows the planner DEGRADED. Measured under the forced switch: 96
   options in 1.9s against 11,280 in 11s.
 
+- *You added parts to a dispatch problem — why didn't the assignment matrix
+  explode?* Because the choice of part source is resolved per (unit,
+  technician) pair inside `generateCandidates` and collapsed to the single
+  best one, so parts made every option richer and the matrix exactly the
+  same size — `tests/candidates.test.ts`'s `option count` block asserts it.
+
+- *Your evaluation predicted skill-aware would beat nearest on stockouts and
+  it didn't. What happened?* A stockout-induced failure is defined as a crew
+  who had the SKILL and not the part, so maximising skill coverage moves
+  failures INTO that column that a nearest-unit policy books as capability
+  failures instead — the metric separates two kinds of wasted visit rather
+  than ranking parts-awareness, and `EVALUATION.md` finding 4 says so with
+  the numbers.
+
+- *You put a contract penalty in the cost function. Which way does the sign
+  go, and why?* Negative — the term is what the dispatch AVOIDS, not what it
+  risks, because the assignment prices an unserved job with one flat
+  sentinel and the only way the penalty for going unserved can enter is as a
+  credit on the served cells. Priced the other way round, a GOLD job becomes
+  the expensive job and the last van goes to the consumer while the contract
+  breaches.
+
+- *Safety outranks contract tier — where is that actually enforced?* In two
+  places for two different questions: `ranking.ts` for which crew goes to
+  one job, and safety BANDS in `buildPlan` for which job gets the last van.
+  The second arrived at Phase 20, because a hundred-point contract term was
+  the first thing in the cost function large enough to have exploited the
+  gap.
+
+- *Why does a fleet vehicle's prior use the same `applyLikelihood` function a
+  symptom answer does, instead of its own weighting formula?* Because the
+  two are the same operation under a different name — "how much should this
+  observation move the belief" — and reusing the tested, entropy-checkable
+  mechanism means the prior's effect on question count is provable by the
+  exact same maths that already governs when intake stops asking, rather
+  than a second formula nobody has separately verified.
+
+- *Where's your ML, in the workshop layer?* There isn't any, on purpose.
+  `betaAcceptMean` is `(priorAlpha + accepted) / (priorAlpha + priorBeta +
+  total)` — Bayes' rule for a Beta prior over a Bernoulli outcome, derivable
+  on a whiteboard. Cold start is exactly the prior with zero substituted for
+  both counts, and a workshop with a hundred outcomes moves less per new one
+  than a workshop with three, provably, from that one formula and nothing
+  else.
+
+- *You added a whole third dimension — where a tow goes — to the assignment.
+  Why didn't the matrix grow?* Because unlike parts, the destination choice
+  does not depend on which crew is chosen at all — it is resolved once
+  against the JOB before the per-pair loop even starts, and every option for
+  that job reads the same value. There is no "option count" test the way
+  Phase 19 needed one, because there was never a second dimension to
+  collapse in the first place.
+
 ## 15. Things An Interviewer Can Attack
 
 The most valuable section. In rough order of severity:
@@ -699,6 +964,64 @@ The most valuable section. In rough order of severity:
     FUNCTION shared by two suites. Fixed by scoping both — the assertions to
     the rows each file created, and `retryPendingAuthorisations` with an
     optional `jobIds` filter that production does not pass.
+30. **A depot has infinite stock** (18–19). `measureDepotRuns` never asks
+    whether the depot actually has the part — Phase 18 made depots
+    deliberately dumb and Phase 19 builds a real dispatch decision on that.
+    Fine at three depots in one city; "the workshop run always succeeds" is
+    the single most optimistic assumption in the whole parts layer.
+31. **Part value is priced off the STANDARD price list, not the job's own
+    pinned list** (19). Deliberate — this is a dispatch input, not a bill —
+    but it means a tenant with a custom price list is dispatched against
+    somebody else's prices.
+32. **`TENANT_CONTRACT_EXCLUDES` is still a stub** (20), the one reason code
+    of eleven that has never fired. The obvious trigger — a service a
+    contract does not cover — is already handled correctly by
+    `settlementPathFor` turning the driver into a WALK_IN; turning coverage
+    into a hard FILTER would refuse to help a stranded person over a billing
+    question, the same mistake the SLA filter had to be talked out of at
+    Phase 10.
+33. **The cross-tenant contention guard is read-then-write, not atomic**
+    (20). Two concurrent solves can raise two identical APPROVE cards for
+    one contested unit. Cosmetic — approving one executes nothing — and the
+    honest fix (a partial unique index on `(job_id, kind) WHERE status =
+    'PENDING'`) is not built.
+34. **Fleet spend can silently disagree with the ledger** (21) the first
+    time a fleet contract gets a coverage CAP rather than unlimited cover —
+    the dashboard reads the approved estimate total directly rather than the
+    `tenant:<id>` ledger account, sidestepping a real Phase 15c booking gap
+    (a capped contract's uncovered remainder posts to the generic customer
+    receivable, not the tenant's own account) rather than fixing it, because
+    fixing a Phase 15c bug was out of scope for a phase named "fleet
+    dashboard".
+35. **The repeat-pattern rule and the intake prior both match on the EXACT
+    fault code**, never a category (21) — `FLAT_BATTERY` and
+    `FAILED_BATTERY` never combine into one pattern even though both are "the
+    battery" to a fleet manager reading the dashboard. Neither has any
+    recency WEIGHTING either, only a recency CAP: a five-day-old incident
+    and a fifty-nine-day-old one count exactly the same.
+36. **`REFUSAL_DISTANCE_PENALTY_KM` (22) is the single most consequential
+    unmeasured number in the workshop layer.** It sets the exchange rate
+    between "closer" and "more likely to accept a tow", and nothing has ever
+    measured what a real dispatcher would actually trade one for.
+37. **The learned P(accept) has no decay** (22) — a workshop's refusal from
+    eight months ago counts exactly as much as one from yesterday, the same
+    gap the intake prior has for a vehicle's own history (§15.35), now in a
+    second place.
+38. **Cold start is silent** (22). A brand-new workshop with zero real
+    outcomes reads exactly the prior (0.8) with no signal anywhere —
+    dashboard or `screened` row — distinguishing "eighty real outcomes said
+    yes 80% of the time" from "nobody has ever answered".
+39. **The chaos panel's forced destination decline teaches the learned
+    probability nothing** (22). `declineDestination` updates the offer row
+    directly, the same way every chaos action does, so the one control that
+    can force a refusal on demand does not feed the mechanism a refusal is
+    supposed to train.
+40. **`generateCandidates` now defaults `now` to the wall clock** (22),
+    mirroring the existing `travelTimes` default — correct for production,
+    and it means a caller that forgets to pass its own `now` for a
+    deterministic test gets today's date silently rather than an error. The
+    same trade-off `travelTimeMatrix`'s own default already accepted,
+    extended to a second non-deterministic input.
 
 ## 16. How I Would Improve It
 
@@ -708,7 +1031,12 @@ owner as a plan gap; make `safetyLevel` mutable with an audit trail, because
 invariant 4 currently rests on a stale value; a solver-level fallback when a
 job's only rejections are SLA ones; idempotency keys on the two external
 mutations; a travel-time cache; and an owner column for saga recovery instead
-of a staleness heuristic.
+of a staleness heuristic. Since the checkpoint: a partial unique index behind
+the cross-tenant contention guard; the Phase 15c coverage-cap booking gap
+`fleetSpend` currently sidesteps rather than fixes; and measuring
+`REFUSAL_DISTANCE_PENALTY_KM` against what a real dispatcher would actually
+trade, the same way the SLA breach curve is still a ruler rather than a
+fitted model.
 
 ## 17. Defensible Resume Claims
 
@@ -769,10 +1097,38 @@ machine:
   approvals with a re-approval tolerance, authorisation/capture, cash
   collection, commission and payouts — with a balance assertion that runs after
   every money test.
+- Built an **inventory layer with a reconciliation invariant** — a cached
+  quantity checked against an append-only movement ledger
+  (`starting_qty + SUM(delta) = quantity`) — feeding a real dispatch
+  decision: stock whose count is UNVERIFIED is treated as absent, and a
+  sourcing detour past a 45-minute ceiling is a hard rejection rather than
+  an expensive option.
+- Extended the cost function and the assignment to price a **contractual SLA
+  obligation as a signed credit** rather than a penalty, and made **safety
+  a lexicographic ordering over the global assignment itself** (not only
+  per-job ranking) by solving one Hungarian assignment per safety band —
+  proved byte-identical against the evaluation harness's own outcome metrics
+  when no two safety levels actually compete.
+- Built a **fleet manager dashboard** reading SLA performance, financial
+  exposure and per-vehicle incident history entirely from events earlier
+  phases already wrote, with a rule-based (explicitly not predictive)
+  repeat-incident flag and an intake prior that reuses the SAME Bayesian
+  update mechanism a symptom answer goes through — measured: two prior
+  incidents cut a stated symptom's question count from one to zero.
+- Built a **destination network with a learned acceptance probability** — a
+  Beta-Bernoulli conjugate prior over real accept/decline/timeout outcomes,
+  no training loop — that a real cost term prices into which workshop a
+  tow is sent to, resolved once per job inside the same candidate-generation
+  pass that resolves part sourcing, so a genuine third dimension of choice
+  never grew the assignment matrix. Measured: a controlled decline-history
+  simulation moved the learned probability from a 0.8 cold-start prior to
+  exactly 0.2 in the affected bucket, and the workshop ranking flipped
+  accordingly in a real solve.
 
 Not claimable: dispatch quality against real breakdowns, latency under load,
 throughput, and anything about the Anthropic provider path beyond "it
-compiles".
+compiles". Not claimable either: fleet spend reconciling with the ledger
+under a capped contract, or the Razorpay adapter (22b, not built).
 
 ## 18. Technical Vocabulary
 
@@ -805,13 +1161,30 @@ compiles".
 - **Action tiering** — AUTO / RECOMMEND / APPROVE as a policy table.
 - **Dead-letter queue**, **capped exponential backoff**, **transactional
   outbox**, **fail-closed**, **MLD vs contraction hierarchies**.
+- **Conjugate prior / Beta-Bernoulli update** — a prior distribution family
+  that stays in the same family after being updated with evidence, so the
+  posterior has a closed form (`(priorAlpha + successes) / (priorAlpha +
+  priorBeta + total)`) instead of needing numerical estimation.
+- **Cold start** — the estimate a system gives with zero observations; here,
+  exactly the prior, not a special case.
+- **Denormalisation for a hot aggregate read** — a foreign column copied
+  onto a table it is reached through, traded deliberately against a join,
+  because the query needs it on every solve and the source of truth is one
+  write away.
+- **Reconciliation invariant** — an anchor value plus a ledger whose sum
+  must equal it, checked rather than trusted (`starting_qty + SUM(delta) =
+  quantity`; the double-entry balance is the money-shaped version of the
+  same idea).
 
 ## 19. Current Project State
 
-**Phases 0–17 complete — the build plan's "core complete" marker.** 643 fast
-tests across 45 files, plus the concurrency suite against a real Postgres
-container. `tsc --noEmit` (src, tests, evaluation, prisma) and `eslint src
-evaluation` clean.
+**Phases 0–22 complete — the build plan's recommended ship point.** 799 fast
+tests across 55 files (3 skipped), plus a 9-test concurrency suite against a
+real Postgres container started by the suite itself. `tsc --noEmit` (src,
+tests, evaluation, prisma) and `eslint src evaluation` clean. `npm run eval`
+reruns byte-identical outcome metrics against the same five scenarios and
+four policies Phase 10 built — only wall-clock timing moves run to run, by
+design.
 
 Working, in the order it was built:
 
@@ -830,10 +1203,15 @@ Working, in the order it was built:
   processors, BullMQ-native debouncing, a repeatable cleanup sweep.
 - **Routing** — self-hosted OSRM (MLD) with per-origin haversine fallback and a
   degraded flag.
-- **The solver** — candidates, ten feasibility reason codes, a per-fault
-  duration model, a five-term cost function, three weight vectors, a
-  lexicographic safety comparator, a hand-written Hungarian assignment with
-  zone partitioning, and a deadline that returns the best plan found.
+- **The solver** — candidates, ELEVEN feasibility reason codes, a per-fault
+  duration model, an EIGHT-term cost function, FOUR weight vectors, a
+  lexicographic safety comparator now applied to the global assignment as
+  safety BANDS (one Hungarian run per level) as well as per-job ranking, a
+  hand-written Hungarian assignment with zone partitioning, and a deadline
+  that returns the best plan found. Part sourcing and destination selection
+  both resolve inside candidate generation, one per pair and one per job
+  respectively, so the assignment matrix never grew past jobs × (unit,
+  technician).
 - **The evaluation harness** — five scenarios, four policies, eight metrics, a
   sweep, and `EVALUATION.md`.
 - **Holds, offers and the saga** — version-checked holds with TTL, technician
@@ -858,15 +1236,40 @@ Working, in the order it was built:
 - **Chaos and degradation** — a six-component ladder, a fifteen-second health
   loop, eight chaos controls absent from production builds, the escalation
   card, and `CHAOS_TESTING.md` written from a real walkthrough.
+- **Parts and inventory** — a cached quantity reconciled against an
+  append-only movement ledger, confidence as a function of age computed on
+  read, client-minted idempotency keys on every write.
+- **Part-aware feasibility** — sourcing resolved inside candidate
+  generation, `PART_UNAVAILABLE` real, an eighth cost term, a fail-closed
+  UNVERIFIED rule, and a sixth evaluation scenario measuring the stockout
+  cost of skill-only dispatch.
+- **Tenancy and contracts** — contract terms pinned at intake alongside the
+  price list and settlement path, a contract-exposure cost term signed as a
+  credit, safety bands in the global assignment, cross-tenant contention
+  escalated to an APPROVE card, vehicle registration checked against two
+  tenancy conflicts.
+- **The fleet dashboard** — active incidents, a four-state SLA outcome, a
+  boolean current-exposure figure, a rule-based repeat-incident flag, an
+  intake prior reusing the symptom Bayes update, and fleet-manager
+  notifications coalesced on a ten-minute window through the same queue the
+  driver's ninety-second one already used.
+- **The workshop network** — brand and EV-class authorisation as separate
+  reason codes, opening hours read in IST, a Beta-Bernoulli learned P(accept)
+  with no ML infrastructure, a destination-refusal cost term priced in
+  minutes, and the saga's third leg — real since Phase 12 — finally called
+  by production code.
 
 **Verified in a browser:** the driver's page — sign-in, free-text description,
 the DEGRADED banner, the symptom picker, safety, location, job creation and the
 live status panel. The dispatcher and technician pages have been exercised over
 HTTP but not clicked through end to end.
 
-**Not started:** parts and inventory (18), parts-aware feasibility (19), and
-everything after.
+**Not started:** the Razorpay adapter (22b) and everything after — the
+platform is otherwise a complete product as of this checkpoint.
 
-**Known-stale data:** the development database carries ~460 INTAKE jobs left by
-earlier phases, which compete with any new job for 24 units. A demo should run
-against a fresh seed, or the queue should be aged first.
+**Known-stale data:** the development database carries INTAKE jobs left by
+earlier phases and manual runs of the Phase 22 check script
+(`sim200-*`-prefixed rows against a real seeded workshop), none of it reachable
+by a real dispatch (the check script's own job is RESOLVED on write) but all
+of it real rows a fresh `npm run db:seed` will not remove on its own. A demo
+should run against a fresh database, or the queue should be aged first.

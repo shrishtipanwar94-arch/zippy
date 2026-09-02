@@ -834,6 +834,11 @@ model DispatchOption {
   // of a decision, read whole by the "Why this technician?" panel, never
   // queried a field at a time.
   partSourcing            Json?    @map("part_sourcing")
+  // Phase 22's equivalent of `part_sourcing`: the single workshop candidate
+  // generation resolved for a tow job, or the "not needed" / "not modelled"
+  // verdict for everything else. Same reasoning as parts — an audit of a
+  // decision, read whole by the "why this technician?" panel.
+  destination             Json?    @map("destination")
   costBreakdown           Json?    @map("cost_breakdown")
   totalCost               Float?   @map("total_cost")
   createdAt               DateTime @default(now()) @map("created_at")
@@ -1568,6 +1573,7 @@ model Workshop {
   authorisations    WorkshopAuthorisation[]
   hours             WorkshopHours[]
   destinationOffers DestinationOffer[]
+  acceptanceOutcomes AcceptanceOutcome[]
 
   @@map("workshops")
 }
@@ -1636,12 +1642,29 @@ model DestinationOffer {
 model AcceptanceOutcome {
   id                 String   @id @default(cuid())
   destinationOfferId String   @unique @map("destination_offer_id")
+  // DENORMALISED FROM `destination_offer.workshop_id` (Phase 22), on purpose.
+  // The learned P(accept) is read once per solve for every workshop a tow job
+  // might go to — a hot read across up to a dozen workshops at once — and
+  // Prisma's `groupBy` cannot aggregate across a relation. One extra column
+  // that can never disagree with its source (both are written in the same
+  // transaction, from the same offer) is a smaller cost than a join on every
+  // solve.
+  workshopId String @map("workshop_id")
   outcome            String
   reason             String?
+  // WHAT THE LEARNED P(accept) IS GROUPED BY — the bucket this outcome counts
+  // toward, fixed at the moment it is recorded rather than re-derived later
+  // from `recorded_at`. A bucket boundary changing (four hour-parts becoming
+  // six, say) must not silently reclassify history nobody asked to reclassify
+  // — see src/domain/workshopAcceptance.ts.
+  hourBucket   String @map("hour_bucket")
+  vehicleClass String @map("vehicle_class")
   recordedAt         DateTime @default(now()) @map("recorded_at")
 
   destinationOffer DestinationOffer @relation(fields: [destinationOfferId], references: [id], onDelete: Cascade)
+  workshop         Workshop         @relation(fields: [workshopId], references: [id])
 
+  @@index([workshopId, hourBucket, vehicleClass])
   @@map("acceptance_outcomes")
 }
 

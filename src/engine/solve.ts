@@ -388,7 +388,7 @@ export async function solve(input: SolveInput): Promise<SolverOutcome> {
       continue;
     }
 
-    const options = await generateCandidates(job, snapshot, travelTimes);
+    const options = await generateCandidates(job, snapshot, travelTimes, now);
     optionCount += options.length;
 
     const { feasible, rejected: jobRejections } = checkFeasibility(options, job, snapshot, now);

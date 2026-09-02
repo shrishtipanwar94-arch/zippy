@@ -3,6 +3,7 @@
 //   cost = w1·expectedTimeToResolution + w2·travelDistance
 //        + w3·capabilityShortfallRisk  + w4·slaRisk + w5·operationalCost
 //        + w6·partSourcingCost        + w7·contractSlaExposure
+//        + w8·destinationRefusalRisk
 //
 // EXPECTED TIME TO RESOLUTION IS THE WHOLE ARGUMENT. Every dispatch system
 // can send the nearest van. This one asks a different question: given what we
@@ -44,7 +45,12 @@ import type { FaultCode } from '../domain/faults.js';
 import { FAULT_CODES } from '../domain/faults.js';
 import type { DispatchOption, JobForDispatch } from './candidates.js';
 import { avoidedBreachPenaltyPaise, remainingWindowMinutes } from '../domain/contractExposure.js';
-import { diagnoseMinutes, escalationMinutes, resolveMinutes } from './durations.js';
+import {
+  DESTINATION_REFUSAL_MINUTES,
+  diagnoseMinutes,
+  escalationMinutes,
+  resolveMinutes,
+} from './durations.js';
 
 // ---------------------------------------------------------------------------
 // Money constants. Paise, integer, per the project's money rule — never a
@@ -55,7 +61,7 @@ const LABOUR_PAISE_PER_MINUTE = 500; // ~Rs 300/hour of a technician's time
 // ---------------------------------------------------------------------------
 // Weights.
 //
-// THE UNITS DO NOT MATCH, AND THAT IS THE WEIGHTS' JOB. The seven terms are
+// THE UNITS DO NOT MATCH, AND THAT IS THE WEIGHTS' JOB. The eight terms are
 // measured in minutes, kilometres, two bare probabilities, and paise. A
 // weight is therefore not a "how much do I care" dial on its own — it is that
 // dial AND the conversion factor into a common scale. This is why the numbers
@@ -69,6 +75,7 @@ export type CostWeights = {
   operationalCost: number;
   partSourcingCost: number;
   contractSlaExposure: number;
+  destinationRefusalRisk: number;
 };
 
 export const WEIGHT_VECTORS = {
@@ -90,6 +97,11 @@ export const WEIGHT_VECTORS = {
     // would buy very little and would quietly turn "fastest resolution" into
     // "fastest resolution for whoever pays".
     contractSlaExposure: 0.0004,
+    // SAME WEIGHT AS expectedTimeToResolution, in every vector below as well
+    // as this one — both terms are measured in minutes of expected delay, and
+    // a refusal risk is exactly that: time this vector is already built to
+    // hate losing.
+    destinationRefusalRisk: 1.0,
   },
   // Optimise what the run costs to operate: fuel, wear, paid time. Will
   // happily send a nearer, less capable unit and accept the re-dispatch risk.
@@ -107,6 +119,7 @@ export const WEIGHT_VECTORS = {
     // gives operational cost, because they are the same currency and the same
     // ledger.
     contractSlaExposure: 0.001,
+    destinationRefusalRisk: 0.2,
   },
   // The default. Neither extreme; the vector a dispatcher sees first.
   BALANCED: {
@@ -130,6 +143,7 @@ export const WEIGHT_VECTORS = {
     // be outvoted — and it can never outvote safety, because safety is not in
     // this function at all.
     contractSlaExposure: 0.0004,
+    destinationRefusalRisk: 0.6,
   },
   // PLAN C. The dispatcher's answer to "we cannot afford to breach MetroCab
   // again this month" — the same feasible options, with the contract term
@@ -152,6 +166,7 @@ export const WEIGHT_VECTORS = {
     // worth — which is what makes the two cards comparable rather than two
     // unrelated opinions.
     contractSlaExposure: 0.004,
+    destinationRefusalRisk: 0.6,
   },
 } as const satisfies Record<string, CostWeights>;
 
@@ -177,6 +192,7 @@ export type CostBreakdown = {
   operationalCost: CostTerm;
   partSourcingCost: CostTerm;
   contractSlaExposure: CostTerm;
+  destinationRefusalRisk: CostTerm;
   total: number;
   weightVector: WeightVectorName;
 };
@@ -295,6 +311,21 @@ export function contractSlaExposure(option: DispatchOption, job: JobForDispatch,
   return -avoidedBreachPenaltyPaise(job.contract, arrivalMinutes, remaining);
 }
 
+// WHAT A WORKSHOP SAYING NO WOULD COST, IN EXPECTATION — Phase 22. Zero for
+// every option except a CHOSEN destination: not a tow (NOT_NEEDED), or a
+// snapshot with no workshop data (NOT_MODELLED), both carry pAccept = 1 on
+// their DestinationChoice for exactly this reason — "nothing being risked"
+// has to compute to zero risk, not to an accidental one.
+//
+// THE SYSTEM NOW PREFERS WORKSHOPS THAT ACTUALLY SAY YES — the phase brief's
+// own sentence, and this term is the whole mechanism: two options that are
+// otherwise identical but which resolved to a nervous workshop and a
+// reliable one no longer cost the same, because one of them is expected to
+// bounce back through a re-solve and the other is not.
+export function destinationRefusalRiskMinutes(option: DispatchOption): number {
+  return (1 - option.destination.pAccept) * DESTINATION_REFUSAL_MINUTES;
+}
+
 // ---------------------------------------------------------------------------
 function term(value: number, unit: CostTerm['unit'], weight: number): CostTerm {
   return { value, unit, weight, contribution: value * weight };
@@ -328,6 +359,11 @@ export function scoreOption(
       'paise',
       weights.contractSlaExposure,
     ),
+    destinationRefusalRisk: term(
+      destinationRefusalRiskMinutes(option),
+      'minutes',
+      weights.destinationRefusalRisk,
+    ),
   };
 
   const total =
@@ -337,7 +373,8 @@ export function scoreOption(
     breakdown.slaRisk.contribution +
     breakdown.operationalCost.contribution +
     breakdown.partSourcingCost.contribution +
-    breakdown.contractSlaExposure.contribution;
+    breakdown.contractSlaExposure.contribution +
+    breakdown.destinationRefusalRisk.contribution;
 
   return { ...breakdown, total, weightVector };
 }

@@ -96,6 +96,7 @@ async function writeRejectedOptions(
       coveredFaultProbability: rejection.option.coveredFaultProbability,
       missingCapabilities: rejection.option.missingCapabilities,
       partSourcing: rejection.option.partSourcing satisfies Prisma.InputJsonValue,
+      destination: rejection.option.destination satisfies Prisma.InputJsonValue,
       feasible: false,
       rejectionCode: rejection.code,
       rejectionDetail: rejection.detail,
@@ -142,6 +143,9 @@ async function writeFeasibleOptions(
       // depot first, which is the one fact a driver asking "why is this taking
       // so long" is actually owed.
       partSourcing: assignment.option.partSourcing satisfies Prisma.InputJsonValue,
+      // WHICH WORKSHOP, IF ANY — the same audit-not-a-field-at-a-time reasoning
+      // as partSourcing above, one phase later.
+      destination: assignment.option.destination satisfies Prisma.InputJsonValue,
       feasible: true,
       costBreakdown: assignment.cost satisfies Prisma.InputJsonValue,
       totalCost: assignment.cost.total,

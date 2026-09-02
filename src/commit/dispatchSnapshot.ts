@@ -26,6 +26,8 @@ import type {
   UnitStatusSnapshot,
 } from '../engine/candidates.js';
 import type { PartsSnapshot } from '../engine/partSourcing.js';
+import type { WorkshopAcceptanceCell, WorkshopsSnapshot } from '../engine/destinationSelection.js';
+import type { HourBucket, VehicleClass } from '../domain/workshopAcceptance.js';
 import { FAULT_CODES } from '../domain/faults.js';
 import type { FaultDistribution } from '../domain/faults.js';
 import { stockConfidence } from '../domain/stockConfidence.js';
@@ -93,8 +95,18 @@ export async function buildDispatchSnapshot(
 ): Promise<SnapshotResult> {
   const now = options.now ?? new Date();
 
-  const [jobRows, unitRows, technicianRows, shiftRows, zoneRows, stockRows, priceRows, depotRows] =
-    await Promise.all([
+  const [
+    jobRows,
+    unitRows,
+    technicianRows,
+    shiftRows,
+    zoneRows,
+    stockRows,
+    priceRows,
+    depotRows,
+    workshopRows,
+    acceptanceGroups,
+  ] = await Promise.all([
     db.job.findMany({
       where: {
         ...(options.includeAssigned
@@ -132,6 +144,11 @@ export async function buildDispatchSnapshot(
           take: 1,
           select: { distribution: true },
         },
+        // WHO THE VEHICLE IS, for destination selection (Phase 22). Read here
+        // rather than by the engine, which has no database — one join,
+        // exactly like every other fact this snapshot resolves before the
+        // solver ever sees a job.
+        vehicle: { select: { profile: { select: { make: true, evClass: true } } } },
       },
     }),
     db.unit.findMany({
@@ -179,6 +196,28 @@ export async function buildDispatchSnapshot(
       where: { lat: { not: null }, lng: { not: null } },
       select: { id: true, code: true, lat: true, lng: true },
     }),
+    // Every workshop, active or not — filtering is destinationSelection.ts's
+    // job, the same split units.findMany makes with unit status.
+    db.workshop.findMany({
+      select: {
+        id: true,
+        lat: true,
+        lng: true,
+        active: true,
+        evClass: true,
+        authorisations: { select: { brand: true } },
+        hours: { select: { dayOfWeek: true, opens: true, closes: true, closed: true } },
+      },
+    }),
+    // RAW COUNTS, not a computed probability — betaAcceptMean turns these into
+    // P(accept) inside the engine, the same "never cache a derivable figure"
+    // rule src/commit/ledger.ts's accountBalance follows. Grouped by outcome
+    // too because Prisma's groupBy has no conditional-count aggregate; folded
+    // into accepted/refused below.
+    db.acceptanceOutcome.groupBy({
+      by: ['workshopId', 'hourBucket', 'vehicleClass', 'outcome'],
+      _count: { _all: true },
+    }),
   ]);
 
   const jobZone = new Map<string, string>();
@@ -204,6 +243,8 @@ export async function buildDispatchSnapshot(
       parkingLevel: row.parkingLevel,
       onHighway: row.onHighway ?? false,
       safetyLevel: row.safetyLevel as SafetyLevelSnapshot,
+      vehicleMake: row.vehicle.profile.make,
+      vehicleEvClass: row.vehicle.profile.evClass,
     });
   }
 
@@ -251,7 +292,49 @@ export async function buildDispatchSnapshot(
         lng: depot.lng!,
       })),
     } satisfies PartsSnapshot,
+    workshops: {
+      workshops: workshopRows.map((workshop) => ({
+        id: workshop.id,
+        lat: workshop.lat,
+        lng: workshop.lng,
+        active: workshop.active,
+        evClass: workshop.evClass,
+        authorisedBrands: workshop.authorisations.map((row) => row.brand),
+        hours: workshop.hours,
+      })),
+      // FOLDING GROUPED ROWS INTO ONE CELL PER (workshop, bucket, class).
+      // `groupBy` returned one row per (…, outcome), so ACCEPTED and
+      // DECLINED/TIMEOUT for the same cell arrive as separate rows here.
+      acceptance: foldAcceptanceGroups(acceptanceGroups),
+    } satisfies WorkshopsSnapshot,
   };
 
   return { jobs, snapshot, jobZone };
+}
+
+// A DECLINED and a TIMEOUT both count as `refused` for the learned
+// probability — src/domain/workshopAcceptance.ts's AcceptanceCounts type
+// carries the same two-way split for the same reason.
+function foldAcceptanceGroups(
+  groups: { workshopId: string; hourBucket: string; vehicleClass: string; outcome: string; _count: { _all: number } }[],
+): WorkshopAcceptanceCell[] {
+  const cells = new Map<string, WorkshopAcceptanceCell>();
+
+  for (const group of groups) {
+    const key = `${group.workshopId} ${group.hourBucket} ${group.vehicleClass}`;
+    const cell = cells.get(key) ?? {
+      workshopId: group.workshopId,
+      hourBucket: group.hourBucket as HourBucket,
+      vehicleClass: group.vehicleClass as VehicleClass,
+      accepted: 0,
+      refused: 0,
+    };
+
+    if (group.outcome === 'ACCEPTED') cell.accepted += group._count._all;
+    else cell.refused += group._count._all;
+
+    cells.set(key, cell);
+  }
+
+  return [...cells.values()];
 }

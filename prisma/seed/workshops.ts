@@ -1,7 +1,7 @@
 // Twelve workshops, two per zone. Each carries brand authorisations, an EV
-// class flag (null / LV / HV) and opening hours. Nothing routes a tow to a
-// workshop until Phase 22 — these rows exist so that phase adds behaviour, not
-// tables. Two workshops run 24x7; the rest are Mon-Sat daytime.
+// class flag (null / LV / HV) and opening hours — read for real from Phase 22
+// (src/engine/destinationSelection.ts). Two workshops run 24x7; the rest are
+// Mon-Sat daytime.
 
 import type { PrismaClient } from '@prisma/client';
 import { ZONES } from './zones.js';

@@ -198,6 +198,7 @@ consoleRouter.get(
           coveredFaultProbability: true,
           missingCapabilities: true,
           partSourcing: true,
+          destination: true,
           costBreakdown: true,
           totalCost: true,
         },

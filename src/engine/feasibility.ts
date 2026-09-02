@@ -39,12 +39,19 @@ import type {
 } from './candidates.js';
 
 // ---------------------------------------------------------------------------
-// The ten codes the build plan names, in the order this file checks them.
-// Order matters: an option can fail more than one, and each option carries
-// exactly one code — the first, most fundamental reason it cannot be sent.
-// A unit that is offline AND lacks a capability is rejected for being
+// The codes the build plan names — ten at Phase 7, eleven from Phase 22 — in
+// the order this file checks them. Order matters: an option can fail more
+// than one, and each option carries exactly one code — the first, most
+// fundamental reason it cannot be sent. A unit that is offline AND lacks a
+// capability is rejected for being
 // offline; whether it also lacks the capability is moot until it exists.
 
+// ELEVEN, NOT TEN, as of Phase 22. Brand authorisation and EV class are
+// SEPARATE codes — "authorised for Maruti but not for EVs" is a distinct and
+// real failure, and collapsing the two into one DESTINATION_NOT_AUTHORISED
+// would make the why-inspector unable to say which. The build plan named ten
+// when this file was written at Phase 7; DESTINATION_EV_CLASS_MISMATCH is the
+// one it did not yet have a name for.
 export type RejectionCode =
   | 'UNIT_UNAVAILABLE'
   | 'VEHICLE_TYPE_INCOMPATIBLE'
@@ -55,6 +62,7 @@ export type RejectionCode =
   | 'PART_UNAVAILABLE'
   | 'NO_DESTINATION_AVAILABLE'
   | 'DESTINATION_NOT_AUTHORISED'
+  | 'DESTINATION_EV_CLASS_MISMATCH'
   | 'TENANT_CONTRACT_EXCLUDES';
 
 export type Rejection = {
@@ -157,10 +165,11 @@ function slaDeadline(job: JobForDispatch): Date | null {
 }
 
 // ---------------------------------------------------------------------------
-// STUBS. Each of these is a real function with real wiring — called in the
-// fixed order above, returning a rejection or null — so the phase that gives
-// it teeth (named in its own comment) only has to fill in the condition, not
-// invent the plumbing, the code, or the place its test belongs.
+// PART_UNAVAILABLE and the destination checks below were STUBS through
+// earlier phases and are real now — each was wired here with real plumbing
+// from the start, called in the fixed order above and returning a rejection
+// or null, so the phase that gave it teeth only had to fill in the condition.
+// TENANT_CONTRACT_EXCLUDES, further down, is the one still waiting.
 
 // PART_UNAVAILABLE — the crew has the skill and cannot get the part.
 //
@@ -183,15 +192,30 @@ function checkPartAvailability(option: DispatchOption, _job: JobForDispatch): Re
   );
 }
 
-// STUB until Phase 22. Destination selection (a workshop to tow to) does not
-// exist yet. Never rejects.
-function checkDestinationAvailable(_option: DispatchOption, _job: JobForDispatch): Rejection['detail'] | null {
-  return null;
-}
+// DESTINATION — real from Phase 22. The screening decision itself was made in
+// candidate generation (src/engine/destinationSelection.ts), which already
+// filtered by brand, EV class, opening hours and reachability and collapsed
+// the result to one status; this reads the verdict, the same split
+// checkPartAvailability makes for parts. ONE function rather than two,
+// because destinationSelection.ts already tells the three kinds of failure
+// apart — there is no ambiguity left here for two separate checks to order
+// between.
+function checkDestination(option: DispatchOption, _job: JobForDispatch): Omit<Rejection, 'option'> | null {
+  const destination = option.destination;
 
-// STUB until Phase 22. Whether a chosen destination is one this job's tenant
-// or contract may use does not apply until destinations exist. Never rejects.
-function checkDestinationAuthorised(_option: DispatchOption, _job: JobForDispatch): Rejection['detail'] | null {
+  if (destination.status === 'NO_BRAND_MATCH') {
+    return { code: 'DESTINATION_NOT_AUTHORISED', detail: destination.detail };
+  }
+  if (destination.status === 'NO_EV_CLASS_MATCH') {
+    return { code: 'DESTINATION_EV_CLASS_MISMATCH', detail: destination.detail };
+  }
+  if (destination.status === 'NO_DESTINATION_REACHABLE') {
+    return { code: 'NO_DESTINATION_AVAILABLE', detail: destination.detail };
+  }
+
+  // NOT_NEEDED (not a tow), NOT_MODELLED (this snapshot does not model
+  // workshops) and CHOSEN all pass — the same "we did not look" rule
+  // PART_UNAVAILABLE follows for NOT_MODELLED.
   return null;
 }
 
@@ -301,11 +325,8 @@ function classify(
   const partDetail = checkPartAvailability(option, job);
   if (partDetail) return { code: 'PART_UNAVAILABLE', detail: partDetail };
 
-  const destinationDetail = checkDestinationAvailable(option, job);
-  if (destinationDetail) return { code: 'NO_DESTINATION_AVAILABLE', detail: destinationDetail };
-
-  const authDetail = checkDestinationAuthorised(option, job);
-  if (authDetail) return { code: 'DESTINATION_NOT_AUTHORISED', detail: authDetail };
+  const destinationRejection = checkDestination(option, job);
+  if (destinationRejection) return destinationRejection;
 
   const contractDetail = checkTenantContract(option, job);
   if (contractDetail) return { code: 'TENANT_CONTRACT_EXCLUDES', detail: contractDetail };
