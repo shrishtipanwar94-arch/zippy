@@ -37,6 +37,13 @@ Seed is fixed; a reset gives byte-identical fixtures every time. If OSRM is not
 up, candidate generation falls back to haversine and every travel time on
 screen is flagged degraded — fine for a dry run, wrong for the real thing.
 
+**Beat 9 history is pre-seeded** (see that beat's SETUP note). After it runs,
+`vehicle-metrocab-1` carries **three RESOLVED `FLAT_BATTERY` jobs** — so the
+dispatcher board opens showing "Jobs on the board: 3" with three RESOLVED rows,
+and the **dispatch queue is empty**. That is the intended starting state, not
+contamination: the rows are history, the queue is what you dispatch from. The
+job you create in Beat 1 appears at the top of both.
+
 **Logins** — every seeded user shares the password `password-dev-only`.
 
 | role | email | page |
@@ -243,14 +250,24 @@ written from a real walk-through of all six components."
 
 **Objective:** the tenancy / fleet-manager surface.
 
-> **SETUP — do this before the demo, off screen.** On a fresh seed the
-> dashboard is empty of history: `slaMetPercent` and every `repeatPatternFlag`
-> come back `null`, so there is nothing to point at. To have a flag to show,
-> create and **resolve** two `FLAT_BATTERY` jobs on one metrocab vehicle
-> (`vehicle-metrocab-1`) inside the pattern window first — through intake, or a
-> small script — so the second one trips the rule. Confirm with
-> `GET /fleet/dashboard` as `fm-metrocab@zippy.internal` that a vehicle now has
-> `repeatPatternFlag` non-null before you go live.
+> **SETUP.** On a fresh seed the dashboard has no history — `slaMetPercent` and
+> every `repeatPatternFlag` come back `null`. The rule needs **three** incidents
+> of the same fault on one vehicle inside a 60-day window (`REPEAT_PATTERN_MIN_
+> COUNT = 3`), and the SLA %/mean-resolution numbers are month-scoped, so they
+> need incidents dated *this* month.
+>
+> **Already done for `vehicle-metrocab-1`** by `scripts/demo-prep-beat9.ts`:
+> three RESOLVED `FLAT_BATTERY` jobs (`demo-prep-batt-0..2`), all this month,
+> each with a `TECHNICIAN_ARRIVED` event and an approved ₹1,800 estimate; two
+> met the 30-minute window, one missed it. Confirmed via `GET /fleet/dashboard`
+> as `fm-metrocab@zippy.internal`:
+> `repeatPatternFlag = "3rd incident of a flat battery in 60 days…"`,
+> `slaMetPercent 66.7` (3 decided), `meanResolutionMinutes 57`,
+> `resolvedCount 3`, `spendRupees ₹5,400`, `currentExposure ₹0`,
+> `activeIncidents 0`. **Re-run `npx tsx scripts/demo-prep-beat9.ts` after any
+> `db:reset`.** The script is insert-only (Postgres blocks `DELETE` on
+> `job_events`), so a reset is the only clean way to undo it — don't run it
+> twice without a reset in between.
 
 1. Fleet tab (logged in as `fm-metrocab@zippy.internal`) → **fleet
    dashboard**: this manager's own SLA %, a boolean current-exposure figure,
