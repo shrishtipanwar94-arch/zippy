@@ -33,12 +33,14 @@ cannot fix the fault — dispatching them is fast to arrive and slow to resolve,
 because a second dispatch then has to happen.
 
 **That objective function exists, and it has been measured against
-alternatives rather than asserted.** `npm run eval` replays five seeded
+alternatives rather than asserted.** `npm run eval` replays six seeded
 scenarios through the production engine against four policies. On the baseline
-scenario the inversion the project is built on shows up directly:
-`nearest-unit` posts the best arrival time (20.1 min) while
-`capability-aware-global` resolves more jobs (54/60 against 53/60). On two of
-the five scenarios global **loses**, and the report says so — see §15.
+scenario the inversion the project is built on shows up directly: `fifo` and
+`nearest-unit` post the fastest arrival (~36 min) while
+`capability-aware-global` resolves far more jobs (56/60 against 41–42) at a
+slower arrival (53 min). On **ambiguous-diagnosis** global resolves fewer jobs
+than nearest-unit and the report calls that a loss — see §15; `npm run
+eval:sweep` shows the same weak point recurring under load.
 
 Assignment is **global**: `src/engine/allocation.ts` solves the whole pending
 board as one assignment problem, so a job whose only possible unit would have
@@ -289,10 +291,13 @@ Only what the code actually exercises:
 - *Why send the further unit?* Expected time to resolution sums over the whole
   fault distribution: 48.5 min for a near narrow crew against 44.0 for a
   further broad one.
-- *Does global assignment actually beat greedy?* Measured across five
-  scenarios. Sometimes, and the harness prints when it does not.
-- *What does a scale approximation cost?* Zone partitioning: 11 of 180 jobs at
-  monsoon-surge, 6 of 60 at ambiguous-diagnosis.
+- *Does global assignment actually beat greedy?* Measured across six
+  scenarios. In five it resolves more jobs; it loses ambiguous-diagnosis on
+  jobs served, and the harness prints that.
+- *What does a scale approximation cost?* Zone partitioning splits the board
+  above a candidate threshold so a job cannot be matched to a free unit in the
+  next zone. The threshold sweep that used to quantify it is not in the
+  current harness — unmeasured at this checkpoint, not zero.
 - *How do two dispatchers not take one unit?* 50 concurrent holds on 10 units
   grant exactly 10, against a real Postgres in a container.
 - *How do you stop a burst of triggers becoming a burst of solves?* Debounce by
@@ -716,12 +721,17 @@ ever had.
   answer. Potentials, reduced costs kept non-negative, augmenting paths, and LP
   duality as the optimality proof. Checked against brute force on 300 matrices.
 
-- *Your evaluation says the global policy loses two of five scenarios. Why ship
-  it?* Because the harness also says why, and the reason is not the objective
-  function. Running monsoon-surge twice with nothing changed but the
-  zone-partition threshold: partitioned resolves 58/180, the whole-fleet matrix
-  resolves 69/180. The scale approximation on top of the objective is what
-  costs the throughput.
+- *Your evaluation says the global policy loses a scenario. Why ship it?*
+  It loses exactly one on the baseline grid — **ambiguous-diagnosis**, on jobs
+  served: 19/60 against nearest-unit's 22/60. Its mean resolution there is 42
+  minutes faster and its first-visit rate 22 points higher; it loses because it
+  strands more (39 against 28) while chasing a crew who can cover the fault, and
+  the harness scores that scenario on throughput. `npm run eval:sweep` re-runs
+  the whole grid under six perturbations and the same weak point recurs at
+  volume ×2 and OBD-scarce — ambiguous-diagnosis is the scenario with the least
+  diagnostic signal, so belief-driven dispatch has the least to work with
+  there. Every mean in the table is over jobs that finished, so read `resolved`
+  first: a policy that strands the hard jobs posts a flattering mean.
 
 - *You have a version column AND a status check. Isn't one redundant?* No, and I
   only know because I deleted one and measured. Removing `AND version = $2`
@@ -874,9 +884,13 @@ The most valuable section. In rough order of severity:
    safety ordering — invariant 4, the thing that sits *above* the cost function
    — operates on a value decided from a phone call that can no longer change.
    That is a bigger hole than any missing trigger.
-3. **Zone partitioning demonstrably loses quality**, measured: 11 of 180 jobs at
-   monsoon-surge, 6 of 60 at ambiguous-diagnosis. Worse, partitioning is by the
-   job's stored `zoneId`, not by geography.
+3. **Zone partitioning is a scale approximation on top of the objective.** Above
+   the candidate-count threshold `allocation.ts` splits the board by the job's
+   stored `zoneId` — not by geography — and solves each zone separately, so a
+   job in a busy zone cannot be matched to a free unit next door. An earlier
+   harness quantified the cost with a partitioned-vs-whole-fleet threshold
+   sweep; that experiment is not in the current `eval:sweep` (a robustness grid
+   now), so the figure is unmeasured at this checkpoint rather than zero.
 4. **Every number in the model is invented.** Twenty-four durations, two
    escalation constants, fifteen weights, fuel and labour rates, the 4x
    carriageway ratio, 45-minute service assumption, 250m material move, a
@@ -1036,7 +1050,11 @@ the cross-tenant contention guard; the Phase 15c coverage-cap booking gap
 `fleetSpend` currently sidesteps rather than fixes; and measuring
 `REFUSAL_DISTANCE_PENALTY_KM` against what a real dispatcher would actually
 trade, the same way the SLA breach curve is still a ruler rather than a
-fitted model.
+fitted model. The largest single piece is the coverage engine (Phases 23–24,
+cut — see §19): pre-position idle capability against a bucketed empirical
+demand rate, score every reposition through the dispatch cost function, gate
+it behind the four anti-thrash guards, and then run the ablation that decides
+whether it earns its place at this fleet size.
 
 ## 17. Defensible Resume Claims
 
@@ -1051,12 +1069,13 @@ machine:
   jump-start-only unit, 44.0 minutes against 48.5.
 - Implemented the **Hungarian algorithm from scratch** for global assignment,
   verified against brute-force enumeration on 300 seeded matrices.
-- Built a **deterministic evaluation harness** replaying five seeded scenarios
-  through the production engine against four policies, reporting eight metrics
+- Built a **deterministic evaluation harness** replaying six seeded scenarios
+  through the production engine against four policies, reporting ten metrics
   and printing the scenarios where the proposed approach loses. Byte-identical
-  stdout for a fixed seed. It quantified the cost of a scale approximation
-  (zone partitioning: 11 of 180 jobs) and found a defect in which a job past
-  its SLA window became permanently undispatchable.
+  stdout for a fixed seed (verified again at the Phase 22 checkpoint). It names
+  the one scenario the proposed policy loses on jobs served (ambiguous-diagnosis,
+  19/60 against 22/60), and an earlier version surfaced a defect in which a job
+  past its SLA window became permanently undispatchable.
 - Implemented **optimistic-concurrency unit holds and a three-leg reservation
   saga** with compensations in reverse order and crash recovery, proved against
   a real Postgres started by the test suite: 50 concurrent holds on 10 units
@@ -1178,13 +1197,14 @@ under a capped contract, or the Razorpay adapter (22b, not built).
 
 ## 19. Current Project State
 
-**Phases 0–22 complete — the build plan's recommended ship point.** 799 fast
+**Phases 0–22 complete — the build plan's recommended ship point.** 800 fast
 tests across 55 files (3 skipped), plus a 9-test concurrency suite against a
 real Postgres container started by the suite itself. `tsc --noEmit` (src,
 tests, evaluation, prisma) and `eslint src evaluation` clean. `npm run eval`
-reruns byte-identical outcome metrics against the same five scenarios and
-four policies Phase 10 built — only wall-clock timing moves run to run, by
-design.
+reruns byte-identical outcome metrics across six scenarios (parts-stockout
+was added at Phase 19) and the four policies Phase 10 built — only the
+trailing "solver wall clock p95" block, which the harness labels
+not-reproducible, moves run to run.
 
 Working, in the order it was built:
 
@@ -1212,7 +1232,7 @@ Working, in the order it was built:
   both resolve inside candidate generation, one per pair and one per job
   respectively, so the assignment matrix never grew past jobs × (unit,
   technician).
-- **The evaluation harness** — five scenarios, four policies, eight metrics, a
+- **The evaluation harness** — six scenarios, four policies, ten metrics, a
   sweep, and `EVALUATION.md`.
 - **Holds, offers and the saga** — version-checked holds with TTL, technician
   offers with real expiry, a three-leg reservation saga with compensations,
@@ -1264,8 +1284,23 @@ the DEGRADED banner, the symptom picker, safety, location, job creation and the
 live status panel. The dispatcher and technician pages have been exercised over
 HTTP but not clicked through end to end.
 
-**Not started:** the Razorpay adapter (22b) and everything after — the
-platform is otherwise a complete product as of this checkpoint.
+**Not started, and Phases 23–24 cut deliberately as headroom.** The Razorpay
+adapter (22b) is unbuilt. Phases 23 (a coverage / repositioning engine) and 24
+(its ablation) are a deliberate cut, not an oversight — the build plan names
+23–26 as "first thing to cut" and Phase 22 as the ship point. Phase 23 is a
+whole new subsystem orthogonal to the thesis: `ZoneDemandStat`, `CoverageGap`,
+`RepositionRecommendation`/`RestockRecommendation`, a write-capable
+recommendation loop scored through the *same* cost function as dispatch, four
+anti-thrash guards (minimum-improvement, cooldown, hysteresis, a live cap with
+SUPERSEDE), two new unit states (REPOSITIONING/RESTOCKING, both still
+dispatchable), and a real-Postgres test for two dispatchers racing one
+recommendation. The dispatch thesis — time-to-resolution, belief-driven, risk
+priced into the objective — is already built and measured across six scenarios;
+a half-tested recommendation system bolted on would be the weakest code in a
+repo whose whole point is that every line is defensible. The stronger interview
+position is the scoped-not-built one: the tables, the guards, and the honest
+ablation ("I measured it and it did not help at this fleet size" is a valid
+result) as a description of what comes next.
 
 **Known-stale data:** the development database carries INTAKE jobs left by
 earlier phases and manual runs of the Phase 22 check script
