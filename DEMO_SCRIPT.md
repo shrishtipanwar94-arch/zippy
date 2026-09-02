@@ -1,0 +1,258 @@
+# DEMO_SCRIPT.md
+
+The live walk-through. Ten beats, one clean seed, target **under twelve
+minutes**. If a run goes long, cut a beat (candidates for the axe are marked
+`[CUT FIRST]`) — do not talk faster.
+
+> **Status: DRAFT, not yet rehearsed.** Every click path below is written from
+> the code, not from a timed run. Phase 25's actual check — "the full demo runs
+> clean twice in a row from a reset database" — still has to be done with a
+> stopwatch, and the per-beat times are estimates. Walk it end to end once,
+> correct what is wrong here, then time it.
+
+---
+
+## Before the room is watching
+
+```bash
+docker compose up -d                 # postgres, redis, osrm
+npm run db:reset && npm run db:seed  # 6 zones, 24 units, 31 technicians, 12 workshops, 3 depots
+npm run dev                          # web process  — http://localhost:3000
+npm run dev:worker                   # worker process — leave both running
+```
+
+Seed is fixed; a reset gives byte-identical fixtures every time. If OSRM is not
+up, candidate generation falls back to haversine and every travel time on
+screen is flagged degraded — fine for a dry run, wrong for the real thing.
+
+**Logins** — every seeded user shares the password `password-dev-only`.
+
+| role | email | page |
+| --- | --- | --- |
+| dispatcher | `dispatch-ops@zippy.internal` | `/dispatcher.html` |
+| fleet manager | `fm-metrocab@zippy.internal` | `/fleet.html` |
+| technician | `tech1@zippy.internal` (…`tech31`) | `/technician.html` |
+| driver | created per job, or `driver-<id>@zippy.internal` | `/driver.html` |
+
+Open four tabs: dispatcher, driver, technician, fleet. Dispatcher is the tab
+you present from; the others you cut to.
+
+**One line to open with:** "Zippy dispatches roadside breakdowns for
+time-to-*resolution*, not time-to-arrival. The nearest van is often the wrong
+van, because it cannot fix the fault and a second dispatch has to happen. Every
+number I show you comes out of `npm run eval` against the same engine the
+server runs."
+
+---
+
+## Beat 1 — normal-day: the inversion, on one job  ·  ~90s
+
+**Objective:** show arrival and resolution disagreeing on a single dispatch.
+
+1. Driver tab → **Describe** → type *"car won't start, no lights at all"* →
+   **Continue**.
+2. Step through the symptom picker (leave the lit complaint), mark safety
+   **not** high-risk, drop the pin on a main road, **Create**.
+3. Dispatcher tab → the job appears in the jobs table → click it.
+4. **Inspector panel** ("why this crew?") → read the chosen option's cost
+   breakdown term by term, then open **rejected alternatives**: point at the
+   nearer jump-start-only van and its reason code.
+
+**Say:** "The van it turned down is closer. It went with the one 7km further
+out because that crew covers the whole fault distribution — expected time to
+*resolution* is lower even though arrival is worse. That trade is the product."
+
+**Expect:** chosen crew is broad-capability; a closer `VEHICLE_TYPE`- or
+capability-rejected option is listed with its code.
+
+---
+
+## Beat 2 — capability-scarcity: three plans, priced  ·  ~60s
+
+**Objective:** the solver offering ranked whole-board plans, not one answer.
+
+1. Dispatcher → **Plans panel**: three plan cards for the current board.
+2. Point at the cost delta between card 1 and card 2, and at the
+   **scarcity panel** flagging which capability is the bottleneck.
+3. Select card 1 → the selection paints immediately, the decision record
+   lands a moment later.
+
+**Say:** "One scarce skill across the fleet. The planner assigns the whole
+pending board at once, so a job whose only possible crew would have gone to a
+marginally better match somewhere else is not stranded. These are the same
+three cards ranked by the cost function — no hidden tiebreak."
+
+---
+
+## Beat 3 — ambiguous-diagnosis: where the approach *loses*  ·  ~75s  `[CUT FIRST]`
+
+**Objective:** honesty. Show the scenario the harness scores against us.
+
+1. Driver tab → **Describe** something deliberately vague: *"weird noise and a
+   warning light, not sure what."* → create the job.
+2. Dispatcher → inspector → show the fault **distribution** is spread, and the
+   required-capability set is wide.
+3. Cut to terminal: `npm run eval -- --scenario ambiguous-diagnosis` (or point
+   at `EVALUATION.md`).
+
+**Say:** "On ambiguous-diagnosis the global policy resolves 19 of 60 against
+nearest-unit's 22. Its mean is faster and its first-visit rate is higher, but
+it strands more chasing a crew who can cover every branch, and the harness
+scores that scenario on jobs served. It prints the loss. `eval:sweep` shows
+the same weak point under load — it is the scenario with the least diagnostic
+signal to act on."
+
+---
+
+## Beat 4 — parts-stockout + the driver's part-sourcing message  ·  ~90s
+
+**Objective:** the inventory layer, and the sentence the driver sees.
+
+1. Pick (or create) a job whose likely fault needs a part — e.g. *alternator*
+   symptoms. Dispatcher → inspector → the chosen option shows a
+   **PART_SOURCING** branch: the crew diverts to a depot for the part.
+2. Cut to the **driver tab** for that job. The status line reads:
+   > "<crew name> has the skills for this but needs a part. We are arranging it
+   > now."
+
+**Say:** "The driver is never told 'stock-out'. The system knows this crew is
+qualified and empty-handed, routes them via a depot, and prices the detour into
+the same objective. A policy with no inventory model cannot even see this
+happening — that is the `stockout fails` column, 50 to 149 for the baselines
+and near zero here."
+
+---
+
+## Beat 5 — destination screening: where a tow goes  ·  ~90s
+
+**Objective:** the workshop-network decision and its audit panel.
+
+1. Create a tow-only job: describe *"had an accident, car can't be driven,
+   stuck in the live lane"* → high-risk safety, highway situation → create.
+2. Dispatcher → inspector → **destination screening panel**: the shortlist of
+   workshops, each row showing brand authorisation, EV-class fit, open-now,
+   real road distance **job → workshop**, and the learned P(accept). The chosen
+   one is marked.
+3. Cut to the driver tab: "Confirming a workshop that can take your car." →
+   later "Your car is on its way to the workshop."
+
+**Say:** "For a tow the destination is resolved once per job — brand, EV class,
+opening hours in IST, real road distance in the direction the tow actually
+drives, and a Beta-Bernoulli estimate of whether the workshop will say yes.
+The refusal risk is a cost term in minutes, and the saga's third leg finally
+has a real caller."
+
+---
+
+## Beat 6 — monsoon-surge: the board under load  ·  ~75s
+
+**Objective:** the console holding up while jobs pour in.
+
+1. Terminal: `npm run sim -- --live --rate 45 --duration 60` — `--duration` is
+   in *simulated* minutes and live mode runs ~1 real second per simulated
+   minute, so this is about a one-minute burst; add `--pace 2` to slow it.
+2. Dispatcher → let the jobs table fill, scroll halfway, **wait**. Point at
+   the **priority queue** re-ordering and the **map** fan-out.
+3. Scroll position and selection hold; no flicker (rows patch by
+   `data-job-id`, nothing rebuilds).
+4. Stop the surge: `docker compose exec redis redis-cli SET zippy:sim:stop 1`.
+
+**Say:** "Forty-five jobs an hour. The table patches row by row over a
+WebSocket — scroll and selection survive, which is the difference between a
+console and a toy. Under this load the global policy resolves roughly twice
+what the greedy policies do."
+
+---
+
+## Beat 7 — technician-dropout via the chaos panel  ·  ~75s
+
+**Objective:** a mid-incident resource failure, visibly handled.
+
+1. Dispatcher → **chaos panel** ("break-it panel", dev builds only) →
+   **Take a technician offline** on a crew that is currently on a job.
+2. Watch the job re-enter the pending list; the re-dispatch fires; a new plan
+   is proposed.
+3. Point at the **timeline** for that job — the dropout and the reassignment
+   are both events, not a silent swap.
+
+**Say:** "The panel does not exist in a production build — the routes are not
+registered, so a leaked token can't reach them. Here it lets me pull a crew
+off the road mid-job. The job re-queues, re-dispatches, and every step writes
+a JobEvent. Nothing degrades quietly."
+
+---
+
+## Beat 8 — chaos CRITICAL banner  ·  ~60s
+
+**Objective:** invariant 8 — every degraded state is visible.
+
+1. Dispatcher → chaos panel → turn on **Redis (queues and fan-out)** and
+   **Live updates**.
+2. The **health banner** appears at the top: amber for one component down, red
+   (`CRITICAL`) when the combination crosses the line — a sentence the server
+   wrote, listing only the broken components.
+3. Turn both switches off → the banner clears itself within one health-loop
+   tick (~15s), or instantly because the toggle re-runs the probes.
+
+**Say:** "Green is never shown — a permanent status bar stops being read. This
+bar only appears when something is wrong, the wording comes from the server so
+there's one source of truth, and it recovers on its own. `CHAOS_TESTING.md` is
+written from a real walk-through of all six components."
+
+---
+
+## Beat 9 — repeat-pattern flag on the fleet dashboard  ·  ~60s
+
+**Objective:** the tenancy / fleet-manager surface.
+
+1. Fleet tab (logged in as `fm-metrocab@zippy.internal`) → **fleet
+   dashboard**: this manager's own SLA %, a boolean current-exposure figure,
+   spend, and incident history — scoped to their tenant only.
+2. Point at a vehicle carrying the **repeat-incident flag** — a rule, not a
+   model: the same exact fault code seen more than once inside the window.
+
+**Say:** "A fleet manager sees only their own vehicles — the Prisma extension
+rewrites every query by tenant, and cross-tenant reads are audited. The
+repeat flag is rule-based and matches on the exact fault code; it deliberately
+does not merge `FLAT_BATTERY` and `FAILED_BATTERY`, and I can tell you why
+that's a known limitation."
+
+---
+
+## Beat 10 — cross-tenant contention → APPROVE card  ·  ~75s  `[CUT FIRST]`
+
+**Objective:** a contract decision that needs a human.
+
+1. Set up two pending jobs from different tenants whose only viable crew is the
+   same unit (easiest: a scarce-capability job from a GOLD-contract fleet and a
+   consumer job at the same safety level).
+2. Dispatcher → the losing job raises an **APPROVE-tier** ActionRequest — the
+   contested unit named, both costs on the card.
+3. Approve it → exactly one card resolves; a duplicate solve does not raise a
+   second (guard is read-then-write, a known non-atomic gap).
+
+**Say:** "Safety is a lexicographic ordering above the cost function — a
+contract tier cannot buy its way past a HIGH_RISK consumer. When two tenants
+genuinely contend for the last crew, the system does not silently pick a
+winner; it escalates to an APPROVE card with both numbers on it."
+
+---
+
+## Close  ·  ~30s
+
+"Phases 0 through 22 — the build plan's ship point. 800 fast tests, a
+concurrency suite against a real Postgres, `npm run eval` byte-identical across
+runs. The coverage engine in Phases 23–24 is scoped and deliberately not built:
+I wasn't going to ship a recommendation system I couldn't defend line by line.
+Everything you saw is one origin, two always-on processes, no external API in
+any dispatch decision."
+
+---
+
+## Reset between full run-throughs
+
+```bash
+docker compose exec redis redis-cli DEL zippy:sim:stop
+# on the dispatcher: chaos panel → Reset everything
+npm run db:reset && npm run db:seed
+```
