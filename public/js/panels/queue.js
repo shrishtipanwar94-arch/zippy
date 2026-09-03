@@ -34,13 +34,40 @@ const SAFETY_BADGE = {
   NORMAL: { className: 'badge-risk-normal', label: 'STANDARD' },
 };
 
+// A CEILING THIS PANEL ENFORCES ITSELF, on top of the server's limit.
+//
+// GET /queue returns the top fifty and says so, so in normal operation this
+// never bites. It exists because the panel had no opinion at all until now: an
+// unbounded response built a row per pending job, and against a dev database
+// carrying three thousand of them the console never became interactive — the
+// tab wedged before a dispatcher could read anything, which is the worst
+// possible failure for the panel that is supposed to tell you what is on fire.
+//
+// A render function should not be able to be handed a number that kills the
+// page. So the cap lives on both sides: the server bounds what it sends
+// because that is the endpoint's contract, and the panel bounds what it draws
+// because a future caller, a stale deploy or a hand-written ?limit must not be
+// able to take the console down.
+const MAX_ROWS = 200;
+
 export function render(state) {
   const panel = document.querySelector('[data-panel="queue"]');
   if (!panel) return;
 
   const table = ensureTable(panel);
   const body = table.querySelector('tbody');
-  const jobs = state.queue.jobs;
+  const returned = state.queue.jobs;
+  const jobs = returned.length > MAX_ROWS ? returned.slice(0, MAX_ROWS) : returned;
+
+  // WHAT IS NOT ON SCREEN. `total` is the whole pending queue; the rows are the
+  // top of it. Saying so is the difference between a short list and a list that
+  // looks complete and is not.
+  //
+  // Defensive about the field itself, not just the count: an older server, a
+  // cached response or a failed fetch can leave `total` undefined, and a
+  // caption reading "top 50 of undefined" is worse than no caption.
+  const total = Number.isFinite(state.queue.total) ? state.queue.total : jobs.length;
+  setSummary(panel, jobs.length, total);
 
   const empty = panel.querySelector('[data-field="queue-empty"]');
   if (empty) empty.hidden = jobs.length > 0;
@@ -60,6 +87,21 @@ export function render(state) {
     // whose order has not changed does not touch the DOM at all.
     body.appendChild(row);
   }
+}
+
+// "Showing the top 50 of 3,102." Written only when it says something: with the
+// whole queue on screen there is nothing being hidden, and a caption repeating
+// the row count would be noise on the panel that can least afford it.
+function setSummary(panel, shown, total) {
+  const node = panel.querySelector('[data-field="queue-count"]');
+  if (!node) return;
+
+  const hidden = total > shown;
+  const text = hidden
+    ? `Showing the top ${shown} of ${total.toLocaleString()}.`
+    : `${total.toLocaleString()} waiting.`;
+  if (node.textContent !== text) node.textContent = text;
+  node.hidden = total === 0;
 }
 
 // Created once. The header never changes, so rebuilding it is pure churn.

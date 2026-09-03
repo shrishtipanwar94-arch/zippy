@@ -20,7 +20,7 @@ const FINISHED = new Set(['RESOLVED', 'CANCELLED', 'UNSERVICEABLE']);
 
 // Three quarters of the promised window gone. The same threshold the queue's
 // own SLA badge turns amber at, so the strip and the rows agree about what
-// "at risk" means.
+// "at risk" means. src/domain/priority.ts holds the authoritative copy.
 const SLA_AT_RISK = 0.75;
 
 export function render(state) {
@@ -31,7 +31,15 @@ export function render(state) {
   if (panel.hidden) return;
 
   const active = Object.values(state.jobs).filter((job) => !FINISHED.has(job.status)).length;
-  const atRisk = state.queue.jobs.filter((job) => job.slaRisk >= SLA_AT_RISK).length;
+
+  // THE SERVER COUNTS THIS ONE, over every pending job. GET /queue returns only
+  // the top of the queue, so filtering the rows we were sent would report "at
+  // risk among the fifty shown" and quietly under-count a backlog. Falling back
+  // to the rows keeps the strip working against a response that predates the
+  // field rather than showing a blank.
+  const atRisk = Number.isFinite(state.queue.slaAtRiskCount)
+    ? state.queue.slaAtRiskCount
+    : state.queue.jobs.filter((job) => job.slaRisk >= SLA_AT_RISK).length;
   const approvals = (state.actions ?? []).filter((action) => action.tier === 'APPROVE').length;
 
   setStat(panel, 'active', active, false);

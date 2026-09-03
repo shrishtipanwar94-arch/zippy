@@ -50,7 +50,9 @@ const state = {
   // Capability scarcity and the priority queue: both whole-board reads,
   // refreshed on demand rather than per event.
   scarcity: { capabilities: [], totalCrewedUnits: 0, totalTechnicians: 0 },
-  queue: { jobs: [], at: null },
+  // `jobs` is the TOP of the queue, not all of it; `total` is how many are
+  // waiting. The panel needs both to say what it is not showing.
+  queue: { jobs: [], total: 0, slaAtRiskCount: 0, limit: 0, at: null },
 
   // Which plan the dispatcher has taken, and the override reason if they
   // departed from the recommendation.

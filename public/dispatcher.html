@@ -122,6 +122,9 @@
               <!-- Rows are patched by data-job-id; the table is never rebuilt. -->
               <div data-panel="queue">
                 <div class="text-muted small" data-field="queue-empty">Nothing waiting.</div>
+                <!-- What the list is NOT showing. GET /queue returns the top of
+                     the queue, and a truncated list has to say so. -->
+                <div class="text-muted small mb-1" data-field="queue-count" hidden></div>
               </div>
             </div>
           </div>

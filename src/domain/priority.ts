@@ -55,6 +55,17 @@ export function ageMinutes(job: QueuedJob, now: Date): number {
   return (now.getTime() - job.createdAt.getTime()) / 60_000;
 }
 
+// Three quarters of the promised window gone. Lives here, next to `slaRisk`,
+// because it is a fact about the ordering rule rather than about any one
+// screen: GET /queue counts at-risk jobs across the WHOLE pending set with it,
+// and the console's SLA badge turns amber at the same figure, so the strip and
+// the rows cannot disagree about what "at risk" means.
+export const SLA_AT_RISK = 0.75;
+
+export function countAtRisk(jobs: QueuedJob[], now: Date): number {
+  return jobs.filter((job) => slaRisk(job, now) >= SLA_AT_RISK).length;
+}
+
 // Lower sorts first. The three keys are compared in order and the first
 // difference wins — no key is ever traded against another.
 export function compareForQueue(a: QueuedJob, b: QueuedJob, now: Date): number {

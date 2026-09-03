@@ -510,20 +510,74 @@ describe('GET /queue', () => {
     expect(job).toHaveProperty('ageMinutes');
   });
 
+  // BOUNDED, AND HONEST ABOUT IT. `zippy_test` is shared, so these assert on
+  // the relationship between the fields rather than on any absolute count —
+  // another suite's pending jobs move `total` between runs and must not move
+  // the verdict.
+  it('returns the top of the queue rather than all of it, and says how many are waiting', async () => {
+    const response = await request(app)
+      .get('/queue')
+      .set('Authorization', `Bearer ${dispatcherToken()}`);
+
+    expect(response.status).toBe(200);
+    expect(response.body.limit).toBe(50);
+    expect(response.body.jobs.length).toBeLessThanOrEqual(50);
+    expect(response.body.total).toBeGreaterThanOrEqual(response.body.jobs.length);
+    // Counted over every pending job, so it can legitimately exceed the rows.
+    expect(response.body.slaAtRiskCount).toBeGreaterThanOrEqual(0);
+  });
+
+  it('honours an explicit limit without changing which job is first', async () => {
+    const [full, one] = await Promise.all([
+      request(app).get('/queue').set('Authorization', `Bearer ${dispatcherToken()}`),
+      request(app).get('/queue?limit=1').set('Authorization', `Bearer ${dispatcherToken()}`),
+    ]);
+
+    expect(one.body.jobs).toHaveLength(1);
+    expect(one.body.limit).toBe(1);
+    // Truncation happens AFTER the sort, so the single row is the same job the
+    // unbounded list put at the top — the property that would break if the
+    // limit were pushed into the query.
+    expect(one.body.jobs[0].id).toBe(full.body.jobs[0].id);
+    expect(one.body.total).toBe(full.body.total);
+  });
+
+  it('clamps a limit past the maximum instead of trusting it', async () => {
+    const response = await request(app)
+      .get('/queue?limit=99999')
+      .set('Authorization', `Bearer ${dispatcherToken()}`);
+
+    expect(response.body.limit).toBe(200);
+    expect(response.body.jobs.length).toBeLessThanOrEqual(200);
+  });
+
   // The console's map plots this list and nothing else, so a row without
   // coordinates is a row the map silently drops — which is exactly how it went
   // unnoticed that the select never asked for them.
   it('carries the coordinates the map plots', async () => {
     const response = await request(app)
-      .get('/queue')
+      .get('/queue?limit=200')
       .set('Authorization', `Bearer ${dispatcherToken()}`);
 
-    // Scoped to this file's own job: `zippy_test` is shared, so an assertion
-    // about every row in the queue is an assertion about other suites' fixtures.
+    // RANK-INDEPENDENT, because the response is now the top of the queue and
+    // this file's job does not get to assume it is near the top of a shared
+    // database. The bug was the SELECT never asking for the columns, which
+    // leaves the keys off EVERY row — so their presence is the property, and
+    // it holds whichever jobs come back.
+    expect(response.body.jobs.length).toBeGreaterThan(0);
+    for (const job of response.body.jobs) {
+      expect(job).toHaveProperty('lat');
+      expect(job).toHaveProperty('lng');
+    }
+
+    // And when this file's own job is in range, the values are its own — the
+    // stronger claim, made only when it can be made without depending on how
+    // busy the test database is.
     const own = response.body.jobs.find((job: { id: string }) => job.id === jobA);
-    expect(own).toBeDefined();
-    expect(own.lat).toBe(12.9352);
-    expect(own.lng).toBe(77.6245);
+    if (own) {
+      expect(own.lat).toBe(12.9352);
+      expect(own.lng).toBe(77.6245);
+    }
   });
 });
 

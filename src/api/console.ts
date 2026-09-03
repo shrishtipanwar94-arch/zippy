@@ -9,7 +9,7 @@
 // GET  /events                  the incident timeline: job_events, filterable
 // GET  /jobs/:id/decision       "why this technician?" for one job
 // GET  /capabilities/scarcity   how thin the fleet is on each skill
-// GET  /queue                   pending jobs, safety-first
+// GET  /queue                   the top of the pending queue, safety-first
 // POST /plans/:id/select        a dispatcher takes a plan; an override explains itself
 //
 // Only the last of the five writes anything.
@@ -19,7 +19,7 @@ import { z } from 'zod';
 import { prismaBase } from '../infra/prismaBase.js';
 import { authenticate, requirePermission } from './middleware/authenticate.js';
 import { summarise, byUrgency } from '../domain/scarcity.js';
-import { orderQueue, slaRisk, ageMinutes } from '../domain/priority.js';
+import { orderQueue, slaRisk, ageMinutes, countAtRisk } from '../domain/priority.js';
 import { selectPlan, latestDecisionFor, RECOMMENDED_PLAN } from '../commit/decisionRecords.js';
 import { PAYMENT_PENDING_AFTER_MS } from '../health/probes.js';
 import { formatRupees } from '../domain/money.js';
@@ -30,6 +30,14 @@ export const consoleRouter = Router();
 // unbounded query over an append-only table gets slower every day.
 const DEFAULT_EVENT_LIMIT = 200;
 const MAX_EVENT_LIMIT = 500;
+
+// How much of the priority queue GET /queue hands over. Fifty is roughly what
+// fits in the console's left column at a scroll a dispatcher will actually
+// reach the bottom of; past that the list is not being read, it is being
+// rendered. See the comment on the route for why the truncation happens after
+// the sort rather than in the query.
+const DEFAULT_QUEUE_LIMIT = 50;
+const MAX_QUEUE_LIMIT = 200;
 
 consoleRouter.get(
   '/events',
@@ -338,8 +346,31 @@ consoleRouter.get(
 // ---------------------------------------------------------------------------
 // THE PRIORITY QUEUE. Safety first, lexicographically — src/domain/priority.ts
 // carries the argument for why it is not a weighted score.
-consoleRouter.get('/queue', authenticate, requirePermission('read', 'job'), async (_req, res) => {
+//
+// IT RETURNS THE TOP OF THE QUEUE, NOT THE QUEUE. That is the contract, and it
+// is a statement about what a dispatcher does rather than a concession to the
+// browser: nobody works the three-thousandth most urgent job, and an endpoint
+// that hands over every pending row is answering a question no one asked. The
+// total comes back alongside, so the console can say what it is not showing —
+// a truncated list that does not admit it is truncated is invariant 8's
+// problem in miniature.
+//
+// THE DATABASE READ IS STILL THE WHOLE PENDING SET, deliberately. The ordering
+// is lexicographic across three keys, one of which (SLA consumption) is
+// elapsed time over a window reached through a relation, so there is no `take`
+// Postgres could apply that would return the same fifty jobs — slicing before
+// sorting picks an arbitrary fifty and calls them urgent. Sorting the pending
+// set in memory and slicing after is the only version that is correct, and it
+// keeps the ordering rule in one place. Narrow columns, and the set is bounded
+// by how many jobs are genuinely waiting; if that ever stops being true the
+// fix is a materialised priority column, not a `take` in the wrong place.
+consoleRouter.get('/queue', authenticate, requirePermission('read', 'job'), async (req, res) => {
   const now = new Date();
+
+  const requested = Number(req.query.limit);
+  const limit = Number.isFinite(requested)
+    ? Math.min(Math.max(1, Math.trunc(requested)), MAX_QUEUE_LIMIT)
+    : DEFAULT_QUEUE_LIMIT;
 
   const jobs = await prismaBase.job.findMany({
     where: { status: { in: ['INTAKE', 'PLANNED'] }, assignedUnitId: null },
@@ -371,18 +402,30 @@ consoleRouter.get('/queue', authenticate, requirePermission('read', 'job'), asyn
 
   // The three sort keys are returned alongside the order, so an operator can
   // see WHY a job sits where it does rather than trusting the sequence.
+  // COUNTED OVER THE WHOLE PENDING SET, NOT THE ROWS RETURNED. The console's
+  // stats strip used to derive this by filtering the queue it had been sent,
+  // which was every pending job and so gave the right answer by accident. Once
+  // the response is the top fifty that arithmetic quietly becomes "at risk
+  // among the fifty most urgent", and a job outside the top fifty can still be
+  // deep into its window — SLA risk only breaks ties WITHIN a safety tier, so
+  // a NORMAL job hours past its promise sorts below every HIGH_RISK one.
   res.json({
-    jobs: orderQueue(queued, now).map((job) => ({
-      id: job.id,
-      zoneId: job.zoneId,
-      status: job.status,
-      safetyLevel: job.safetyLevel,
-      slaRisk: Number(slaRisk(job, now).toFixed(3)),
-      ageMinutes: Math.round(ageMinutes(job, now)),
-      slaResponseMinutes: job.slaResponseMinutes,
-      lat: job.lat,
-      lng: job.lng,
-    })),
+    total: queued.length,
+    slaAtRiskCount: countAtRisk(queued, now),
+    limit,
+    jobs: orderQueue(queued, now)
+      .slice(0, limit)
+      .map((job) => ({
+        id: job.id,
+        zoneId: job.zoneId,
+        status: job.status,
+        safetyLevel: job.safetyLevel,
+        slaRisk: Number(slaRisk(job, now).toFixed(3)),
+        ageMinutes: Math.round(ageMinutes(job, now)),
+        slaResponseMinutes: job.slaResponseMinutes,
+        lat: job.lat,
+        lng: job.lng,
+      })),
     at: now.toISOString(),
   });
 });
