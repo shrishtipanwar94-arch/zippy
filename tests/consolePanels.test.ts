@@ -137,8 +137,12 @@ describe('the priority queue patches rows rather than rebuilding the table', () 
   // Colour is never the only signal (docs/UI.md). Every risk and SLA state on a
   // queue row carries its word, so the row survives a colourblind operator and
   // a laptop screen in daylight.
+  // `LATE` rather than `SLA LATE` since the queue row grew a subject: the
+  // longer string was the widest in a fixed-width column and every row paid for
+  // it by truncating the fault. What this test is actually about is unchanged —
+  // each state carries a WORD, so colour is never the only signal.
   it('labels risk and SLA in words, not only in colour', () => {
-    for (const word of ['HIGH RISK', 'ELEVATED', 'STANDARD', 'NO SLA', 'SLA LATE']) {
+    for (const word of ['HIGH RISK', 'ELEVATED', 'STANDARD', 'NO SLA', 'LATE ']) {
       expect(source, word).toContain(word);
     }
   });

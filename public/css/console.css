@@ -191,10 +191,38 @@ body.console {
 
 /* THE QUEUE ROW'S TWO LINES. Registration and fault on the first, how long it
  * has waited and where it is on the second. Two lines rather than five columns
- * — the left column is 19rem on a laptop and five columns do not fit in it. */
+ * — the left column is 19rem on a laptop and five columns do not fit in it.
+ *
+ * `table-layout: fixed` IS LOAD-BEARING, not tidiness. An auto-layout table
+ * sizes itself to its widest unbreakable content, so the moment rows carried a
+ * registration, a fault phrase and a place, the table grew past its 19rem
+ * column and pushed the badges out behind a horizontal scrollbar — the exact
+ * failure the three-column note below was written about, reintroduced by
+ * giving the rows something to say. Fixed layout makes the declared widths
+ * binding, so the subject cell truncates instead of the table growing. */
+.queue-table {
+  table-layout: fixed;
+  width: 100%;
+}
+
 .queue-table td {
   padding-top: 0.3rem;
   padding-bottom: 0.3rem;
+}
+
+.queue-table th:nth-child(1),
+.queue-table td:nth-child(1) {
+  width: 1.5rem;
+  padding-right: 0;
+}
+
+/* Sized to the widest badge string there is — "HIGH RISK" and "LATE 947m" are
+ * both nine characters — and no wider. Every pixel reserved here is a pixel the
+ * fault does not get, so this column is measured rather than estimated; see the
+ * note in panels/queue.js about why the late badge lost a word. */
+.queue-table th:nth-child(3),
+.queue-table td:nth-child(3) {
+  width: 5rem;
 }
 
 .queue-subject {

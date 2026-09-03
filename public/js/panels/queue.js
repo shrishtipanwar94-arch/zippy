@@ -208,7 +208,13 @@ function slaBadge(job) {
   // operator actually acts on. Derived here rather than sent, because the
   // server already sends both halves and a third field could disagree.
   const remaining = Math.round(job.slaResponseMinutes - job.ageMinutes);
-  if (remaining <= 0) return { label: `SLA LATE ${-remaining}m`, className: 'badge-sla-late' };
+  // "LATE 947m", not "SLA LATE 947m". The badge sits under one that already
+  // says HIGH RISK in a fixed-width column, and the longer wording was the
+  // single widest string in the queue — it set the column's width, and every
+  // row paid for it by truncating the fault. Dropping a word nothing depends
+  // on (the row's other badge is the SLA one; there is nothing else "late"
+  // could refer to) gives that width back to what the job actually is.
+  if (remaining <= 0) return { label: `LATE ${-remaining}m`, className: 'badge-sla-late' };
   if (job.slaRisk >= 0.75) return { label: `SLA ${remaining}m`, className: 'badge-sla-near' };
   return { label: `SLA ${remaining}m`, className: 'badge-sla-ok' };
 }
