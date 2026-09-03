@@ -29,6 +29,30 @@ import type { FaultCode } from '../domain/faults.js';
 // trail easier to read.
 const SECONDS_PER_ANSWER = 20;
 
+// THE SIMULATOR'S TWO CLOCKS, AND WHY A TIMESTAMP MUST USE THE SECOND ONE.
+//
+// A run is SCHEDULED in simulated seconds: `arrivalOffsetsSeconds` draws a
+// whole hour of arrivals up front, and that schedule is fixed by the seed. In a
+// one-shot replay the offset IS the timestamp — added to a fixed `startAt` —
+// and that is what makes a seed reproducible.
+//
+// A LIVE RUN COMPRESSES TIME. It sleeps `realSecondsPerSimulatedMinute` real
+// seconds per simulated minute, so at the default pace of 1 the simulated clock
+// advances sixty times faster than the wall clock: by simulated t+60min, one
+// real minute has passed. Adding the raw offset to `startAt` therefore stamps a
+// job up to an hour into the FUTURE, and everything that subtracts createdAt
+// from now() — the queue's age column, its SLA remainder, `slaRisk` and the
+// priority ordering itself — reads a negative number for it.
+//
+// So timestamps are scaled by exactly the factor the pacing loop below sleeps
+// for. The two clocks then agree, and a live job is never newer than now.
+function realSecondsFor(simulatedSeconds: number, config: SimulatorConfig): number {
+  // 0 means unpaced — "as fast as the database allows". There is no wall-clock
+  // rate to convert to, and simulated time is the run's only timeline.
+  if (config.realSecondsPerSimulatedMinute <= 0) return simulatedSeconds;
+  return (simulatedSeconds / 60) * config.realSecondsPerSimulatedMinute;
+}
+
 type RosterEntry = { driverId: string; vehicleId: string; tenantId: string | null; lat: number; lng: number };
 
 // Ordered by id so the same seed picks the same drivers on every machine.
@@ -84,7 +108,7 @@ async function runOneJob(
   const symptoms = generateSymptoms(random, trueFault);
   const safety = generateSafetyReport(random, situation, trueFault);
   const location = generateLocation(random, situation, { lat: driver.lat, lng: driver.lng });
-  const arrivalAt = new Date(startAt.getTime() + offsetSeconds * 1000);
+  const arrivalAt = new Date(startAt.getTime() + realSecondsFor(offsetSeconds, config) * 1000);
 
   const created = await createIntakeJob(db, {
     driverId: driver.driverId,
@@ -110,7 +134,9 @@ async function runOneJob(
 
     const answer = answerAsDriver(random, question, trueFault);
     questionsAsked += 1;
-    const answeredAt = new Date(arrivalAt.getTime() + questionsAsked * SECONDS_PER_ANSWER * 1000);
+    const answeredAt = new Date(
+      arrivalAt.getTime() + realSecondsFor(questionsAsked * SECONDS_PER_ANSWER, config) * 1000,
+    );
 
     const result = await recordIntakeAnswer(db, {
       jobId: created.jobId,

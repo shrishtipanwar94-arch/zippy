@@ -509,6 +509,22 @@ describe('GET /queue', () => {
     expect(job).toHaveProperty('slaRisk');
     expect(job).toHaveProperty('ageMinutes');
   });
+
+  // The console's map plots this list and nothing else, so a row without
+  // coordinates is a row the map silently drops — which is exactly how it went
+  // unnoticed that the select never asked for them.
+  it('carries the coordinates the map plots', async () => {
+    const response = await request(app)
+      .get('/queue')
+      .set('Authorization', `Bearer ${dispatcherToken()}`);
+
+    // Scoped to this file's own job: `zippy_test` is shared, so an assertion
+    // about every row in the queue is an assertion about other suites' fixtures.
+    const own = response.body.jobs.find((job: { id: string }) => job.id === jobA);
+    expect(own).toBeDefined();
+    expect(own.lat).toBe(12.9352);
+    expect(own.lng).toBe(77.6245);
+  });
 });
 
 describe('POST /plans/:id/select', () => {

@@ -349,6 +349,11 @@ consoleRouter.get('/queue', authenticate, requirePermission('read', 'job'), asyn
       createdAt: true,
       zoneId: true,
       status: true,
+      // The breakdown's position. The console's map plots exactly this list, and
+      // a job with no coordinates is simply not plotted — see
+      // public/js/panels/map.js.
+      lat: true,
+      lng: true,
       slaPolicy: { select: { responseMinutes: true } },
     },
   });
@@ -360,6 +365,8 @@ consoleRouter.get('/queue', authenticate, requirePermission('read', 'job'), asyn
     slaResponseMinutes: job.slaPolicy?.responseMinutes ?? null,
     zoneId: job.zoneId,
     status: job.status,
+    lat: job.lat,
+    lng: job.lng,
   }));
 
   // The three sort keys are returned alongside the order, so an operator can
@@ -373,6 +380,8 @@ consoleRouter.get('/queue', authenticate, requirePermission('read', 'job'), asyn
       slaRisk: Number(slaRisk(job, now).toFixed(3)),
       ageMinutes: Math.round(ageMinutes(job, now)),
       slaResponseMinutes: job.slaResponseMinutes,
+      lat: job.lat,
+      lng: job.lng,
     })),
     at: now.toISOString(),
   });
