@@ -75,17 +75,31 @@ function pendingMarkup(payouts) {
     <div class="mb-3">
       <h3 class="h6 text-secondary">On its way</h3>
       <ul class="list-unstyled small mb-0">
-        ${payouts
-          .map(
-            (payout) =>
-              `<li class="d-flex justify-content-between gap-2">
-                 <span>${escapeText(payout.status === 'SENT' ? 'Sent to your bank' : 'Queued for the next run')}</span>
-                 <span>${escapeText(rupees(payout.amountPaise))}</span>
-               </li>`,
-          )
-          .join('')}
+        ${payouts.map(payoutMarkup).join('')}
       </ul>
     </div>`;
+}
+
+// ONE PAYOUT, WITH THE BATCH IT WENT OUT IN. The reference is the string a
+// technician quotes when a transfer has not landed — to the office, or to their
+// bank — and src/commit/technicianEarnings.ts has always sent it while this
+// panel rendered only the status and the amount. Without it "sent to your bank"
+// is an assertion nobody can chase.
+//
+// Null for a payout not yet in a batch, which is the honest case rather than a
+// missing one: it has not been through a run, so there is no reference to give.
+function payoutMarkup(payout) {
+  const reference = payout.reference
+    ? `<div class="text-secondary payout-ref">${escapeText(payout.reference)}</div>`
+    : '';
+  return `
+    <li class="d-flex justify-content-between gap-2 py-1">
+      <span>
+        ${escapeText(payout.status === 'SENT' ? 'Sent to your bank' : 'Queued for the next run')}
+        ${reference}
+      </span>
+      <span class="text-nowrap">${escapeText(rupees(payout.amountPaise))}</span>
+    </li>`;
 }
 
 // The sign is carried by a word as well as by the figure — "earned" or "held" —

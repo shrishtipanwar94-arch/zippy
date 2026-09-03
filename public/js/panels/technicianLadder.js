@@ -89,7 +89,7 @@ function jobMarkup(job, state) {
 
         ${contextMarkup(job)}
         ${estimateMarkup(job)}
-        ${nextActionMarkup(job)}
+        ${nextActionMarkup(job, state)}
 
         <hr />
         <p class="small mb-1">Found something different?</p>
@@ -215,7 +215,7 @@ function estimateMarkup(job) {
 // of Phase 15c stage 2: a job waiting on a driver's decision has NO next rung —
 // `nextStepFor` returns null for AWAITING_APPROVAL — so the card says who it is
 // waiting on rather than offering a button the server would refuse.
-function nextActionMarkup(job) {
+function nextActionMarkup(job, state) {
   if (job.status === 'AWAITING_APPROVAL') {
     const amount = job.estimate ? ` of ${rupees(job.estimate.payablePaise)}` : '';
     return `
@@ -225,7 +225,7 @@ function nextActionMarkup(job) {
         forward; the card changes as soon as they answer.</div>
       </div>`;
   }
-  if (job.nextStep === 'COMPLETE') return completionMarkup(job);
+  if (job.nextStep === 'COMPLETE') return completionMarkup(job, state);
   return ladderButtonMarkup(job);
 }
 
@@ -242,16 +242,21 @@ function ladderButtonMarkup(job) {
 // until Phase 22b's audit; on screen this looked like an arbitrary form field.
 // Saying so is not a courtesy: a technician who thinks the code is a formality
 // will happily type it before the work is finished.
-function completionMarkup(job) {
-  const amount = job.estimate ? rupees(job.estimate.payablePaise) : 'the approved amount';
+function completionMarkup(job, state) {
+  // THE PARTS PROMPT COMES FIRST, and the code input does not appear until it
+  // is answered. See partsPromptMarkup for why this is a gate rather than a
+  // reminder.
+  const answer = state.completionParts[job.jobId];
+  if (!answer) return partsPromptMarkup(job, state);
+
   return `
+    ${answer === 'FITTING' ? partsPickerMarkup(job, state) : ''}
     <div class="capture-card">
       <label class="form-label mb-1" for="completion-code">
         Ask the driver for the code on their screen
       </label>
       <p class="small text-secondary mb-2">
-        Entering it finishes the job <strong>and takes payment</strong> — ${escapeText(amount)}
-        from the driver’s card. Only do this once the work is done.
+        ${completionConsequence(job)} Only do this once the work is done.
       </p>
       <input id="completion-code" class="form-control form-control-lg mb-2"
              inputmode="numeric" autocomplete="off" placeholder="000 000" />
@@ -259,6 +264,98 @@ function completionMarkup(job) {
         ${escapeText(BUTTON_LABEL.COMPLETE)}
       </button>
     </div>`;
+}
+
+// WHAT ENTERING THE CODE ACTUALLY DOES, which is not the same sentence on every
+// job. A contract job that absorbs the whole bill takes NOTHING from the driver,
+// and the browser walk-through found this card promising to take "₹0.00 from the
+// driver's card" — a sentence that is both false and, worse, teaches a
+// technician that the warning above the box is boilerplate. Three cases because
+// there are genuinely three: nothing to take, a known amount, and an amount
+// nobody has priced yet.
+// THE LAST CHANCE TO SAY WHAT CAME OUT OF THE VAN.
+//
+// "Fitted one" lives on the van panel and is available at any rung, which is
+// correct — a technician fits a part when they fit it, not when they finish.
+// What was missing is that nothing ever ASKED. A technician who forgets closes
+// the job with the van's count silently wrong, and that count is not cosmetic:
+// stock confidence feeds the next dispatch's part-availability decision
+// (Phase 19 refuses to dispatch on an UNVERIFIED shelf), so one forgotten tap
+// sends the next van out believing it carries a battery it does not.
+//
+// A GATE, NOT A REMINDER. The code input does not render until this is
+// answered. A reminder next to a button is a reminder people stop seeing; two
+// buttons, one of which is "nothing", costs a tap and cannot be skipped by
+// accident. "Nothing from the van" is a real and common answer — a jump start
+// or a lockout consumes nothing — so it is offered as an equal, not buried.
+function partsPromptMarkup(job, state) {
+  const offline = !state.outbox.online;
+  return `
+    <div class="capture-card">
+      <p class="mb-1"><strong>Before you finish — did you fit anything from the van?</strong></p>
+      <p class="small text-secondary mb-2">
+        This keeps the van's count right for whoever is dispatched next.
+      </p>
+      <div class="d-grid gap-2">
+        <button class="btn btn-outline-primary btn-lg" data-parts-answer="FITTING"
+                data-job-id="${escapeText(job.jobId)}">
+          Yes — let me record it
+        </button>
+        <button class="btn btn-outline-secondary btn-lg" data-parts-answer="NONE"
+                data-job-id="${escapeText(job.jobId)}">
+          Nothing from the van
+        </button>
+      </div>
+      ${offline ? '<p class="small text-secondary mb-0 mt-2">Anything you record will send when you are back online.</p>' : ''}
+    </div>`;
+}
+
+// Only the parts actually ON BOARD. A shelf at zero cannot have been fitted
+// from, and listing all fourteen lines here would turn the completion card into
+// the van panel — which is directly below, for the case where the count itself
+// is wrong.
+function partsPickerMarkup(job, state) {
+  const lines = (state.van.stock?.lines ?? []).filter((line) => line.quantity > 0);
+  if (lines.length === 0) {
+    return `
+      <div class="context-card mb-3">
+        <div class="context-title">What you fitted</div>
+        <p class="small mb-0">This van has nothing on board to record.</p>
+      </div>`;
+  }
+
+  return `
+    <div class="context-card mb-3">
+      <div class="context-title">What you fitted</div>
+      <p class="small text-secondary mb-2">
+        Tap once per part fitted. Each tap goes into the same queue as everything
+        else on this page.
+      </p>
+      <ul class="list-unstyled mb-0">
+        ${lines
+          .map(
+            (line) => `
+              <li class="d-flex justify-content-between align-items-center gap-2 py-1">
+                <span>${escapeText(line.name)}
+                  <span class="small text-secondary">${escapeText(line.quantity)} on board</span>
+                </span>
+                <button class="btn btn-sm btn-outline-primary" data-fitted="${escapeText(line.partId)}"
+                        data-job-id="${escapeText(job.jobId)}">Fitted one</button>
+              </li>`,
+          )
+          .join('')}
+      </ul>
+    </div>`;
+}
+
+function completionConsequence(job) {
+  if (job.estimate && job.estimate.payablePaise === 0) {
+    return `Entering it finishes the job. <strong>Nothing is charged to the driver</strong> — this
+      work is covered by their contract.`;
+  }
+  const amount = job.estimate ? rupees(job.estimate.payablePaise) : 'the approved amount';
+  return `Entering it finishes the job <strong>and takes payment</strong> —
+    ${escapeText(amount)} from the driver’s card.`;
 }
 
 // WHAT THE QUEUE IS HOLDING, and what came back. Both on screen: a tap that

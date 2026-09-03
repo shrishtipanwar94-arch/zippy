@@ -53,6 +53,9 @@ const OPEN_ALL_WEEK = Array.from({ length: 7 }, (_, dayOfWeek) => ({
 function workshop(overrides: Partial<WorkshopSnapshot> = {}): WorkshopSnapshot {
   return {
     id: 'ws-1',
+    // Defaulted from the id so a fixture that overrides one gets a matching
+    // name without every call site having to pass both.
+    name: `Workshop ${overrides.id ?? 'ws-1'}`,
     lat: 12.9352,
     lng: 77.6245,
     active: true,
@@ -215,5 +218,124 @@ describe('resolveDestinationForJob — the ranking prefers a workshop likely to 
     expect(eveningChoice.pAccept).toBeLessThan(0.2);
     expect(morningChoice.pAccept).toBeGreaterThan(0.7);
     expect(eveningChoice.pAccept).toBeLessThan(morningChoice.pAccept);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// THE SCREENING AUDIT LIST — what the why-inspector's destination panel shows.
+//
+// These assert the thing Phase 22b's audit found missing: not WHICH workshop
+// won, which the tests above already cover, but whether the panel can explain
+// the ones that lost. The distinction that matters is between a workshop that
+// may not touch this car at all and one that simply lost on distance — the old
+// list could not express it because it only ever held the priced shortlist.
+//
+// Nothing here asserts a decision. `status`, `workshopId` and `pAccept` are the
+// decision and are covered above; this is about the audit trail beside it.
+
+describe('resolveDestinationForJob — the screening audit list', () => {
+  it('lists a brand-excluded workshop with its own reason, in the case where nothing was chosen', async () => {
+    const choice = await resolve(
+      towJob({ vehicleMake: 'FERRARI' }),
+      snapshot([workshop({ id: 'ws-maruti', authorisedBrands: ['MARUTI_SUZUKI'] })]),
+    );
+
+    // The panel used to render nothing at all here — status was not CHOSEN, so
+    // it returned early, and `screened` was empty anyway.
+    expect(choice.status).toBe('NO_BRAND_MATCH');
+    expect(choice.screened).toHaveLength(1);
+    expect(choice.screened[0]).toMatchObject({
+      workshopId: 'ws-maruti',
+      name: 'Workshop ws-maruti',
+      excludedBy: 'BRAND_NOT_AUTHORISED',
+      chosen: false,
+      // Never priced, so never given a distance it did not have.
+      distanceKm: null,
+      pAccept: null,
+    });
+  });
+
+  it('keeps the brand and EV-class exclusions distinct rather than collapsing them', async () => {
+    const choice = await resolve(
+      towJob({ vehicleMake: 'TATA', vehicleEvClass: 'HV' }),
+      snapshot([
+        workshop({ id: 'ws-wrong-brand', authorisedBrands: ['MARUTI_SUZUKI'] }),
+        workshop({ id: 'ws-no-ev', authorisedBrands: ['TATA'], evClass: null }),
+      ]),
+    );
+
+    expect(choice.status).toBe('NO_EV_CLASS_MATCH');
+    const byId = new Map(choice.screened.map((row) => [row.workshopId, row.excludedBy]));
+    // "Authorised for the brand but not equipped for EVs" is a different
+    // finding from "does not touch this brand", and a dispatcher acts on them
+    // differently — the same reason feasibility.ts keeps two codes.
+    expect(byId.get('ws-wrong-brand')).toBe('BRAND_NOT_AUTHORISED');
+    expect(byId.get('ws-no-ev')).toBe('EV_CLASS_MISMATCH');
+  });
+
+  it('reports a closed workshop as closed rather than as unauthorised', async () => {
+    const shut = workshop({
+      id: 'ws-shut',
+      hours: Array.from({ length: 7 }, (_, dayOfWeek) => ({
+        dayOfWeek,
+        opens: '09:00',
+        closes: '17:00',
+        closed: true,
+      })),
+    });
+
+    const choice = await resolve(towJob(), snapshot([shut]));
+    expect(choice.status).toBe('NO_DESTINATION_REACHABLE');
+    expect(choice.screened[0]?.excludedBy).toBe('CLOSED_NOW');
+  });
+
+  it('marks the winner chosen and prices it, alongside an excluded workshop, on a resolved job', async () => {
+    const choice = await resolve(
+      towJob(),
+      snapshot([
+        workshop({ id: 'ws-ok', lat: 12.9352, lng: 77.6245 }),
+        workshop({ id: 'ws-other-brand', authorisedBrands: ['HYUNDAI'] }),
+      ]),
+    );
+
+    expect(choice.status).toBe('CHOSEN');
+    expect(choice.workshopId).toBe('ws-ok');
+
+    // BOTH rows are present — the excluded one is exactly what the panel was
+    // missing when it rendered only the priced shortlist.
+    expect(choice.screened).toHaveLength(2);
+    const winner = choice.screened.find((row) => row.workshopId === 'ws-ok');
+    expect(winner).toMatchObject({ chosen: true, excludedBy: null });
+    expect(typeof winner?.distanceKm).toBe('number');
+    expect(typeof winner?.pAccept).toBe('number');
+    expect(choice.screened.find((row) => row.workshopId === 'ws-other-brand')).toMatchObject({
+      chosen: false,
+      excludedBy: 'BRAND_NOT_AUTHORISED',
+    });
+  });
+
+  it('does not list an inactive workshop at all — it is not part of the network today', async () => {
+    const choice = await resolve(
+      towJob(),
+      snapshot([workshop({ id: 'ws-ok' }), workshop({ id: 'ws-gone', active: false })]),
+    );
+    expect(choice.screened.map((row) => row.workshopId)).toEqual(['ws-ok']);
+  });
+
+  it('separates "cleared screening but further away" from a real exclusion', async () => {
+    // Five eligible workshops, a shortlist of four: the fifth cleared every
+    // screen and was never priced, which must not read as a rejection.
+    const eligible = [0, 1, 2, 3, 4].map((index) =>
+      workshop({ id: `ws-${index}`, lat: 12.9352 + index * 0.05, lng: 77.6245 }),
+    );
+
+    const choice = await resolve(towJob(), snapshot(eligible));
+    expect(choice.status).toBe('CHOSEN');
+
+    const notShortlisted = choice.screened.filter((row) => row.excludedBy === 'NOT_SHORTLISTED');
+    expect(notShortlisted).toHaveLength(1);
+    expect(notShortlisted[0]?.workshopId).toBe('ws-4');
+    // No screening code — it failed nothing, it was just further out.
+    expect(choice.screened.every((row) => row.excludedBy !== 'BRAND_NOT_AUTHORISED')).toBe(true);
   });
 });

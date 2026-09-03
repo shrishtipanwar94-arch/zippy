@@ -21,6 +21,7 @@ import {
   setPlanSelection,
   setOverrideReasonDraft,
   setHealth,
+  setStuckPayments,
   setChaos,
   setEscalation,
   setEscalationDecision,
@@ -42,6 +43,12 @@ import { render as renderHealth } from '../panels/health.js';
 import { render as renderChaos } from '../panels/chaos.js';
 import { render as renderEscalation } from '../panels/escalation.js';
 import { render as renderActions } from '../panels/actions.js';
+// THE CONFIRMATION CARDS (Phase 15b), on the console for the first time in
+// Phase 22b. The technician's page is the reference implementation — the same
+// two calls, the same shared handlers — because a dispatcher confirming a
+// location correction and a technician confirming one are the same act against
+// the same route.
+import { loadPromotions, registerChatPanels, wireChatActions } from '../chatActions.js';
 
 registerPanel(renderSession);
 registerPanel(renderJobsTable);
@@ -56,6 +63,10 @@ registerPanel(renderHealth);
 registerPanel(renderChaos);
 registerPanel(renderEscalation);
 registerPanel(renderActions);
+registerChatPanels();
+// Wires the confirm/dismiss delegation. The message, photo and location
+// handlers it also offers find no controls on this page and bind nothing.
+wireChatActions();
 
 function value(selector) {
   return document.querySelector(selector).value.trim();
@@ -208,6 +219,11 @@ async function inspect(jobId) {
     setError(error.message);
   }
   await loadEscalation(jobId);
+  // Flagged messages on the job being inspected. Cards for OTHER jobs in the
+  // dispatcher's zones still arrive over the socket and stay on screen — each
+  // one names its job, which is why the console's panel asks for that and the
+  // field surfaces do not.
+  await loadPromotions(jobId);
   render();
 }
 
@@ -247,6 +263,27 @@ async function refreshHealth() {
     // again.
   }
 }
+
+// THE DRILL-THROUGH BEHIND THE BANNER'S PAYMENTS LINE. Toggles: a second press
+// clears the list rather than refetching it, so the button is its own Hide.
+document.querySelector('[data-panel="health"]').addEventListener('click', async (clicked) => {
+  if (!clicked.target.closest('[data-action="show-stuck-payments"]')) return;
+
+  if (getState().stuckPayments) {
+    setStuckPayments(null);
+    render();
+    return;
+  }
+
+  try {
+    const result = await api.getStuckPayments();
+    setStuckPayments(result.payments);
+    setError(null);
+  } catch (error) {
+    setError(error.message);
+  }
+  render();
+});
 
 function startHealthPolling() {
   if (healthTimer) return;

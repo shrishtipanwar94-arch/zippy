@@ -16,12 +16,25 @@ const CONNECTION_WORDS = {
   disconnected: 'No connection',
 };
 
+// WHO IS SIGNED IN, in words. `state.session.role` is a Prisma enum, and this
+// header sits on all four surfaces — including the fleet manager's, who is a
+// customer and was reading FLEET_MANAGER in their own page header. One map here
+// rather than a per-page one: the header markup is identical everywhere, so the
+// leak was too.
+const ROLE_WORDS = {
+  DRIVER: 'Driver',
+  TECHNICIAN: 'Technician',
+  DISPATCHER: 'Dispatcher',
+  FLEET_MANAGER: 'Fleet manager',
+};
+
 export function render(state) {
   renderConnection(state);
 
   const who = document.querySelector('[data-field="session"]');
   if (who) {
-    const text = state.session ? `${state.session.role} · ${state.session.userId}` : 'signed out';
+    const role = state.session ? (ROLE_WORDS[state.session.role] ?? state.session.role) : null;
+    const text = state.session ? `${role} · ${state.session.userId}` : 'signed out';
     if (who.textContent !== text) who.textContent = text;
   }
 

@@ -41,10 +41,21 @@ export function render(state) {
     return;
   }
 
-  parts.push(runSummary(decision.solverRun, decision.decisionRecordNote));
+  parts.push(runSummary(decision.solverRun));
   if (decision.hypothesis) parts.push(hypothesisBlock(decision.hypothesis));
 
+  // Per job, not per option — and above the options, because when screening
+  // found nowhere to tow to it is the reason every option below was rejected.
+  const screening = destinationScreeningPanel(destinationFor(decision));
+  if (screening) parts.push(screening);
+
   parts.push(sectionTitle(`Chosen (${decision.chosen.length})`));
+  // ABOVE the chosen option, not below it: when a human overruled the
+  // recommendation, their reason is the answer to "why this technician?" and
+  // the cost table underneath is the answer to a question nobody asked.
+  const override = overrideBlock(decision);
+  if (override) parts.push(override);
+
   if (decision.chosen.length === 0) {
     parts.push(hint('Every option was rejected — see the reason codes below.'));
   }
@@ -67,15 +78,37 @@ function header(decision) {
   return box;
 }
 
-function runSummary(run, note) {
+function runSummary(run) {
   const box = document.createElement('div');
   box.className = 'small text-muted mb-2';
   box.innerHTML =
     `solver run <span class="mono">${escapeHtml(run.id.slice(-8))}</span> · ` +
     `trigger <span class="mono">${escapeHtml(run.trigger)}</span> · ` +
     `${run.optionCount} options, ${run.feasibleCount} feasible · ${run.wallClockMs}ms` +
-    (run.zonePartitioned ? ' · ZONE-PARTITIONED' : '') +
-    `<div class="mt-1">${escapeHtml(note ?? '')}</div>`;
+    (run.zonePartitioned ? ' · ZONE-PARTITIONED' : '');
+  return box;
+}
+
+// WHY A HUMAN DIFFERED FROM THE RECOMMENDATION — the one question the cost
+// breakdown below cannot answer.
+//
+// The server refuses to record a non-BALANCED plan without a reason (422 from
+// POST /plans/:id/select) and stores it on decision_records.override_reason_code.
+// Until Phase 22b's audit this panel read `decision.decisionRecordNote`, a key
+// GET /decisions/:jobId has never sent — so the justification was demanded,
+// stored, and then shown to nobody. It is `overrideReasonCode`.
+//
+// Amber rather than muted: an overridden decision is the one case where the
+// numbers underneath do NOT explain the assignment, and an operator scanning
+// this panel needs to see that before they start reading the cost terms.
+function overrideBlock(decision) {
+  if (!decision.overrideReasonCode) return null;
+
+  const box = document.createElement('div');
+  box.className = 'override-note small mb-2';
+  box.innerHTML =
+    '<div class="text-muted">overridden by a dispatcher</div>' +
+    `<div>${escapeHtml(decision.overrideReasonCode)}</div>`;
   return box;
 }
 
@@ -113,34 +146,108 @@ function partSourcingLine(sourcing) {
     </div>`;
 }
 
-// THE DESTINATION SCREENING PANEL (Phase 22) — every workshop the shortlist
-// actually priced, not just the one chosen. "Why Workshop B and not the
-// closer Workshop A?" is answered by seeing both rows: A is nearer and less
-// likely to say yes, B is further and more likely to, and the ✓ marks which
-// one this option is actually betting on. Empty for anything but a CHOSEN
-// destination — a job that needs no tow, or one where nowhere qualified, has
-// nothing to screen.
+// THE DESTINATION SCREENING PANEL (Phase 22) — every active workshop and what
+// became of it.
+//
+// TWO THINGS THIS PANEL GOT WRONG UNTIL PHASE 22b'S AUDIT, and they compounded.
+// It rendered only when `status === 'CHOSEN'`, and the list it rendered was the
+// priced shortlist — every row of which had already cleared brand, EV class and
+// opening hours. So a ✕ meant "not the cheapest", the workshop excluded because
+// it does not touch this brand appeared nowhere, and the whole panel vanished
+// in exactly the case it exists to explain: a tow with nowhere to tow to.
+//
+// It is also rendered PER JOB rather than inside the chosen option's card, and
+// that is not cosmetic. A destination is a property of the job — one workshop
+// choice, carried identically by every option (see the header of
+// src/engine/destinationSelection.ts) — so hanging it off the winning option
+// meant that when nothing won, nothing showed.
+
+// The exclusion codes, in words. The code is shown too: an operator who has
+// seen EV_CLASS_MISMATCH twice this week knows something the sentence does not
+// tell them — the same argument the escalation card makes for its own codes.
+const EXCLUSION_WORDS = {
+  BRAND_NOT_AUTHORISED: 'not authorised for this brand',
+  EV_CLASS_MISMATCH: 'authorised for the brand, not equipped for this EV class',
+  CLOSED_NOW: 'closed at this hour',
+  NOT_SHORTLISTED: 'cleared screening, further than the four priced',
+};
+
+// What the job-level heading says when no workshop was chosen. Keyed on the
+// destination status the engine recorded, so the panel and the feasibility
+// reason code cannot tell different stories.
+const DESTINATION_STATUS_WORDS = {
+  NO_BRAND_MATCH: 'no active workshop is authorised for this brand',
+  NO_EV_CLASS_MATCH: 'authorised workshops exist, none equipped for this EV class',
+  NO_DESTINATION_REACHABLE: 'authorised and equipped workshops exist, none open at this hour',
+};
+
+// The destination is one decision for the whole job, so it is read from
+// whichever option happens to carry it — chosen first, then any rejected one.
+// A rejected option is the ONLY place it exists when screening found nothing.
+function destinationFor(decision) {
+  const options = [...(decision.chosen ?? []), ...(decision.rejected ?? [])];
+  for (const option of options) {
+    if (option.destination?.screened?.length) return option.destination;
+  }
+  return null;
+}
+
 function destinationScreeningPanel(destination) {
-  if (!destination || destination.status !== 'CHOSEN' || !destination.screened?.length) return '';
+  if (!destination?.screened?.length) return null;
 
-  const rows = [...destination.screened]
-    .sort((a, b) => (b.chosen ? 1 : 0) - (a.chosen ? 1 : 0) || a.distanceKm - b.distanceKm)
-    .map(
-      (row) => `
-        <div class="small">
-          ${row.chosen ? '<span class="text-success">✓</span>' : '<span class="text-muted">✕</span>'}
-          <span class="mono">${escapeHtml(row.workshopId)}</span>
-          P(accept) ${row.pAccept.toFixed(2)} ·
-          ${row.distanceKm.toFixed(1)} km
-        </div>`,
-    )
-    .join('');
+  const box = document.createElement('div');
+  box.className = 'mb-2';
 
-  return `
-    <div class="mb-2">
-      <div class="small text-muted">destination screening</div>
-      ${rows}
-    </div>`;
+  const status = DESTINATION_STATUS_WORDS[destination.status];
+  const heading = status
+    ? `<div class="small text-danger">destination screening — ${escapeHtml(status)}</div>`
+    : '<div class="small text-muted">destination screening</div>';
+
+  box.innerHTML = heading + [...destination.screened].sort(screeningOrder).map(screeningRow).join('');
+  return box;
+}
+
+// Chosen first, then everything still eligible by distance, then the excluded
+// grouped by which screen they failed — the pipeline's own order, so the list
+// reads top to bottom the way the decision was made.
+function screeningOrder(a, b) {
+  if (a.chosen !== b.chosen) return a.chosen ? -1 : 1;
+  const rank = (row) => (row.excludedBy ? EXCLUSION_ORDER.indexOf(row.excludedBy) + 1 : 0);
+  const byStage = rank(a) - rank(b);
+  if (byStage !== 0) return byStage;
+  return (a.distanceKm ?? Infinity) - (b.distanceKm ?? Infinity);
+}
+
+const EXCLUSION_ORDER = [
+  'NOT_SHORTLISTED',
+  'CLOSED_NOW',
+  'EV_CLASS_MISMATCH',
+  'BRAND_NOT_AUTHORISED',
+];
+
+function screeningRow(row) {
+  // Three marks, not two. A workshop that cleared every screen and simply lost
+  // on distance is not in the same category as one that may not touch this car,
+  // and showing both as ✕ is what made the old panel unreadable.
+  const mark = row.chosen
+    ? '<span class="text-success">✓</span>'
+    : row.excludedBy && row.excludedBy !== 'NOT_SHORTLISTED'
+      ? '<span class="text-danger">✕</span>'
+      : '<span class="text-muted">○</span>';
+
+  // Rows written before this panel existed carry neither a name nor a reason;
+  // the id is the honest fallback rather than a blank.
+  const name = row.name ?? row.workshopId;
+  const priced =
+    typeof row.pAccept === 'number' && typeof row.distanceKm === 'number'
+      ? ` <span class="text-muted">P(accept) ${row.pAccept.toFixed(2)} · ${row.distanceKm.toFixed(1)} km</span>`
+      : '';
+  const why = row.excludedBy
+    ? ` <span class="reason-code">${escapeHtml(row.excludedBy)}</span>
+        <span class="text-muted">${escapeHtml(EXCLUSION_WORDS[row.excludedBy] ?? '')}</span>`
+    : '';
+
+  return `<div class="small">${mark} ${escapeHtml(name)}${priced}${why}</div>`;
 }
 
 // The cost breakdown, term by term. Each term carries its own unit because
@@ -182,7 +289,6 @@ function chosenOption(option) {
         covers ${escapeHtml(((option.coveredFaultProbability ?? 0) * 100).toFixed(0))}% of the fault distribution
       </div>
       ${partSourcingLine(option.partSourcing)}
-      ${destinationScreeningPanel(option.destination)}
       <table class="table table-sm mb-0">
         <thead><tr><th>term</th><th class="text-end">value</th><th class="text-end">weighted</th><th></th></tr></thead>
         <tbody>${terms || '<tr><td colspan="4" class="text-muted">no breakdown recorded</td></tr>'}</tbody>

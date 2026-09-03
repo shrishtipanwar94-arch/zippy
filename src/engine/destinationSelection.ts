@@ -44,6 +44,9 @@ import type { TravelTimeSource } from '../infra/routing.js';
 
 export type WorkshopSnapshot = {
   id: string;
+  // Audit only. Nothing in this file's decisions reads it — it exists so the
+  // why-inspector can name a workshop instead of showing its id.
+  name: string;
   lat: number;
   lng: number;
   active: boolean;
@@ -91,15 +94,46 @@ export const DESTINATION_STATUSES = [
 
 export type DestinationStatus = (typeof DESTINATION_STATUSES)[number];
 
-// One shortlisted workshop, screened and priced — what the why-inspector's
-// destination panel renders as a row. Every entry already cleared brand,
-// EV class and opening hours; what differs between them is only distance and
-// P(accept), which is exactly what the panel is for showing.
+// WHY A WORKSHOP WAS OR WAS NOT USED — one row per active workshop, whether it
+// survived screening or not.
+//
+// THIS USED TO BE THE SHORTLIST ONLY, and that was the bug Phase 22b's audit
+// found. Every row was one that had already cleared brand, EV class and hours,
+// so a ✕ in the panel meant "not the cheapest" and there was no way at all to
+// see the workshop that was excluded because it does not touch this brand —
+// which is the single most useful thing the panel could say. "Authorised for
+// Maruti but not equipped for EVs" is precisely what Phase 22 built the
+// screening pipeline to distinguish, and none of it reached a screen.
+//
+// So a row now carries WHICH SCREEN it failed, and the two authorisation codes
+// stay distinct rather than collapsing into "not authorised" — feasibility.ts
+// keeps them apart for the same reason (see its own comment at the top).
+//
+// STILL AUDIT DETAIL, NEVER A DECISION INPUT. cost.ts and feasibility.ts read
+// `status`, `workshopId` and `pAccept` on the choice itself; nothing reads this
+// list. Adding to it cannot change a dispatch.
+export const SCREENING_EXCLUSIONS = [
+  'BRAND_NOT_AUTHORISED',
+  'EV_CLASS_MISMATCH',
+  'CLOSED_NOW',
+  // Cleared every screen but did not make the distance shortlist. Not a
+  // rejection — just further away than the four that were priced.
+  'NOT_SHORTLISTED',
+] as const;
+
+export type ScreeningExclusion = (typeof SCREENING_EXCLUSIONS)[number];
+
 export type ScreenedWorkshop = {
   workshopId: string;
-  distanceKm: number;
-  pAccept: number;
+  name: string;
+  // Null for anything that never reached the routing call. A workshop excluded
+  // on brand has no measured road distance, and inventing a straight-line one
+  // for the panel would put a number next to a row that was never priced.
+  distanceKm: number | null;
+  pAccept: number | null;
   chosen: boolean;
+  // Null when the workshop cleared every screen and was priced.
+  excludedBy: ScreeningExclusion | null;
 };
 
 export type DestinationChoice = {
@@ -111,11 +145,14 @@ export type DestinationChoice = {
   // rather than a value nobody computed anything from.
   pAccept: number;
   detail: string;
-  // ONLY FOR CHOSEN — the shortlist the winner was picked from, for the
-  // why-inspector's screening panel. Never read by cost.ts or feasibility.ts:
-  // both act on `workshopId` and `pAccept` above, which already carry the
-  // decision. This is audit detail, the same role `partSourcing.missingSkus`
-  // plays for parts.
+  // EVERY ACTIVE WORKSHOP AND WHAT BECAME OF IT, for the why-inspector's
+  // screening panel — populated for CHOSEN and for all three unresolved
+  // statuses, because "nowhere was authorised" is the case a dispatcher most
+  // needs the list for. Empty only for NOT_NEEDED and NOT_MODELLED, where no
+  // screening happened at all. Never read by cost.ts or feasibility.ts: both
+  // act on `workshopId` and `pAccept` above, which already carry the decision.
+  // This is audit detail, the same role `partSourcing.missingSkus` plays for
+  // parts.
   screened: ScreenedWorkshop[];
 };
 
@@ -141,8 +178,61 @@ const NOT_MODELLED: DestinationChoice = {
 // somehow reached the cost function — but it never does, because feasibility
 // rejects every one of these three statuses. distanceKm and pAccept are
 // unread in that path; kept at honest, inert values rather than omitted.
-function unresolved(status: 'NO_BRAND_MATCH' | 'NO_EV_CLASS_MATCH' | 'NO_DESTINATION_REACHABLE', detail: string): DestinationChoice {
-  return { status, workshopId: null, distanceKm: 0, pAccept: 0, detail, screened: [] };
+function unresolved(
+  status: 'NO_BRAND_MATCH' | 'NO_EV_CLASS_MATCH' | 'NO_DESTINATION_REACHABLE',
+  detail: string,
+  screened: ScreenedWorkshop[],
+): DestinationChoice {
+  return { status, workshopId: null, distanceKm: 0, pAccept: 0, detail, screened };
+}
+
+// WHICH SCREEN EACH ACTIVE WORKSHOP FAILED, in the pipeline's own order, so the
+// first failure is the one reported: a workshop that is neither authorised for
+// the brand NOR open reads as a brand problem, which is the one a dispatcher
+// can actually do something about.
+//
+// This DECIDES NOTHING. It re-states the same three predicates the resolve
+// function filters on, over the same list, so a row's verdict here and its
+// presence downstream cannot disagree.
+function exclusionFor(
+  workshop: WorkshopSnapshot,
+  vehicleMake: string,
+  vehicleEvClass: string | null,
+  now: Date,
+): ScreeningExclusion | null {
+  if (!workshop.authorisedBrands.includes(vehicleMake)) return 'BRAND_NOT_AUTHORISED';
+  if (!evCompatible(workshop.evClass, vehicleEvClass)) return 'EV_CLASS_MISMATCH';
+  if (!isWorkshopOpen(workshop.hours, now)) return 'CLOSED_NOW';
+  return null;
+}
+
+// Every active workshop as a panel row. `priced` is empty in the unresolved
+// cases, which is what makes this one function rather than two: a row with no
+// price is a row that never reached the routing call, however far it got.
+function screeningRows(
+  active: WorkshopSnapshot[],
+  priced: { workshopId: string; distanceKm: number; pAccept: number }[],
+  chosenId: string | null,
+  vehicleMake: string,
+  vehicleEvClass: string | null,
+  now: Date,
+): ScreenedWorkshop[] {
+  const pricedById = new Map(priced.map((row) => [row.workshopId, row]));
+
+  return active.map((workshop) => {
+    const price = pricedById.get(workshop.id);
+    const excluded = exclusionFor(workshop, vehicleMake, vehicleEvClass, now);
+    return {
+      workshopId: workshop.id,
+      name: workshop.name,
+      distanceKm: price?.distanceKm ?? null,
+      pAccept: price?.pAccept ?? null,
+      chosen: workshop.id === chosenId,
+      // Cleared every screen but was not priced: it lost the distance
+      // shortlist, which is not a rejection and must not read as one.
+      excludedBy: excluded ?? (price ? null : 'NOT_SHORTLISTED'),
+    };
+  });
 }
 
 // A tow job needs a workshop to be towed to, and "needs a tow" is exactly the
@@ -211,9 +301,13 @@ export async function resolveDestinationForJob(input: {
 
   const active = workshops.workshops.filter((workshop) => workshop.active);
 
+  // The screening rows every return below carries. Built once, from the same
+  // predicates the filters use, and empty of prices until there are any.
+  const rows = () => screeningRows(active, [], null, vehicleMake, vehicleEvClass, now);
+
   const brandMatched = active.filter((workshop) => workshop.authorisedBrands.includes(vehicleMake));
   if (brandMatched.length === 0) {
-    return unresolved('NO_BRAND_MATCH', `no active workshop is authorised for ${vehicleMake}`);
+    return unresolved('NO_BRAND_MATCH', `no active workshop is authorised for ${vehicleMake}`, rows());
   }
 
   const evMatched = brandMatched.filter((workshop) => evCompatible(workshop.evClass, vehicleEvClass));
@@ -221,6 +315,7 @@ export async function resolveDestinationForJob(input: {
     return unresolved(
       'NO_EV_CLASS_MATCH',
       `authorised for ${vehicleMake} but none equipped for ${vehicleEvClass} vehicles`,
+      rows(),
     );
   }
 
@@ -229,6 +324,7 @@ export async function resolveDestinationForJob(input: {
     return unresolved(
       'NO_DESTINATION_REACHABLE',
       `${evMatched.length} authorised and equipped workshop(s) exist, none open at this hour`,
+      rows(),
     );
   }
 
@@ -274,11 +370,8 @@ export async function resolveDestinationForJob(input: {
     distanceKm: chosen.distanceKm,
     pAccept: chosen.pAccept,
     detail: `authorised for ${vehicleMake}${vehicleClass === 'NONE' ? '' : `, ${vehicleClass} equipped`}`,
-    screened: priced.map((candidate) => ({
-      workshopId: candidate.workshopId,
-      distanceKm: candidate.distanceKm,
-      pAccept: candidate.pAccept,
-      chosen: candidate.workshopId === chosen.workshopId,
-    })),
+    // EVERY active workshop, not just the four that were priced — see
+    // ScreenedWorkshop's own comment for why the shortlist alone was the bug.
+    screened: screeningRows(active, priced, chosen.workshopId, vehicleMake, vehicleEvClass, now),
   };
 }

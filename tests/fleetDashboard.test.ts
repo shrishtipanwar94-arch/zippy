@@ -162,6 +162,37 @@ describe('GET /fleet/dashboard — permission and tenant isolation', () => {
     expect(vehicleIds).not.toContain(`${P}-other-vehicle`);
   });
 
+  // THE SAME SCAN tests/driverSurface.test.ts runs on the driver's payload, for
+  // the same reason and against the same class of bug. A fleet manager is a
+  // CUSTOMER, not an operator, and this dashboard was rendering
+  // AWAITING_APPROVAL, HIGH_RISK, FLAT_BATTERY and TOYOTA straight out of the
+  // database. Worded on the server (src/api/fleet.ts) precisely so the rule is
+  // a property of the response that this can check, rather than something a
+  // reviewer has to notice in a template.
+  //
+  // slaOutcome is deliberately exempt: it is the one field the browser still
+  // maps, through SLA_OUTCOME_LABEL in public/js/panels/fleetDashboard.js.
+  it('reaches a fleet manager with no enum in it', async () => {
+    const response = await request(app)
+      .get('/fleet/dashboard')
+      .set('Authorization', `Bearer ${fleetManagerToken()}`);
+
+    expect(response.status).toBe(200);
+
+    // A SCAN OVER AN EMPTY BODY PROVES NOTHING. This guard is the difference
+    // between a test and a test-shaped no-op: the fixture must actually put a
+    // coded status, a safety level and a fault in front of the scan, or a
+    // future change that empties the payload would turn this green.
+    expect(response.body.activeIncidents.length).toBeGreaterThan(0);
+    expect(response.body.vehicles.length).toBeGreaterThan(0);
+    expect(
+      response.body.vehicles.some((v: { incidents: unknown[] }) => v.incidents.length > 0),
+    ).toBe(true);
+
+    const offenders = screamingCaseIn(response.body, ['slaOutcome', 'fault']);
+    expect(offenders).toEqual([]);
+  });
+
   it('gives the other fleet manager a disjoint dashboard', async () => {
     const response = await request(app)
       .get('/fleet/dashboard')
@@ -617,4 +648,34 @@ async function buildFixture(): Promise<void> {
       createdAt: new Date(NOW.getTime() - 5 * 60_000),
     },
   });
+}
+
+
+// Every string at every depth, with the path that reached it, so a failure
+// names the offending field instead of just asserting false. `exempt` skips
+// fields whose codes are translated in the browser or never rendered.
+function screamingCaseIn(value: unknown, exempt: string[], path = ''): string[] {
+  // SCREAMING_SNAKE, or a run of three or more capitals. Deliberately no word
+  // boundaries: both alternatives already begin and end on capitals, and the
+  // first draft of this line carried a mangled escape that had become a literal
+  // control character — it matched nothing, so the assertion below passed over
+  // a payload full of enums. A scan that cannot fail is worse than no scan.
+  const SCREAMING = /[A-Z]{2,}_[A-Z0-9_]+|[A-Z]{3,}/;
+
+  if (typeof value === 'string') {
+    return SCREAMING.test(value) ? [`${path}: ${value}`] : [];
+  }
+  if (Array.isArray(value)) {
+    return value.flatMap((item, index) => screamingCaseIn(item, exempt, `${path}[${index}]`));
+  }
+  if (value && typeof value === 'object') {
+    return Object.entries(value).flatMap(([key, nested]) =>
+      // Ids are not prose and are never rendered as words — a cuid or a
+      // `tenant-metrocab` would otherwise trip this on every row.
+      exempt.includes(key) || key.endsWith('Id') || key === 'registration'
+        ? []
+        : screamingCaseIn(nested, exempt, path ? `${path}.${key}` : key),
+    );
+  }
+  return [];
 }

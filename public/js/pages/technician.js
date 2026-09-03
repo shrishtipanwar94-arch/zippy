@@ -23,6 +23,7 @@ import {
   setJobs,
   setOutbox,
   setSession,
+  setCompletionParts,
   setVanCount,
   setVanStock,
   setWork,
@@ -189,8 +190,33 @@ document.querySelector('[data-panel="offers"]').addEventListener('click', async 
   await refreshWork();
 });
 
+// ONE PLACE THAT TURNS A "FITTED ONE" TAP INTO A QUEUE ITEM, called from both
+// panels that offer one — the van list and the completion prompt. The queue
+// mints the key, so a retry sends the same one and cannot decrement twice.
+function declareOnePart(partId, jobId) {
+  const job = jobId ?? getState().activeJobId ?? getState().work.jobs[0]?.jobId;
+  if (!job) return;
+  enqueue({ kind: 'PARTS', jobId: job, lines: [{ partId, quantity: 1 }] });
+}
+
 // The ladder, the completion code and the diagnosis form.
 document.querySelector('[data-panel="ladder"]').addEventListener('click', async (clicked) => {
+  // THE PARTS PROMPT on the completion step. Answering it only unlocks the code
+  // input — it writes nothing, because "nothing from the van" is the absence of
+  // a stock movement rather than a stock movement of zero.
+  const partsAnswer = clicked.target.closest('button[data-parts-answer]');
+  if (partsAnswer) {
+    setCompletionParts(partsAnswer.dataset.jobId, partsAnswer.dataset.partsAnswer);
+    render();
+    return;
+  }
+
+  const fittedHere = clicked.target.closest('button[data-fitted]');
+  if (fittedHere) {
+    declareOnePart(fittedHere.dataset.fitted, fittedHere.dataset.jobId);
+    return;
+  }
+
   const stepButton = clicked.target.closest('button[data-step]');
   if (stepButton) {
     const step = stepButton.dataset.step;
@@ -242,11 +268,9 @@ document.querySelector('[data-panel="van-stock"]').addEventListener('input', (ty
 document.querySelector('[data-panel="van-stock"]').addEventListener('click', async (clicked) => {
   const fitted = clicked.target.closest('button[data-fitted]');
   if (fitted) {
-    const job = getState().activeJobId ?? getState().work.jobs[0]?.jobId;
-    if (!job) return;
-    // Enqueued, never sent straight. The queue mints the key that makes a
-    // double tap decrement once.
-    enqueue({ kind: 'PARTS', jobId: job, lines: [{ partId: fitted.dataset.fitted, quantity: 1 }] });
+    // Enqueued, never sent straight — see declareOnePart, shared with the
+    // completion step's own parts prompt.
+    declareOnePart(fitted.dataset.fitted, null);
     return;
   }
 

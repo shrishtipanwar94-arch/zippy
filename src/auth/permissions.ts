@@ -94,7 +94,16 @@ export type Resource =
   // different acts by the same person — and because a DISPATCHER may answer an
   // estimate on a driver's behalf over the phone, which is exactly the thing
   // nobody may do with somebody else's card.
-  | 'payment';
+  | 'payment'
+  // THE STUCK-AUTHORISATION LIST behind the health banner (Phase 22b). Its own
+  // resource, and the reason is a mistake worth recording: the first version of
+  // this route reused `payment: ['read']` and granted it to DISPATCHER — which
+  // ALSO handed it to every DRIVER, who already holds full payment permission
+  // for their own checkout. `requirePermission` asks what the role may do, not
+  // whose row this is, so that would have let any signed-in driver read every
+  // outstanding payment in the fleet. A route that is about the SYSTEM's health
+  // rather than about one person's money needs a resource that says so.
+  | 'paymentBacklog';
 
 type PermissionTable = Record<Role, Partial<Record<Resource, Action[]>>>;
 
@@ -170,6 +179,10 @@ const PERMISSIONS: PermissionTable = {
     // a vehicle they cannot see, and the whole point of Phase 18 is that only
     // the person who looked may say.
     fleetStock: ['read'],
+    // The stuck-authorisation list behind the health banner, and nothing else
+    // about money. NOT `payment` — see that resource's comment for why reusing
+    // it would have opened the same list to every driver.
+    paymentBacklog: ['read'],
   },
   FLEET_MANAGER: {
     job: ['read'],

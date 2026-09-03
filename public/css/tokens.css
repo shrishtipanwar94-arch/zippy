@@ -86,6 +86,25 @@
   --bs-card-border-color: var(--border);
 }
 
+/* THE `hidden` ATTRIBUTE HAS TO WIN, AND WITHOUT THIS IT DOES NOT.
+ *
+ * Every panel in this project shows and hides things by setting `node.hidden`
+ * — it is the one mechanism, chosen because it needs no class bookkeeping. But
+ * Bootstrap's display utilities are declared `!important`, so any element
+ * carrying `.d-flex`, `.d-grid` or `.d-block` stays visible with `hidden` set:
+ * the attribute's `display: none` comes from the user-agent sheet and loses to
+ * an important author rule.
+ *
+ * The browser walk-through found this on the driver's estimate card, where
+ * `.d-grid` on the approve/decline row meant a driver was shown "Approve this
+ * cost" on an estimate they had already approved — a button that could only
+ * fail. Stated once here rather than by removing the utility classes one at a
+ * time, because the next panel to hit it would have no way of knowing.
+ */
+[hidden] {
+  display: none !important;
+}
+
 /* Amber is a light colour: white text on it is unreadable. Bootstrap picks the
  * foreground from its own contrast table, which it computes at build time from
  * the Sass variable rather than from the custom property above — so this pair

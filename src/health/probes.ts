@@ -29,7 +29,11 @@ const AI_ATTEMPT_IS_RECENT_MS = 15 * 60 * 1000;
 // A payment stuck awaiting authorisation for longer than this is a provider
 // problem rather than a slow round trip. The retry sweep (Phase 15c) is what
 // clears them; this is what makes the backlog visible while it does.
-const PAYMENT_PENDING_AFTER_MS = 10 * 60 * 1000;
+//
+// EXPORTED so the console's drill-through list (src/api/console.ts) selects on
+// exactly the threshold this probe counted on. Two copies of this number is how
+// a banner saying "3 waiting" ends up opening a list of four.
+export const PAYMENT_PENDING_AFTER_MS = 10 * 60 * 1000;
 
 // A solver run slower than this was, for practical purposes, a timeout: the
 // plan it produced is stale by the time anybody acts on it.

@@ -48,7 +48,57 @@ export function render(state) {
         detail.textContent = ` (${component.detail})`;
         item.append(detail);
       }
+      if (component.component === 'PAYMENTS') item.append(paymentsDrillThrough(state));
       return item;
     }),
   );
+}
+
+// THE ONE DEGRADED STATE WITH A LIST BEHIND IT.
+//
+// "3 authorisations waiting on the provider" is a true sentence an operator can
+// do nothing with. Invariant 8 says a degraded state must be visible to an
+// operator; a count they cannot open is visible and not actionable, which is
+// most of the way there and not all of it. The button fetches the rows the
+// probe counted (GET /degraded/payments, same threshold) and lists them.
+//
+// FETCHED ON DEMAND, never on the poll. The banner refreshes every fifteen
+// seconds and this panel is shut almost always, so polling the list too would
+// be a request per tick for something nobody is reading.
+function paymentsDrillThrough(state) {
+  const box = document.createElement('div');
+  box.className = 'mt-1';
+
+  const button = document.createElement('button');
+  button.className = 'btn btn-sm btn-outline-light py-0';
+  button.dataset.action = 'show-stuck-payments';
+  button.textContent = state.stuckPayments ? 'Hide' : 'Which ones?';
+  box.append(button);
+
+  if (!state.stuckPayments) return box;
+
+  const list = document.createElement('ul');
+  list.className = 'list-unstyled small mt-1 mb-0';
+  if (state.stuckPayments.length === 0) {
+    // The sweep cleared them between the probe and the click. Saying so beats
+    // an empty box that reads as a broken panel.
+    list.append(row('Nothing outstanding now — the retry sweep has cleared them.'));
+  }
+  for (const payment of state.stuckPayments) {
+    list.append(
+      row(
+        `${payment.jobId} · ${payment.amount} · waiting ${payment.waitingMinutes} min · ` +
+          `job ${payment.jobStatus} · zone ${payment.zoneId}`,
+      ),
+    );
+  }
+  box.append(list);
+  return box;
+}
+
+function row(text) {
+  const item = document.createElement('li');
+  item.className = 'mono';
+  item.textContent = text;
+  return item;
 }

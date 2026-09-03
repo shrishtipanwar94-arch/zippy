@@ -115,7 +115,17 @@ const state = {
   // THE DEGRADATION LADDER (Phase 17), as GET /health reports it. Null until
   // the first poll answers. `mode`, `message` and every component's wording
   // come from the server — see public/js/panels/health.js.
+  // WHETHER THE TECHNICIAN HAS ANSWERED THE PARTS PROMPT on the completion
+  // step, keyed by job. Not a fact about the job — it is a fact about this
+  // screen, and it must not survive a refetch of the board, which is why it
+  // lives here rather than being derived from the server's copy.
+  completionParts: {},
   health: null,
+  // The drill-through behind the health banner's payments line. `null` until an
+  // operator asks for it — the banner is polled every fifteen seconds and
+  // fetching a list nobody opened on every tick would be a request per tick for
+  // a panel that is usually closed.
+  stuckPayments: null,
 
   // The chaos panel. `available` stays false until the server answers GET
   // /chaos, which a production build never does, so the panel cannot appear
@@ -349,6 +359,14 @@ export function setActiveJob(jobId) {
 
 export function setRequestField(patch) {
   state.request = { ...state.request, ...patch };
+}
+
+export function setCompletionParts(jobId, answer) {
+  state.completionParts[jobId] = answer;
+}
+
+export function setStuckPayments(payments) {
+  state.stuckPayments = payments;
 }
 
 export function setHealth(health) {

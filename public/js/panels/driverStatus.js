@@ -119,6 +119,7 @@ function renderEstimate(panel, estimate) {
   if (!estimate) return;
 
   setText(panel, 'estimate-total', estimate.total);
+  renderCoverage(panel, estimate);
 
   // WHETHER THERE IS ANYTHING TO ANSWER is the server's call, not this panel's
   // — `awaitingAnswer` and `mayDecline` come from GET /jobs/:id/driver-view,
@@ -140,6 +141,33 @@ function renderEstimate(panel, estimate) {
     amount.textContent = line.amount;
     item.append(label, amount);
     list.appendChild(item);
+  }
+}
+
+// WHAT THE CONTRACT ABSORBS, AND WHAT IS LEFT. All three figures are the
+// server's (src/api/driver.ts computes covered, payable and fullyCovered from
+// the same estimate row), so this panel picks which of them to show and never
+// does the subtraction itself — two places doing that arithmetic is two places
+// for a driver's bill to disagree with an invoice.
+//
+// THE FULLY-COVERED CASE GETS A SENTENCE, not just a ₹0. "You pay ₹0.00" with
+// no explanation reads as a screen that has not finished loading; a person
+// whose contract has just absorbed ₹4,860 should be told that is what happened.
+function renderCoverage(panel, estimate) {
+  const row = panel.querySelector('[data-field="estimate-covered-row"]');
+  if (row) row.hidden = !estimate.covered;
+  if (estimate.covered) {
+    setText(panel, 'estimate-covered-label', 'Covered by your contract');
+    setText(panel, 'estimate-covered', estimate.covered);
+  }
+
+  setText(panel, 'estimate-payable', estimate.payable);
+
+  const note = panel.querySelector('[data-field="estimate-covered-note"]');
+  if (!note) return;
+  note.hidden = !estimate.fullyCovered;
+  if (estimate.fullyCovered) {
+    note.textContent = 'Your contract covers all of this. There is nothing for you to pay.';
   }
 }
 

@@ -1,0 +1,34 @@
+/* THE LANDING PAGE — four links and nothing else.
+ *
+ * Everything structural here is borrowed: `.choice` and `.app-bar` come from
+ * field.css, the palette from tokens.css. What this file adds is the two-line
+ * shape inside a choice — a role and a line saying what that person does — and
+ * a reading width, because a full-width column of text on a desktop monitor is
+ * the one thing the field surfaces never have to handle.
+ */
+
+.home-main {
+  max-width: 34rem;
+}
+
+.home-role {
+  display: block;
+  font-weight: 600;
+}
+
+/* Dimmer and smaller than the role: somebody who already knows which surface
+ * they want should be able to skip this line entirely. */
+.home-note {
+  display: block;
+  font-size: 0.875rem;
+  color: var(--text-muted);
+  line-height: 1.35;
+}
+
+/* `.choice` is built for buttons, which carry no underline and inherit their
+ * colour. An anchor does neither, so both are stated rather than leaving the
+ * cards looking like links that happen to be in boxes. */
+.home .choice {
+  text-decoration: none;
+  color: var(--text);
+}

@@ -21,6 +21,8 @@ import { authenticate, requirePermission } from './middleware/authenticate.js';
 import { summarise, byUrgency } from '../domain/scarcity.js';
 import { orderQueue, slaRisk, ageMinutes } from '../domain/priority.js';
 import { selectPlan, latestDecisionFor, RECOMMENDED_PLAN } from '../commit/decisionRecords.js';
+import { PAYMENT_PENDING_AFTER_MS } from '../health/probes.js';
+import { formatRupees } from '../domain/money.js';
 
 export const consoleRouter = Router();
 
@@ -439,6 +441,62 @@ consoleRouter.post(
       isOverride: result.isOverride,
       recommended: RECOMMENDED_PLAN,
       decisionsRecorded: result.decisionRecordIds.length,
+    });
+  },
+);
+
+// ---------------------------------------------------------------------------
+// GET /degraded/payments — WHICH authorisations are stuck, not just how many.
+//
+// The health banner has said "3 authorisations waiting on the provider" since
+// Phase 17 (src/health/probes.ts's probePayments) and there was nowhere to go
+// from it. Invariant 8 asks that every degraded state be visible to an
+// operator, and a number with no list is a state an operator can see and not
+// act on: they cannot ring the customer, cannot tell a technician the callout
+// is unpaid, cannot tell whether it is one provider outage or three unrelated
+// cards.
+//
+// THE SAME THRESHOLD THE PROBE COUNTED WITH, imported rather than repeated, so
+// the banner's number and this list are the same set by construction.
+//
+// READS NOTHING SENSITIVE. A payment row carries an amount, a status and a
+// gateway order reference — never a card number; the card is typed into
+// Razorpay's own iframe and never reaches this database at all (see
+// src/api/checkout.ts).
+consoleRouter.get(
+  '/degraded/payments',
+  authenticate,
+  // `paymentBacklog`, never `payment`: a DRIVER holds full `payment`
+  // permission for their own checkout, and this list is the whole fleet's.
+  requirePermission('read', 'paymentBacklog'),
+  async (_req, res) => {
+    const stuckSince = new Date(Date.now() - PAYMENT_PENDING_AFTER_MS);
+
+    const payments = await prismaBase.payment.findMany({
+      where: { status: 'PENDING_AUTHORISATION', createdAt: { lt: stuckSince } },
+      orderBy: { createdAt: 'asc' },
+      select: {
+        id: true,
+        jobId: true,
+        amountPaise: true,
+        createdAt: true,
+        gatewayOrderRef: true,
+        job: { select: { status: true, zoneId: true } },
+      },
+    });
+
+    res.json({
+      payments: payments.map((payment) => ({
+        paymentId: payment.id,
+        jobId: payment.jobId,
+        jobStatus: payment.job.status,
+        zoneId: payment.job.zoneId,
+        amount: formatRupees(payment.amountPaise),
+        // How long it has been stuck, which is the figure that says whether
+        // this is a slow round trip or a provider that has stopped answering.
+        waitingMinutes: Math.floor((Date.now() - payment.createdAt.getTime()) / 60_000),
+        orderRef: payment.gatewayOrderRef,
+      })),
     });
   },
 );

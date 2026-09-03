@@ -27,6 +27,17 @@ const SENTENCES: Record<string, string> = {
   TECHNICIAN_DIAGNOSING: 'Your technician is checking what is wrong.',
   TECHNICIAN_WORKING: 'Your technician has started work.',
   DIAGNOSIS_CHANGED: 'Your technician has taken a closer look and updated what they think is wrong.',
+  // WHAT THE DRIVER'S OWN ANSWER DID. Confirming "yes, I am blocking traffic"
+  // raises the job's safety level and re-ranks it (src/commit/eventPromotions.ts
+  // returns a SAFETY_LEVEL_CHANGED re-plan trigger), and until Phase 22b's audit
+  // the only visible consequence was the while-you-wait card silently changing
+  // its advice. A confirmation prompt that appears to do nothing is one people
+  // learn to dismiss — and this is the one prompt that must not be.
+  SAFETY_LEVEL_CHANGED: 'You told us your situation is more urgent. We have moved your job up the queue.',
+  // The same answer when the job was already at the top. Recorded, and said
+  // plainly rather than silently: "nothing changed" is the honest reply, and it
+  // still confirms we heard them.
+  SAFETY_LEVEL_CONFIRMED: 'You confirmed your situation. Your job is already being treated as urgent.',
   ESTIMATE_ISSUED: 'We have worked out what this will cost. Please review it.',
   ESTIMATE_APPROVED: 'You approved the cost. Work can continue.',
   // Declining is not a failure — the job finishes at the scope already agreed.

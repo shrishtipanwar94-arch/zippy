@@ -304,8 +304,30 @@
         <div class="card mb-3" data-field="estimate-card" hidden>
           <div class="card-body">
             <h2 class="h6">What this comes to</h2>
-            <ul class="list-unstyled mb-3" data-field="estimate-lines"></ul>
-            <p class="h4 mb-3">Total <span data-field="estimate-total"></span></p>
+            <ul class="list-unstyled mb-2" data-field="estimate-lines"></ul>
+
+            <!-- THE THREE-LINE FOOT, and the middle one is why it exists. A
+                 covered customer used to see the gross total and nothing else,
+                 which reads as a bill. The deduction line is what turns it into
+                 an explanation: this is the work, this is what your contract
+                 absorbs, this is what is left for you. Hidden entirely for a
+                 walk-in, who has no contract and would only be confused by a
+                 "covered ₹0" line. -->
+            <div class="estimate-foot">
+              <p class="d-flex justify-content-between mb-1">
+                <span class="text-secondary">Work and parts</span>
+                <span data-field="estimate-total"></span>
+              </p>
+              <p class="d-flex justify-content-between mb-1" data-field="estimate-covered-row" hidden>
+                <span class="text-secondary" data-field="estimate-covered-label"></span>
+                <span data-field="estimate-covered"></span>
+              </p>
+              <p class="h4 d-flex justify-content-between mb-0">
+                <span>You pay</span>
+                <span data-field="estimate-payable"></span>
+              </p>
+            </div>
+            <p class="small mb-3 mt-2" data-field="estimate-covered-note" hidden></p>
             <!-- Only shown while an estimate is actually waiting on an answer.
                  Declining means "finish what I already agreed", so it appears
                  only when there IS something to fall back to. -->

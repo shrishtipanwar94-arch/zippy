@@ -797,3 +797,107 @@ async function planVariant(label: string, solverRunId?: string): Promise<string>
   });
   return created.id;
 }
+
+// ---------------------------------------------------------------------------
+// GET /degraded/payments — the drill-through behind the health banner.
+//
+// probePayments (src/health/probes.ts) has counted stuck authorisations since
+// Phase 17 and the banner has shown the number; there was no way to find out
+// WHICH. Invariant 8 asks that a degraded state be visible to an operator, and
+// a count nobody can open only half satisfies it.
+//
+// The threshold is imported by the route from the probe, so these two cannot
+// disagree about what "stuck" means. That is what the age assertion below is
+// really checking: not the arithmetic, but that the route selects on the same
+// boundary the banner counted on.
+
+describe('GET /degraded/payments — which authorisations are stuck', () => {
+  const PAY = `${PREFIX}-pay`;
+
+  beforeAll(async () => {
+    // One well past the ten-minute threshold, one comfortably inside it.
+    await prismaBase.payment.createMany({
+      data: [
+        {
+          jobId: jobA,
+          method: 'CARD',
+          status: 'PENDING_AUTHORISATION',
+          amountPaise: 50_000,
+          idempotencyKey: `${PAY}-stuck`,
+          gatewayOrderRef: `order_${PAY}_stuck`,
+          createdAt: new Date(Date.now() - 45 * 60_000),
+        },
+        {
+          jobId: jobA,
+          method: 'CARD',
+          status: 'PENDING_AUTHORISATION',
+          amountPaise: 25_000,
+          idempotencyKey: `${PAY}-fresh`,
+          createdAt: new Date(Date.now() - 60_000),
+        },
+      ],
+      skipDuplicates: true,
+    });
+  });
+
+  afterAll(async () => {
+    await prismaBase.payment.deleteMany({
+      where: { idempotencyKey: { in: [`${PAY}-stuck`, `${PAY}-fresh`] } },
+    });
+  });
+
+  it('lists the stuck authorisation and not the one still inside the window', async () => {
+    const response = await request(app)
+      .get('/degraded/payments')
+      .set('Authorization', `Bearer ${dispatcherToken()}`);
+
+    expect(response.status).toBe(200);
+
+    // SCOPED TO THIS FILE'S OWN ROWS. `zippy_test` is shared and other suites
+    // write payments; asserting on the whole list would drift the moment one
+    // of them ran alongside this.
+    const mine = response.body.payments.filter(
+      (payment: { jobId: string }) => payment.jobId === jobA,
+    );
+    expect(mine).toHaveLength(1);
+    expect(mine[0]).toMatchObject({ jobId: jobA, amount: '₹500' });
+    expect(mine[0].waitingMinutes).toBeGreaterThanOrEqual(45);
+    expect(mine[0].orderRef).toBe(`order_${PAY}_stuck`);
+  });
+
+  it('never exposes anything a card would be recognisable from', async () => {
+    const response = await request(app)
+      .get('/degraded/payments')
+      .set('Authorization', `Bearer ${dispatcherToken()}`);
+
+    // The card is typed into Razorpay's iframe and never reaches this database
+    // (src/api/checkout.ts). This asserts the route did not go looking for
+    // something adjacent — the shape is fixed and small on purpose.
+    const keys = Object.keys(response.body.payments[0] ?? {}).sort();
+    expect(keys).toEqual([
+      'amount',
+      'jobId',
+      'jobStatus',
+      'orderRef',
+      'paymentId',
+      'waitingMinutes',
+      'zoneId',
+    ]);
+  });
+
+  // The dispatcher's `payment: ['read']` grant is new in Phase 22b and is
+  // deliberately read-only. A driver has full payment permission for their OWN
+  // checkout, and this route is not scoped to a driver — so it must refuse
+  // them rather than hand over the whole fleet's outstanding money.
+  it('refuses a driver, who has payment permission only for their own checkout', async () => {
+    const response = await request(app)
+      .get('/degraded/payments')
+      .set('Authorization', `Bearer ${driverToken()}`);
+    expect(response.status).toBe(403);
+  });
+
+  it('rejects an unauthenticated request', async () => {
+    const response = await request(app).get('/degraded/payments');
+    expect(response.status).toBe(401);
+  });
+});

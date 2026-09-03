@@ -57,6 +57,22 @@ export async function loadChat(jobId) {
   render();
 }
 
+// THE DISPATCHER'S HALF, WITHOUT THE CONVERSATION. A console has no chat panel
+// and no business pulling a driver's messages into memory to render nothing
+// with them — but it does confirm promotions, so it needs the cards on their
+// own. Same setter, same socket, one fewer request.
+export async function loadPromotions(jobId) {
+  if (!jobId) return;
+  try {
+    const promotions = await api.listPromotions(jobId);
+    setPromotions(promotions.promotions);
+    setError(null);
+  } catch (error) {
+    setError(error.message);
+  }
+  render();
+}
+
 export function wireChatActions() {
   wireSend();
   wireConfirmations();

@@ -183,6 +183,17 @@
                can see is a queue nobody works. -->
           <div data-panel="actions"></div>
 
+          <!-- FLAGGED MESSAGES WAITING ON AN OPERATOR (Phase 15b). A driver's
+               message that proposed a location correction or an access
+               restriction is confirmed by whoever is driving the road or
+               looking at the map — src/domain/promotionPolicy.ts routes both to
+               OPERATOR, which means the assigned technician OR a dispatcher.
+               The technician's page has had this panel since Phase 15b; this
+               console never did, and could not have received the card anyway
+               (see realtime/publish.ts). Safety cards are the driver's alone
+               and are filtered out by the panel. -->
+          <div data-panel="promotions" data-show-job="true" class="mt-3"></div>
+
           <div data-panel="escalation" class="card mt-3 border-danger" hidden>
             <div class="card-header text-danger">No plan for this job</div>
             <div class="card-body p-2">

@@ -21,9 +21,17 @@ export function render(state) {
 
   const mine = state.promotions.filter((promotion) => isForMe(promotion, state));
 
+  // WHICH JOB, on the console only. A driver and a technician are looking at
+  // one incident and the id would be noise; a dispatcher holds a whole zone and
+  // a card pushed for a job they are not currently inspecting is unreadable
+  // without it. The surface asks for it in its own markup rather than this file
+  // guessing from the role.
+  const showJob = panel.dataset.showJob === 'true';
+  const className = panel.className;
+
   const markup = `
-    <div data-panel="promotions">
-      ${mine.map(cardMarkup).join('')}
+    <div data-panel="promotions" data-show-job="${showJob}" class="${escapeText(className)}">
+      ${mine.map((promotion) => cardMarkup(promotion, showJob)).join('')}
     </div>`;
 
   // eslint-disable-next-line no-undef
@@ -38,10 +46,14 @@ function isForMe(promotion, state) {
   return role === 'TECHNICIAN' || role === 'DISPATCHER';
 }
 
-function cardMarkup(promotion) {
+function cardMarkup(promotion, showJob) {
+  const job = showJob
+    ? `<div class="mono small text-muted mb-1">${escapeText(promotion.jobId ?? '')}</div>`
+    : '';
   return `
     <div class="card promotion-card mb-3" data-promotion-id="${escapeText(promotion.promotionId)}">
       <div class="card-body">
+        ${job}
         <p class="h5 mb-1">${escapeText(promotion.question)}</p>
         <p class="small mb-2">${escapeText(promotion.because)}</p>
         ${whyFlagged(promotion)}
@@ -66,7 +78,12 @@ function cardMarkup(promotion) {
 function whyFlagged(promotion) {
   if (!promotion.matched || promotion.matched.length === 0) return '';
   const words = promotion.matched.map((word) => `“${escapeText(word)}”`).join(', ');
-  return `<p class="small text-muted mb-2">Flagged because you wrote ${words}.</p>`;
+  // WHO WROTE IT depends on who is reading. A DRIVER card is about the reader's
+  // own message; an OPERATOR card is about the driver's. This said "you wrote"
+  // to everybody, which was merely odd on the technician's page and became
+  // plainly wrong once the dispatcher's console started rendering these cards.
+  const who = promotion.confirmer === 'DRIVER' ? 'you wrote' : 'the driver wrote';
+  return `<p class="small text-muted mb-2">Flagged because ${who} ${words}.</p>`;
 }
 
 function escapeText(value) {

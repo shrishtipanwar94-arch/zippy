@@ -81,6 +81,24 @@ body.console {
   border-left: 3px solid var(--ok);
 }
 
+/* The repeat-pattern flag's own disclaimer. Dimmer than the sentence above it
+ * but genuinely on the screen — Phase 21 requires the rule to be labelled as a
+ * rule, and a tooltip is not a label. */
+.rule-note {
+  font-size: 0.75rem;
+  opacity: 0.85;
+}
+
+/* A dispatcher's recorded override reason. Amber and bordered because it is the
+ * one case where the cost table below does NOT explain the assignment — a
+ * person overruled it, and what they typed is the real answer. */
+.override-note {
+  border-left: 3px solid var(--accent);
+  background: var(--surface);
+  border-radius: 0.25rem;
+  padding: 0.375rem 0.5rem;
+}
+
 /* ---------------------------------------------------------------------------
  * THE ACTION QUEUE (Phase 13, surfaced in Phase 22b).
  *

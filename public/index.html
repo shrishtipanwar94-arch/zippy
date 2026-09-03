@@ -3,23 +3,77 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="theme-color" content="#0f172a" />
     <title>Zippy</title>
     <link
       href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css"
       rel="stylesheet"
     />
+    <link href="/css/tokens.css" rel="stylesheet" />
+    <link href="/css/field.css" rel="stylesheet" />
+    <link href="/css/home.css" rel="stylesheet" />
   </head>
-  <body class="p-3">
-    <h1 class="h4">Zippy</h1>
-    <p class="text-muted small">
-      Three surfaces on one live event stream. Open them in separate windows: an action in one
-      appears in the others without a reload.
-    </p>
-    <ul>
-      <li><a href="/driver">Driver</a> — report a breakdown, answer intake</li>
-      <li><a href="/technician">Technician</a> — assigned jobs (empty until Phase 9)</li>
-      <li><a href="/dispatcher">Dispatcher</a> — the board</li>
-    </ul>
-    <p class="small text-muted">Every seeded login uses the password <code>password-dev-only</code>.</p>
+  <!--
+    THE WAY IN. No phase specifies this page, which is exactly how the fleet
+    dashboard ended up reachable only by typing a URL: it was built, it worked,
+    and nothing linked to it. Four surfaces, four links, and the list is the
+    whole page.
+
+    NO NEW DESIGN SYSTEM. The cards below are `.choice` from field.css — the
+    same component the driver taps to say what is wrong with their car —
+    because a landing page is the last place that should introduce a second set
+    of conventions. tokens.css supplies the palette, as it does everywhere.
+
+    STATIC, AND DELIBERATELY SO. There is no sign-in here and no script: this
+    page cannot know who you are, and pretending to would mean a fifth surface
+    with its own session handling. Each link lands on a page that asks.
+  -->
+  <body class="p-3 driver home">
+    <header class="app-bar">
+      <h1>Zippy</h1>
+    </header>
+
+    <main class="home-main">
+      <p class="text-secondary mb-4">
+        Four surfaces on one live event stream. Open them in separate windows —
+        an action in one appears in the others without a reload.
+      </p>
+
+      <nav class="d-grid gap-2" aria-label="Choose a surface">
+        <a class="choice" href="/driver">
+          <span class="choice-icon" aria-hidden="true">🚗</span>
+          <span>
+            <span class="home-role">Driver</span>
+            <span class="home-note">Report a breakdown and follow who is coming</span>
+          </span>
+        </a>
+        <a class="choice" href="/technician">
+          <span class="choice-icon" aria-hidden="true">🔧</span>
+          <span>
+            <span class="home-role">Technician</span>
+            <span class="home-note">Offers, the job in hand, the van, and what you are owed</span>
+          </span>
+        </a>
+        <a class="choice" href="/dispatcher">
+          <span class="choice-icon" aria-hidden="true">🗺️</span>
+          <span>
+            <span class="home-role">Dispatcher</span>
+            <span class="home-note">The board, the plans, and why each crew was chosen</span>
+          </span>
+        </a>
+        <a class="choice" href="/fleet">
+          <span class="choice-icon" aria-hidden="true">🏢</span>
+          <span>
+            <span class="home-role">Fleet manager</span>
+            <span class="home-note">Incidents, SLA and spend across your own vehicles</span>
+          </span>
+        </a>
+      </nav>
+
+      <p class="small text-secondary mt-4 mb-0">
+        Every seeded login uses the password <code>password-dev-only</code>. Each
+        page arrives with its own demo account already filled in.
+      </p>
+    </main>
   </body>
 </html>

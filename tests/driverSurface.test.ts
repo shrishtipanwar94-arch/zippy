@@ -174,6 +174,42 @@ describe('the translation map — no enum reaches a driver', () => {
     expect(finished).toBe('Finding someone equipped for this.');
   });
 
+  // SIX DISTINCT STATES is what Phase 15 asks for, and PLANNED, OFFERED and a
+  // finished INTAKE shared one sentence until Phase 22b's audit — so the screen
+  // did not change through the most anxious part of the wait, which reads as a
+  // page that has stopped working.
+  it('gives PLANNED and OFFERED sentences of their own, distinct from each other and from intake', () => {
+    const say = (status: JobStatus, intakeComplete: boolean) =>
+      headlineFor({
+        status,
+        helperName: null,
+        arrivingAt: null,
+        replanning: false,
+        sourcingPart: false,
+        intakeComplete,
+      });
+
+    const sentences = [say('INTAKE', true), say('PLANNED', false), say('OFFERED', false)];
+    expect(new Set(sentences).size).toBe(3);
+    for (const sentence of sentences) expect(sentence).not.toMatch(SCREAMING_CASE);
+  });
+
+  // A driver who confirms they are blocking traffic triggers a re-rank
+  // (src/commit/eventPromotions.ts). Nothing told them so: the whitelist had no
+  // entry, and an unknown type is dropped silently, so the single most
+  // consequential answer on the surface produced no visible reply at all.
+  it('tells the driver what confirming a safety change did', () => {
+    const updates = driverUpdatesFor([
+      { eventType: 'SAFETY_LEVEL_CHANGED', at: new Date() },
+      { eventType: 'SAFETY_LEVEL_CONFIRMED', at: new Date() },
+    ]);
+    expect(updates).toHaveLength(2);
+    for (const update of updates) {
+      expect(update.text.length).toBeGreaterThan(0);
+      expect(update.text).not.toMatch(SCREAMING_CASE);
+    }
+  });
+
   it('admits uncertainty instead of naming one fault', () => {
     const sentence = whatWeThinkItIs(['FLAT_BATTERY', 'ALTERNATOR_FAILURE']);
     expect(sentence).toBe(

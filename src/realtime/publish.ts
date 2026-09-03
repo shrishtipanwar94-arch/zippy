@@ -12,7 +12,7 @@
 
 import { prismaBase } from '../infra/prismaBase.js';
 import { logger } from '../infra/logger.js';
-import { jobRoom, roomsForJobEvent, tenantRoom } from './rooms.js';
+import { jobRoom, roomsForJobEvent, tenantRoom, zoneRoom } from './rooms.js';
 import type { PublishableJobEvent } from './outbox.js';
 
 // TWO WAYS TO REACH A BROWSER, ONE INTERFACE. The web process holds the real
@@ -158,9 +158,23 @@ export async function publishChatMessage(message: ChatMessage): Promise<void> {
 }
 
 // A flagged promotion, pushed so the person who must confirm it sees the card
-// without polling. Everyone in the job room receives it; which of them may act
-// on it is the policy table's decision (domain/promotionPolicy.ts), enforced on
-// the confirm route rather than by who is told.
+// without polling. Which of them may act on it is the policy table's decision
+// (domain/promotionPolicy.ts), enforced on the confirm route rather than by who
+// is told.
+//
+// THE JOB ROOM AND THE ZONE ROOM, unlike a chat message — and the difference is
+// the point. A chat message is a conversation and stays in the job room for the
+// privacy reason above. A promotion is an OPERATIONAL DECISION WAITING ON
+// SOMEBODY: promotionPolicy.ts routes LOCATION_CORRECTION and
+// ACCESS_RESTRICTION to an OPERATOR, which is the assigned technician OR a
+// dispatcher. A dispatcher stands in zone rooms, never in a job room they did
+// not explicitly subscribe to, so until Phase 22b's audit a dispatcher could
+// never receive a card the policy table said was theirs to answer. The console
+// had no panel either — both halves were missing, which is why neither was
+// noticed.
+//
+// NOT the tenant room. A fleet manager is never a confirmer, and the card
+// quotes the words a driver wrote.
 export type PromotionMessage = {
   promotionId: string;
   jobId: string;
@@ -174,14 +188,39 @@ export type PromotionMessage = {
 };
 
 export async function publishPromotion(promotion: PromotionMessage): Promise<void> {
-  await emitToJobRoom(promotion.jobId, 'promotion:flagged', promotion);
+  await emitToOperatorRooms(promotion.jobId, 'promotion:flagged', promotion);
 }
 
+// Resolved goes to the same rooms as flagged, or a card answered by the driver
+// would stay on the dispatcher's console until they reloaded.
 export async function publishPromotionResolved(
   jobId: string,
   resolved: { promotionId: string; status: string },
 ): Promise<void> {
-  await emitToJobRoom(jobId, 'promotion:resolved', { jobId, ...resolved });
+  await emitToOperatorRooms(jobId, 'promotion:resolved', { jobId, ...resolved });
+}
+
+// The job room plus the job's zone. One read per call, the same shape and the
+// same reasoning as routeAndEmit's: the zone is not on the message and a
+// promotion is rare enough that a lookup costs nothing.
+async function emitToOperatorRooms(
+  jobId: string,
+  event: string,
+  payload: unknown,
+): Promise<void> {
+  try {
+    const job = await prismaBase.job.findUnique({
+      where: { id: jobId },
+      select: { zoneId: true },
+    });
+    const target = server ?? (await emitterFallback());
+    // Socket.IO de-duplicates across rooms, so a dispatcher who has also
+    // subscribed to this job receives one copy.
+    const rooms = job ? [jobRoom(jobId), zoneRoom(job.zoneId)] : [jobRoom(jobId)];
+    target.to(rooms).emit(event, payload);
+  } catch (error) {
+    logger.error({ err: error, jobId, event }, 'failed to publish to a room');
+  }
 }
 
 export type NotificationMessage = {

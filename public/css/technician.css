@@ -124,6 +124,13 @@
   border-left: 4px solid var(--accent);
 }
 
+/* The payout batch reference. Monospace and small: it is not prose, it is a
+ * string somebody reads down a phone line to chase a missing transfer. */
+.payout-ref {
+  font-family: var(--mono);
+  font-size: 0.75rem;
+}
+
 /* A <details> summary is a real control: it needs a target size and a pointer,
  * which the browser default gives it in neither case. */
 .technician summary,

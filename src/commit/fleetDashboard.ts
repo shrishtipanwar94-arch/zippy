@@ -52,9 +52,10 @@ export type VehicleHistoryView = {
   make: string;
   model: string;
   incidents: VehicleIncidentRow[];
-  // Null when nothing has recurred. LABELLED A RULE ON THE CARD ITSELF
-  // (public/js/pages/fleet.js), not only in this comment — the phase brief is
-  // explicit that a reader must never mistake this for a prediction.
+  // Null when nothing has recurred. LABELLED A RULE ON THE CARD ITSELF, in
+  // visible text (public/js/panels/fleetDashboard.js), not only in this comment
+  // — the phase brief is explicit that a reader must never mistake this for a
+  // prediction.
   repeatPatternFlag: RepeatPatternFlag | null;
 };
 

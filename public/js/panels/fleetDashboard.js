@@ -118,12 +118,27 @@ function vehiclesCard(dashboard) {
 }
 
 function vehicleBlock(vehicle) {
+  // THE FLAG SAYS WHAT IT IS, IN WORDS ON THE SCREEN. Phase 21's brief is
+  // explicit — "It is a RULE, not a model. Label it as one in the UI" — and
+  // until Phase 22b's audit the label was the bare token RULE with the
+  // explanation in a `title` tooltip: invisible on a touch device, invisible to
+  // a screen reader, and invisible to anyone who does not happen to hover. The
+  // distinction is the whole point of the flag. A fleet manager who reads this
+  // as a prediction will expect it to tell them which van breaks down next, and
+  // it cannot: it counts to three.
   const flag = vehicle.repeatPatternFlag;
   const flagBadge = flag
-    ? `<span class="badge bg-warning text-dark ms-2" title="A rule, not a prediction">RULE</span>`
+    ? '<span class="badge bg-warning text-dark ms-2">Repeat pattern</span>'
     : '';
   const flagLine = flag
-    ? `<div class="alert alert-warning py-1 px-2 my-2 small mb-2">${escapeHtml(vehicle.registration)} — ${escapeHtml(flag.message)}</div>`
+    ? `<div class="alert alert-warning py-1 px-2 my-2 small mb-2">
+         <div>${escapeHtml(vehicle.registration)} — ${escapeHtml(flag.message)}</div>
+         <div class="rule-note mt-1">
+           This is a counting rule, not a prediction: it counts
+           ${escapeHtml(String(flag.count))} incidents of the same fault in the
+           window. It does not forecast future breakdowns.
+         </div>
+       </div>`
     : '';
 
   const rows = vehicle.incidents

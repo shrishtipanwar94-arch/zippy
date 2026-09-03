@@ -202,6 +202,11 @@ export async function buildDispatchSnapshot(
     db.workshop.findMany({
       select: {
         id: true,
+        // The name is audit detail rather than a decision input — nothing in
+        // the engine reads it — but the why-inspector's screening panel showed
+        // raw workshop ids until Phase 22b, and "why not the closer one?" is
+        // not a question anybody answers by comparing cuids.
+        name: true,
         lat: true,
         lng: true,
         active: true,
@@ -296,6 +301,7 @@ export async function buildDispatchSnapshot(
     workshops: {
       workshops: workshopRows.map((workshop) => ({
         id: workshop.id,
+        name: workshop.name,
         lat: workshop.lat,
         lng: workshop.lng,
         active: workshop.active,

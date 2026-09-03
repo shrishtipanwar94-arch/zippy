@@ -73,6 +73,15 @@
   border-left: 4px solid var(--ok);
 }
 
+/* The foot of the estimate — priced work, what the contract absorbs, what is
+ * left. Ruled off from the itemised lines above it because it answers a
+ * different question: the list is what was done, the foot is what it costs
+ * you. */
+.estimate-foot {
+  border-top: 1px solid var(--border);
+  padding-top: 0.5rem;
+}
+
 .code-card {
   border: 1px solid var(--accent);
   text-align: center;

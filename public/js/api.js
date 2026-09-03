@@ -34,6 +34,13 @@ export function getHealth() {
   return request('GET', '/health');
 }
 
+// WHICH authorisations the banner is counting. Dispatcher-only, and separate
+// from GET /health because /health is unauthenticated — a public endpoint is no
+// place for a list of jobs with money outstanding.
+export function getStuckPayments() {
+  return request('GET', '/degraded/payments');
+}
+
 export function getChaos() {
   return request('GET', '/chaos');
 }

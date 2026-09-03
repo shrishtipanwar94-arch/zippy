@@ -17,7 +17,7 @@
 // or decides anything — it is a pure function from state the system already
 // records to a sentence.
 
-import type { JobStatus, UnitKind } from '@prisma/client';
+import type { JobStatus, SafetyLevel, UnitKind } from '@prisma/client';
 import type { FaultCode } from './faults.js';
 
 // Bengaluru is UTC+5:30 with no daylight saving, so a fixed offset is correct
@@ -91,9 +91,18 @@ export function headlineFor(context: NarrativeContext): string {
       return context.intakeComplete
         ? 'Finding someone equipped for this.'
         : 'We are taking down the details of your breakdown.';
+    // THREE STAGES OF "NOBODY IS ASSIGNED YET", AND THEY ARE NOT THE SAME NEWS.
+    // These shared one sentence with intake-complete until Phase 22b's audit,
+    // which made the driver's screen look frozen through the most anxious part
+    // of the wait: the phase brief asks for six distinct states and this was
+    // three of them wearing one. PLANNED means the solver has picked a crew and
+    // nobody has been asked yet; OFFERED means somebody has been asked and has
+    // forty-five seconds to answer. Both are progress, and saying so is the
+    // whole job of this screen.
     case 'PLANNED':
+      return 'We have found a crew for this and are contacting them now.';
     case 'OFFERED':
-      return 'Finding someone equipped for this.';
+      return 'We have asked a technician to come. Waiting for them to confirm.';
     case 'COMMITTED':
     case 'EN_ROUTE':
       return context.arrivingAt
@@ -180,6 +189,60 @@ const UNIT_LABELS: Record<UnitKind, string> = {
 
 export function labelForUnit(kind: UnitKind): string {
   return UNIT_LABELS[kind];
+}
+
+// ---------------------------------------------------------------------------
+// THE SAME VOCABULARY, FOR THE OTHER CUSTOMER.
+//
+// A fleet manager is a customer, not an operator. Their dashboard was rendering
+// AWAITING_APPROVAL and HIGH_RISK straight out of the database — the identical
+// leak this file was written to close on the driver's screen. The two maps
+// below live here, beside FAULT_LABELS and UNIT_LABELS, because this file is
+// already the one place a code becomes words for somebody outside the
+// business: src/domain/repeatPattern.ts has imported `labelForFault` for the
+// fleet dashboard's own flag since Phase 21. A second map in the browser would
+// be a second place for an enum to leak.
+//
+// These are LABELS, not the sentences above — a table cell, not a status hero.
+// A dispatcher's console keeps the raw enums, deliberately: an operator quoting
+// AWAITING_APPROVAL back at you knows more than "waiting on the driver" would
+// tell them.
+
+const STATUS_LABELS: Record<JobStatus, string> = {
+  DRAFT: 'Being raised',
+  INTAKE: 'Taking details',
+  PLANNED: 'Finding a crew',
+  OFFERED: 'Finding a crew',
+  COMMITTED: 'Crew assigned',
+  EN_ROUTE: 'On the way',
+  ON_SITE: 'On scene',
+  DIAGNOSING: 'Being diagnosed',
+  WORKING: 'Being worked on',
+  AWAITING_APPROVAL: 'Waiting on the driver',
+  AWAITING_DESTINATION: 'Finding a workshop',
+  TOWING: 'Being towed',
+  RESOLVED: 'Resolved',
+  UNSERVICEABLE: 'Needs a dispatcher',
+  CANCELLED: 'Cancelled',
+};
+
+// Takes a plain string rather than the enum because the fleet read model
+// carries these as strings, and the alternative is a cast at every call site.
+// The Record above is still exhaustive over JobStatus, so adding a status to
+// the schema without wording it here is a compile error — the fallback only
+// covers a value the database produced that TypeScript never saw.
+export function labelForJobStatus(status: string): string {
+  return STATUS_LABELS[status as JobStatus] ?? status;
+}
+
+const SAFETY_LABELS: Record<SafetyLevel, string> = {
+  NORMAL: 'Normal',
+  ELEVATED: 'Elevated',
+  HIGH_RISK: 'High risk',
+};
+
+export function labelForSafetyLevel(level: string): string {
+  return SAFETY_LABELS[level as SafetyLevel] ?? level;
 }
 
 // `contenders` is what capabilitySet.contendingFaults() returned — the faults
