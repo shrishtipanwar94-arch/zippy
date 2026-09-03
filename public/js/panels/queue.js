@@ -1,4 +1,5 @@
-// THE PRIORITY QUEUE — which job a dispatcher should look at next.
+// THE PRIORITY QUEUE — which job a dispatcher should look at next, and the
+// column they live in.
 //
 // The order comes from the server (src/domain/priority.ts) and this panel does
 // not re-sort it. That is deliberate: the ordering rule is invariant 4, and an
@@ -13,71 +14,139 @@
 // exactly when it looks wrong — an operator who can see that a NORMAL job sits
 // above an ELEVATED one knows immediately that something is broken, rather
 // than assuming the machine knows best.
+//
+// ROWS ARE PATCHED BY `data-job-id`, NOT REBUILT. This panel used to call
+// `replaceChildren` on every render, and render runs on every socket event —
+// so on a busy board the table was destroyed and recreated every few seconds.
+// That is the exact discipline Phase 4 set for the jobs table and Phase 14 for
+// the timeline, and it was never applied here. It is a READABILITY problem
+// before it is a performance one: a dispatcher part-way through reading a row,
+// with text selected or the row's button focused, lost both on the next tick.
+//
+// The list is SORTED rather than append-only, which is what makes this
+// different from the timeline. Rows that already exist are updated in place;
+// rows that have gone are removed; and the surviving nodes are re-appended in
+// the server's order, which moves a row only when its rank actually changed.
 
-const SAFETY_CLASS = {
-  HIGH_RISK: 'safety-HIGH_RISK',
-  ELEVATED: 'safety-ELEVATED',
-  NORMAL: '',
+const SAFETY_BADGE = {
+  HIGH_RISK: { className: 'badge-risk-high', label: 'HIGH RISK' },
+  ELEVATED: { className: 'badge-risk-elevated', label: 'ELEVATED' },
+  NORMAL: { className: 'badge-risk-normal', label: 'STANDARD' },
 };
 
 export function render(state) {
   const panel = document.querySelector('[data-panel="queue"]');
   if (!panel) return;
 
+  const table = ensureTable(panel);
+  const body = table.querySelector('tbody');
   const jobs = state.queue.jobs;
-  if (jobs.length === 0) {
-    panel.replaceChildren(hint('Nothing waiting.'));
-    return;
+
+  const empty = panel.querySelector('[data-field="queue-empty"]');
+  if (empty) empty.hidden = jobs.length > 0;
+  table.hidden = jobs.length === 0;
+
+  const wanted = new Set(jobs.map((job) => job.id));
+  for (const row of [...body.children]) {
+    if (!wanted.has(row.dataset.jobId)) row.remove();
   }
 
+  const existing = new Map([...body.children].map((row) => [row.dataset.jobId, row]));
+  for (const [index, job] of jobs.entries()) {
+    const row = existing.get(job.id) ?? buildRow(job);
+    updateRow(row, job, index, state);
+    // Appending a node already in the parent MOVES it. For a row already in
+    // the right place that is a no-op the browser optimises away, so a queue
+    // whose order has not changed does not touch the DOM at all.
+    body.appendChild(row);
+  }
+}
+
+// Created once. The header never changes, so rebuilding it is pure churn.
+function ensureTable(panel) {
+  const found = panel.querySelector('[data-field="queue-table"]');
+  if (found) return found;
+
   const table = document.createElement('table');
-  table.className = 'table table-sm mb-0';
+  table.className = 'table table-sm mb-0 queue-table';
+  table.dataset.field = 'queue-table';
+  // THREE COLUMNS, NOT FIVE. The left column is 19rem on a 1280px laptop and
+  // five columns of badges do not fit in it — the first version of this table
+  // grew a horizontal scrollbar, which on the panel a dispatcher lives in is
+  // worse than any amount of stacking. Age moves under the job id and the two
+  // badges share a wrapping cell, so all three sort keys are still on the row.
   table.innerHTML =
     '<thead><tr>' +
-    '<th>#</th><th>job</th><th>zone</th><th>safety</th>' +
-    '<th class="text-end">SLA used</th><th class="text-end">age</th>' +
-    '</tr></thead><tbody>' +
-    jobs.map((job, index) => renderRow(job, index)).join('') +
-    '</tbody>';
-
-  panel.replaceChildren(table);
+    '<th>#</th><th>job</th><th>risk &amp; sla</th>' +
+    '</tr></thead><tbody></tbody>';
+  panel.appendChild(table);
+  return table;
 }
 
-function renderRow(job, index) {
-  // Over 100% means the window has already closed. Shown as a number rather
-  // than clamped, because "300% over" and "105% over" are different problems
-  // and a dispatcher working a backlog needs to tell them apart.
-  const slaText =
-    job.slaResponseMinutes === null
-      ? '<span class="text-muted">no SLA</span>'
-      : `${(job.slaRisk * 100).toFixed(0)}%`;
-  const slaColour = job.slaRisk >= 1 ? 'var(--danger)' : job.slaRisk >= 0.75 ? 'var(--accent)' : '';
+function buildRow(job) {
+  const row = document.createElement('tr');
+  row.dataset.jobId = job.id;
+  row.innerHTML =
+    '<td class="text-muted" data-cell="rank"></td>' +
+    '<td data-cell="job"><div class="queue-age text-muted" data-cell="age"></div></td>' +
+    '<td class="queue-badges"><span data-cell="risk"></span> <span data-cell="sla"></span></td>';
 
-  return `
-    <tr>
-      <td class="text-muted">${index + 1}</td>
-      <td>
-        <button type="button" class="btn btn-link btn-sm p-0 mono" data-action="inspect"
-          data-job-id="${escapeHtml(job.id)}">${escapeHtml(job.id.slice(-8))}</button>
-      </td>
-      <td class="mono text-muted">${escapeHtml(job.zoneId)}</td>
-      <td class="${SAFETY_CLASS[job.safetyLevel] ?? ''}">${escapeHtml(job.safetyLevel)}</td>
-      <td class="text-end" style="color:${slaColour}">${slaText}</td>
-      <td class="text-end text-muted">${job.ageMinutes}m</td>
-    </tr>`;
+  const button = document.createElement('button');
+  button.type = 'button';
+  button.className = 'btn btn-link btn-sm p-0 mono';
+  button.dataset.action = 'inspect';
+  button.dataset.jobId = job.id;
+  button.textContent = job.id.slice(-8);
+  row.querySelector('[data-cell="job"]').prepend(button);
+
+  return row;
 }
 
-function hint(text) {
-  const box = document.createElement('div');
-  box.className = 'text-muted small';
-  box.textContent = text;
-  return box;
+// Every write is conditional. Setting textContent to the value it already
+// holds still dirties the node for the browser, and this runs on every event.
+function updateRow(row, job, index, state) {
+  setCell(row, 'rank', String(index + 1));
+  setCell(row, 'age', `${job.ageMinutes}m`);
+
+  const risk = SAFETY_BADGE[job.safetyLevel] ?? SAFETY_BADGE.NORMAL;
+  setBadge(row, 'risk', risk.label, risk.className);
+
+  const sla = slaBadge(job);
+  setBadge(row, 'sla', sla.label, sla.className);
+
+  // WHICH ROW IS BEING INVESTIGATED. The right-hand column is about one job,
+  // and without this there is nothing on screen saying which.
+  const selected = state.inspector.jobId === job.id;
+  if (row.classList.contains('is-selected') !== selected) {
+    row.classList.toggle('is-selected', selected);
+  }
 }
 
-function escapeHtml(value) {
-  return String(value ?? '')
-    .replaceAll('&', '&amp;')
-    .replaceAll('<', '&lt;')
-    .replaceAll('>', '&gt;')
-    .replaceAll('"', '&quot;');
+// COLOUR IS NEVER THE ONLY SIGNAL (docs/UI.md). Every one of these carries the
+// word as well — a left border and a red tint do not survive a colourblind
+// operator, a bad monitor, or the sun on a laptop screen.
+function slaBadge(job) {
+  if (job.slaResponseMinutes === null) {
+    return { label: 'NO SLA', className: 'badge-sla-none' };
+  }
+  // `slaRisk` is elapsed/window, so the window's remainder is the figure an
+  // operator actually acts on. Derived here rather than sent, because the
+  // server already sends both halves and a third field could disagree.
+  const remaining = Math.round(job.slaResponseMinutes - job.ageMinutes);
+  if (remaining <= 0) return { label: `SLA LATE ${-remaining}m`, className: 'badge-sla-late' };
+  if (job.slaRisk >= 0.75) return { label: `SLA ${remaining}m`, className: 'badge-sla-near' };
+  return { label: `SLA ${remaining}m`, className: 'badge-sla-ok' };
+}
+
+function setCell(row, cell, text) {
+  const node = row.querySelector(`[data-cell="${cell}"]`);
+  if (node && node.textContent !== text) node.textContent = text;
+}
+
+function setBadge(row, cell, label, className) {
+  const badge = row.querySelector(`[data-cell="${cell}"]`);
+  if (!badge) return;
+  const wanted = `queue-badge ${className}`;
+  if (badge.textContent !== label) badge.textContent = label;
+  if (badge.className !== wanted) badge.className = wanted;
 }

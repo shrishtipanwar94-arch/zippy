@@ -19,6 +19,7 @@
 import { describe, expect, it } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
+import { ACTION_KINDS } from '../src/domain/actionTiers.js';
 
 // CODE ONLY, COMMENTS STRIPPED — and this is the third time this project has
 // needed it. Phase 7's engine grep matched a comment explaining why Prisma was
@@ -92,9 +93,103 @@ describe('the panels that DO rebuild are the ones with nothing to lose', () => {
   // these show one selection's worth of content and change only when the
   // operator asks for something different, so there is no scroll position or
   // input state a rebuild would discard.
-  it('inspector, scarcity and queue use replaceChildren', () => {
-    for (const name of ['inspector.js', 'scarcity.js', 'queue.js']) {
+  //
+  // THE QUEUE USED TO BE ON THIS LIST AND SHOULD NEVER HAVE BEEN. It is a live,
+  // sorted, scrolling list that re-renders on every socket event — the same
+  // shape as the timeline, not the same shape as the inspector — and asserting
+  // its rebuild here made a defect look like a decision. Phase 22c moved it to
+  // the patching group below. The assertion was the thing that was wrong, not
+  // the panel.
+  it('inspector and scarcity use replaceChildren', () => {
+    for (const name of ['inspector.js', 'scarcity.js']) {
       expect(code(name), name).toMatch(/replaceChildren\(/);
     }
   });
 });
+
+// ---------------------------------------------------------------------------
+// THE PRIORITY QUEUE — the column a dispatcher lives in, and the one panel of
+// the three live lists that never followed the discipline.
+//
+// Phase 14's check is "scroll halfway down, wait, and see whether you are still
+// there". The queue failed it for a reason that had nothing to do with
+// performance: `replaceChildren` on every tick destroyed and recreated every
+// row, so a selection, a focused button and any text the operator had
+// highlighted all went with it — several times a minute on a busy board.
+
+describe('the priority queue patches rows rather than rebuilding the table', () => {
+  const source = code('queue.js');
+
+  it('never rebuilds its container', () => {
+    expect(source).not.toMatch(/replaceChildren\(/);
+    // `innerHTML` on a freshly created row element is fine and is how the cells
+    // are stamped out once; assigning it to the PANEL or the tbody is the
+    // defect, because that is what discards every existing node.
+    expect(source).not.toMatch(/panel\.innerHTML\s*=/);
+    expect(source).not.toMatch(/body\.innerHTML\s*=/);
+  });
+
+  it('keys rows by job so an existing one can be found and updated in place', () => {
+    expect(source).toMatch(/dataset\.jobId/);
+    expect(source).toMatch(/row\.remove\(\)/);
+  });
+
+  // Colour is never the only signal (docs/UI.md). Every risk and SLA state on a
+  // queue row carries its word, so the row survives a colourblind operator and
+  // a laptop screen in daylight.
+  it('labels risk and SLA in words, not only in colour', () => {
+    for (const word of ['HIGH RISK', 'ELEVATED', 'STANDARD', 'NO SLA', 'SLA LATE']) {
+      expect(source, word).toContain(word);
+    }
+  });
+});
+
+
+// ---------------------------------------------------------------------------
+// THE ACTION QUEUE'S LABEL MAP, against the kinds that actually exist.
+//
+// A CORRESPONDENCE BETWEEN A SERVER ENUM AND A BROWSER LABEL MAP is the exact
+// shape of bug the Phase 22b audit kept finding, and this is the third one:
+// `actions.js` opened with four labels, two of which — SLA_BREACH_FOLLOW_UP
+// and CONTENTION_REVIEW — named nothing the system has ever raised. So five of
+// the seven kinds a dispatcher can be shown fell through to the raw enum and
+// put ESCALATE_SLA_WINDOW_CLOSED on screen as a card title.
+//
+// Neither half is wrong on its own, which is why nothing caught it: the server
+// raises valid kinds and the browser renders whatever it is given. Only the
+// JOIN is wrong, so only a test that reads both can see it.
+
+describe('every action kind the system can raise has a label on the console', () => {
+  const source = code('actions.js');
+
+  // The map is a JS object literal in a panel this test cannot import, so both
+  // assertions read its source. `kindLabelKeys` isolates the KIND_LABEL block
+  // first — the file also holds TIER_LABEL, whose keys are legitimately not
+  // action kinds, and a scan over the whole file would flag them.
+  const labelled = kindLabelKeys(source);
+
+  it.each([...ACTION_KINDS])('has a plain-language label for %s', (kind) => {
+    expect(labelled.get(kind), kind).toBeTruthy();
+    // A key with an empty value would still be present, so the label's own text
+    // has to be checked as well.
+    expect((labelled.get(kind) ?? '').length, kind).toBeGreaterThan(4);
+  });
+
+  it('does not carry labels for kinds that do not exist', () => {
+    // The two invented keys are the reason this file exists. A label map with
+    // entries nothing can raise is a map nobody has checked against reality.
+    const known = new Set<string>(ACTION_KINDS);
+    expect([...labelled.keys()].filter((key) => !known.has(key))).toEqual([]);
+  });
+});
+
+// KIND_LABEL's own keys and values, read out of the panel's source.
+function kindLabelKeys(source: string): Map<string, string> {
+  const block = source.slice(source.indexOf('const KIND_LABEL'));
+  const body = block.slice(0, block.indexOf('};'));
+  const entries = new Map<string, string>();
+  for (const match of body.matchAll(/([A-Z][A-Z0-9_]+):\s*'([^']*)'/g)) {
+    entries.set(match[1]!, match[2]!);
+  }
+  return entries;
+}

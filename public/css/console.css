@@ -33,7 +33,6 @@ body.console {
 .timeline-row {
   border-bottom: 1px solid var(--border);
   padding: 0.25rem 0;
-  font-size: 0.8125rem;
 }
 
 .timeline-row.is-selected {
@@ -70,7 +69,6 @@ body.console {
  * of them does not read as a wall of alarm — most rejections are ordinary. */
 .reason-code {
   font-family: var(--mono);
-  font-size: 0.6875rem;
   border: 1px solid var(--border);
   border-radius: 3px;
   padding: 0 0.25rem;
@@ -138,4 +136,78 @@ body.console {
   border-top: 1px solid var(--border);
   margin-top: 0.375rem;
   padding-top: 0.375rem;
+}
+
+/* ---------------------------------------------------------------------------
+ * QUEUE BADGES. Every one carries its WORD, never colour alone (docs/UI.md) —
+ * the left-border tint this replaced did not survive a colourblind operator or
+ * a laptop screen in daylight.
+ */
+
+.queue-badge {
+  display: inline-block;
+  font-size: 0.75rem;
+  font-family: var(--mono);
+  line-height: 1.4;
+  padding: 0 0.3rem;
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  white-space: nowrap;
+  color: var(--text-muted);
+}
+
+.badge-risk-high {
+  color: var(--danger);
+  border-color: var(--danger);
+  font-weight: 700;
+}
+
+.badge-risk-elevated {
+  color: var(--accent);
+  border-color: var(--accent);
+}
+
+.badge-sla-late {
+  color: var(--danger);
+  border-color: var(--danger);
+  font-weight: 700;
+}
+
+.badge-sla-near {
+  color: var(--accent);
+  border-color: var(--accent);
+}
+
+.queue-table td {
+  vertical-align: middle;
+}
+
+/* WHICH ROW THE RIGHT-HAND COLUMN IS ABOUT. Without this there is nothing on
+ * screen tying the investigation column to the row that opened it. */
+.queue-table tr.is-selected {
+  background: rgb(245 158 11 / 0.12);
+  outline: 1px solid var(--accent);
+}
+
+/* The queue row's second line: how long this job has been waiting, under the id
+ * it belongs to. Two lines rather than a fifth column — the left column is
+ * 19rem on a laptop and five columns of badges do not fit in it. */
+.queue-age {
+  font-size: 0.75rem;
+}
+
+/* Both badges in one wrapping cell, so a long "SLA LATE 947m" drops below the
+ * risk badge instead of widening the whole table. */
+.queue-badges {
+  white-space: normal;
+  line-height: 1.6;
+}
+
+/* The job a queued action belongs to. Allowed to wrap and to shrink: a cuid is
+ * 25 characters and the monitoring column is 19rem on a laptop, so left
+ * unconstrained it clipped off the edge of every card. */
+.action-job {
+  word-break: break-all;
+  text-align: right;
+  min-width: 0;
 }

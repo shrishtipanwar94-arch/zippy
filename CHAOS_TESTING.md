@@ -27,7 +27,7 @@ DISPATCHER's `chaosControl` permission.
 | Live updates | Consoles poll every five seconds. | DEGRADED |
 | Planner | Best plan found before the deadline, flagged as incomplete. | DEGRADED |
 | Payments | Authorisations pending and retried; dispatch never blocked. | DEGRADED |
-| Automatic dispatch | Manual dispatcher workflow; queue visible, assignments by hand. | **CRITICAL** |
+| Automatic dispatch | Priority queue stays visible, writes still audited; new assignments resume on recovery. | **CRITICAL** |
 
 A component can never push the system past its own worst case. A probe that
 reported the symptom assistant as CRITICAL still leaves the system DEGRADED —
@@ -60,9 +60,9 @@ boring for everyone except the person typing.
 
 **What happens.** The solver queue is unreachable, so nothing re-plans
 automatically. `DISPATCH_CORE` goes **CRITICAL** and the console's banner turns
-red: *"Automatic dispatch is down. Manual dispatcher workflow: the queue stays
-visible and assignments are made by hand. Every write is still audited."* Live
-updates go with it — the Socket.IO fan-out uses the same Redis — so consoles
+red: *"Automatic dispatch is down (Automatic dispatch, Live updates). The
+priority queue stays visible and every write is still audited. New assignments
+resume automatically when dispatch recovers."* Live updates go with it — the Socket.IO fan-out uses the same Redis — so consoles
 fall back to polling at the same moment.
 
 **Observed.** `DISPATCH_CORE: CRITICAL`, `WEBSOCKET: DEGRADED`, system

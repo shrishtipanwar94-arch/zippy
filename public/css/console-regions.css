@@ -1,0 +1,150 @@
+/* THE CONSOLE'S INFORMATION ARCHITECTURE — where each panel sits, and nothing
+ * about how any of them look.
+ *
+ * Split from console.css in Phase 22c for the reason console.css was itself
+ * split from tokens.css in 22b: they are separate concerns and one file meant
+ * every change to either risked the other. This file answers "what goes where
+ * on the page"; console.css answers "what does a timeline row look like".
+ *
+ * THE FOUR REGIONS. The console had a dozen panels rendered as co-equal
+ * siblings, which is what "messy" actually meant — nothing on the page said
+ * where to look. Three columns that each answer one question, a strip above
+ * them that reports, and a collapsed drawer beneath for what is only glanced
+ * at:
+ *
+ *   REPORT       the health banner and the stat strip
+ *   MONITOR      left   — the three worklists: queue, actions, flagged messages
+ *   BOARD        centre — solve and plans, the map, the timeline
+ *   INVESTIGATE  right  — the one selected job
+ *   AMBIENT      bottom — scarcity, every job, the chaos panel
+ *
+ * THREE TYPE SIZES ON THIS PAGE AND NO MORE. 0.75rem for labels, badges, card
+ * headers and everything muted; 0.875rem (the body size) for content; 1.25rem
+ * for the three figures in the strip. Density is correct for an operator
+ * console — inconsistent density is what made it feel unfinished.
+ *
+ * Laptop-first. Three columns from 1200px, which is where a 13" screen lands
+ * once the browser chrome is off; below that they stack rather than crush.
+ */
+
+/* THE TYPE SCALE, PINNED. Three sizes, and this block is what makes that true
+ * rather than aspirational.
+ *
+ * Bootstrap's `.small` and `.badge` are sized in `em`, which is RELATIVE — so a
+ * `.small` inside a `.small` inside a card header rendered at 10.72px, and a
+ * badge inside muted text at 10.5px. A browser audit of this page found nine
+ * distinct font sizes where the design called for three, and none of them had
+ * been chosen by anybody: they were the arithmetic of nested relative units.
+ * That is exactly the "inconsistent density" that made the console feel
+ * unfinished.
+ *
+ * Pinning both to `rem` collapses the accidents onto the scale. Leaflet's own
+ * zoom controls are left alone — third-party widget chrome is not our type.
+ */
+.console .small,
+.console small,
+.console .badge,
+.console .reason-code,
+.console .timeline-row {
+  font-size: 0.75rem;
+}
+
+.console-grid {
+  display: grid;
+  gap: 0.75rem;
+  grid-template-columns: minmax(0, 1fr);
+}
+
+@media (min-width: 1200px) {
+  .console-grid {
+    grid-template-columns: 19rem minmax(0, 1fr) 23rem;
+  }
+}
+
+@media (min-width: 1600px) {
+  .console-grid {
+    grid-template-columns: 22rem minmax(0, 1fr) 28rem;
+  }
+}
+
+/* `min-width: 0` matters: without it a wide table inside a grid column refuses
+ * to shrink and pushes the other two columns off screen. */
+.console-col {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+  min-width: 0;
+}
+
+.console-map {
+  height: 18rem;
+}
+
+/* The queue scrolls inside its own card rather than stretching the left column
+ * to the height of a fifty-job board. Because rows are PATCHED rather than
+ * rebuilt, this scroll position survives an event tick — which is the Phase 14
+ * check, applied to the panel that had never obeyed it. */
+.queue-scroll {
+  max-height: 28rem;
+  overflow-y: auto;
+}
+
+/* ---------------------------------------------------------------------------
+ * THE STAT STRIP. Reports; does not compete. No card, no border, no chart —
+ * three figures on the page background so the eye passes over them on the way
+ * to the columns unless one of them is amber.
+ */
+
+.stat-strip {
+  display: flex;
+  gap: 1.5rem;
+  flex-wrap: wrap;
+  padding: 0.25rem 0.125rem;
+  border-bottom: 1px solid var(--border);
+}
+
+.stat {
+  display: flex;
+  align-items: baseline;
+  gap: 0.5rem;
+}
+
+.stat-label {
+  font-size: 0.75rem;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.stat-value {
+  font-size: 1.25rem;
+  font-weight: 650;
+  font-variant-numeric: tabular-nums;
+  line-height: 1.1;
+}
+
+/* Amber only when the number is one worth acting on. A permanently coloured
+ * strip is a strip nobody reads — the same argument the health banner makes
+ * for staying hidden while everything is normal. */
+.stat-value.is-urgent {
+  color: var(--accent);
+}
+
+/* ---------------------------------------------------------------------------
+ * THE AMBIENT DRAWER. Collapsed, muted, and last in tab order: the console
+ * should open on the three working columns, not on a reference table.
+ */
+
+.console-ambient > summary {
+  font-size: 0.75rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--text-muted);
+  cursor: pointer;
+  padding: 0.375rem 0;
+}
+
+.console-ambient[open] > summary {
+  border-bottom: 1px solid var(--border);
+  margin-bottom: 0.5rem;
+}

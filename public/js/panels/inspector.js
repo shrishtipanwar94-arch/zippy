@@ -29,7 +29,11 @@ export function render(state) {
 
   const decision = state.inspector.decision;
   if (!decision) {
-    panel.replaceChildren(hint('Select a job from the timeline to see why its crew was chosen.'));
+    // RULE ONE OF THE READABILITY PASS: one line, not six empty cards. This
+    // column is about a single job and says so until there is one.
+    panel.replaceChildren(
+      hint('Pick a job from the priority queue to see why its crew was chosen, what was rejected, and where a tow would go.'),
+    );
     return;
   }
 

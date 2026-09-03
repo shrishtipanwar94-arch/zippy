@@ -43,6 +43,7 @@ import { render as renderHealth } from '../panels/health.js';
 import { render as renderChaos } from '../panels/chaos.js';
 import { render as renderEscalation } from '../panels/escalation.js';
 import { render as renderActions } from '../panels/actions.js';
+import { render as renderStats } from '../panels/stats.js';
 // THE CONFIRMATION CARDS (Phase 15b), on the console for the first time in
 // Phase 22b. The technician's page is the reference implementation — the same
 // two calls, the same shared handlers — because a dispatcher confirming a
@@ -63,6 +64,7 @@ registerPanel(renderHealth);
 registerPanel(renderChaos);
 registerPanel(renderEscalation);
 registerPanel(renderActions);
+registerPanel(renderStats);
 registerChatPanels();
 // Wires the confirm/dismiss delegation. The message, photo and location
 // handlers it also offers find no controls on this page and bind nothing.

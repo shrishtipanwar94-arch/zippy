@@ -30,11 +30,32 @@ const TIER_LABEL = {
 // REASSIGN_AFTER_DIAGNOSIS_CHANGE three times this week knows more about their
 // fleet than the sentence alone tells them, exactly as the escalation card
 // shows its feasibility code.
+//
+// ONE ENTRY PER KIND IN src/domain/actionTiers.ts, INCLUDING THE AUTO ONES.
+// Two of the four keys this map opened with — `SLA_BREACH_FOLLOW_UP` and
+// `CONTENTION_REVIEW` — were names nothing in the system has ever raised, so
+// five of the seven kinds a dispatcher can actually be shown fell through to
+// the raw enum and rendered ESCALATE_SLA_WINDOW_CLOSED as the card's title.
+// tests/consolePanels.test.ts now asserts this map against ACTION_KINDS so the
+// two cannot drift again.
+//
+// The AUTO kinds are here even though `GET /actions` only returns rows still
+// waiting on a person: an AUTO action resolves the moment it is requested, but
+// a slow write or a future change that surfaces resolved rows should not put an
+// enum on screen to announce it.
 const KIND_LABEL = {
+  NOTIFY_ETA_CHANGED: 'Told the driver their arrival time moved',
+  RELEASE_EXPIRED_HOLD: 'Released a hold that had already expired',
+  NOTIFY_DIAGNOSIS_CONFIRMED: 'Told the driver the diagnosis was confirmed',
+
   REASSIGN_AFTER_DIAGNOSIS_CHANGE: 'Reassign — the diagnosis changed',
   REASSIGN_AFTER_TRIGGER: 'Reassign — a re-plan trigger fired',
-  SLA_BREACH_FOLLOW_UP: 'SLA breach — follow up',
-  CONTENTION_REVIEW: 'Two jobs want the same crew',
+  RELEASE_TECHNICIAN_NO_LONGER_NEEDED: 'Release a crew this job no longer needs',
+  ESCALATE_SLA_WINDOW_CLOSED: 'SLA window closed — commercial follow-up',
+
+  ESCALATE_THRASHING_JOB: 'This job keeps being re-planned',
+  CANCEL_JOB: 'Cancel this job',
+  APPROVE_CROSS_TENANT_CONTENTION: 'Two jobs want the same crew',
 };
 
 export function render(state) {
@@ -73,7 +94,7 @@ function cardMarkup(action) {
           <strong class="ms-1">${escapeHtml(KIND_LABEL[action.kind] ?? action.kind)}</strong>
           <div class="reason-code d-inline-block ms-1">${escapeHtml(action.kind)}</div>
         </div>
-        <span class="mono">${escapeHtml(action.jobId ?? '—')}</span>
+        <span class="mono action-job">${escapeHtml(action.jobId ?? '—')}</span>
       </div>
 
       <p class="small mb-1 mt-1">${escapeHtml(action.reason)}</p>

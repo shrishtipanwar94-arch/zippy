@@ -70,7 +70,10 @@ describe('the chaos switches move the ladder and let go of it', () => {
     // And the whole system is CRITICAL, which is the one roll-up safe to
     // assert here: no other suite can produce it.
     expect(response.body.health.mode).toBe('CRITICAL');
-    expect(response.body.health.message).toContain('by hand');
+    // The banner says what an operator can still DO, and no longer promises the
+    // manual assignment screen that was cut at Phase 9 and only admitted at
+    // 22c — tests/degradation.test.ts holds the assertion that keeps it cut.
+    expect(response.body.health.message).toContain('queue stays visible');
   });
 
   it('recovers on its own once the switch goes back', async () => {

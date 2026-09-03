@@ -17,7 +17,12 @@
 // the switches move the ladder lives in tests/chaosRoutes.test.ts.
 
 import { describe, expect, it } from 'vitest';
-import { describeMode, ladderEntry, systemMode } from '../src/domain/healthLadder.js';
+import {
+  HEALTH_COMPONENTS,
+  describeMode,
+  ladderEntry,
+  systemMode,
+} from '../src/domain/healthLadder.js';
 import type { ComponentReading } from '../src/domain/healthLadder.js';
 import { buildEscalationCard } from '../src/domain/escalationCard.js';
 import type { RejectedOptionView } from '../src/domain/escalationCard.js';
@@ -75,8 +80,28 @@ describe('the ladder rolls up', () => {
 
   it('says what still works when dispatch is down, rather than that it is down', () => {
     const message = describeMode('CRITICAL', [reading('DISPATCH_CORE', 'CRITICAL')]);
-    expect(message).toContain('by hand');
+    expect(message).toContain('queue stays visible');
     expect(message).toContain('audited');
+  });
+
+  // THE BANNER MUST NOT PROMISE A SCREEN THAT DOES NOT EXIST.
+  //
+  // This sentence said "assignments are made by hand" from Phase 17 until
+  // Phase 22b's audit found it. The per-row unit dropdown that would have been
+  // that screen was deliberately removed at Phase 9, so for five phases the one
+  // message an operator reads DURING AN OUTAGE told them to do something the
+  // console cannot do. The manual workflow is cut, not pending (DECISIONS.log),
+  // and this is the assertion that stops the promise coming back.
+  //
+  // Phrased against the whole ladder rather than the one entry, because the
+  // same mistake is available to every fallback here: `guidanceFor` and the
+  // GPS entry were each corrected for a version of it already.
+  it('never promises a manual assignment workflow that does not exist', () => {
+    for (const component of HEALTH_COMPONENTS) {
+      const { fallback } = ladderEntry(component);
+      expect(fallback, component).not.toMatch(/by hand/i);
+      expect(fallback, component).not.toMatch(/manually assign|assign manually/i);
+    }
   });
 });
 

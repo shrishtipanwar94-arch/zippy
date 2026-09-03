@@ -115,3 +115,101 @@ message delivery; Bootstrap 5.3 colour modes; WCAG 2.2 target sizing.
 happens?" — answerable with the reconciliation worker and, more importantly,
 with why a webhook is not sufficient. And: "how did you find the concurrency bug
 in your own payment path?" — by adding a second caller and clicking the button.
+
+## Phase 22c — the CRITICAL cut, and the dispatcher readability pass / 2026-09-03 / (this commit)
+
+### Built
+- `src/domain/healthLadder.ts` — DISPATCH_CORE's `fallback` sentence rewritten.
+- `public/dispatcher.html` restructured into four regions; `public/css/console.css`
+  gains the region rules. `public/js/panels/queue.js` patches rows by
+  `data-job-id`; new `public/js/panels/stats.js`. No route, table or engine
+  change — see below.
+
+### Decisions
+
+**Decision** Cut the manual-assignment workflow Phase 17 specifies, and correct
+the sentence that promised it, rather than build it.
+**Why** `healthLadder.ts`'s DISPATCH_CORE fallback told an operator, mid-outage,
+that "the queue stays visible and assignments are made by hand". The first
+clause is true. The second described a screen that has never existed: the
+per-row unit dropdown that would have been it was deliberately removed at
+Phase 9, when the board moved from picking units one job at a time to choosing
+between whole plans. Phase 22b's audit found the promise still standing.
+**Alternative** Build a manual assignment path — a unit picker per queue row,
+writing a hold and a commit directly, bypassing the solver.
+**Why not** Three reasons, in order of weight. (1) It reintroduces exactly the
+greedy per-job assignment Phase 9 removed, and it would sit in the codebase
+permanently for a mode that lasts as long as a Redis outage. (2) CRITICAL
+recovers on its own inside one fifteen-second probe cycle; the workflow's whole
+audience is a dispatcher in a window that closes by itself. (3) It would need
+its own hold/commit path around the saga — the one piece of this system where a
+second write path is genuinely dangerous.
+**Tradeoff** During CRITICAL nothing new is assigned at all; a dispatcher can
+read the queue and talk to people, and that is the whole of it. Accepted, and
+now stated on the banner instead of being contradicted by it. The build plan's
+own §1546 wording is left unedited as the historical spec.
+
+**Decision** The action queue and promotion cards live in the LEFT (monitoring)
+column, not the right-hand investigation column.
+**Why** Checked against the real data rather than assumed. `GET /actions`
+returns every PENDING row across all jobs ordered by tier then age, and a solve
+raises `APPROVE_CROSS_TENANT_CONTENTION` on whichever jobs lost a contested
+unit — so in a fifty-job board the queue routinely spans jobs the dispatcher has
+not selected. Promotions are the same shape: they arrive over the zone room for
+any job in the dispatcher's geography. Both answer "what needs me now", which is
+the left column's question.
+**Alternative** The right column, filtered to the selected job.
+**Why not** Filtering would hide pending approvals for every other job, which is
+a functional regression dressed as a layout change; not filtering would put
+cross-job rows in a column whose header says it is about one job.
+**Tradeoff** The left column is now two lists deep and is the densest part of
+the page. Correct for the column a dispatcher lives in.
+
+**Decision** Competing plans stay in the CENTRE (board) region, beside Solve —
+not in the right-hand column.
+**Why** A plan is a statement about the whole board: `POST /plans/:id/select`
+records a decision for every assignment in it. Putting it in a column that is
+empty until a job is selected would mean a dispatcher could not press Solve and
+take a plan without first clicking an unrelated job.
+**Alternative** Follow the brief exactly and move plans right.
+**Why not** It collides with the brief's own rule 1 — nothing job-scoped renders
+until a job is selected — because plans are not job-scoped.
+**Tradeoff** The override reason input is therefore in the centre while the
+recorded override reason renders in the right column's inspector. Two places,
+one subject. Acceptable: one is an input about a plan, the other is a fact about
+a job.
+
+### Concurrency
+Nothing new. This phase adds no route, no write and no queue. The one behavioural
+change is that `queue.js` patches rows instead of rebuilding the table, which
+removes a DOM rebuild racing an operator's selection — a UI race, not a data one.
+
+### Weaknesses introduced
+- The right column's sections are stacked, not tabbed. On a 1280×800 laptop with
+  a job selected and many rejected options, it scrolls. Judged better than tabs,
+  which hide the rejected list behind a click when it is the second most useful
+  thing on the screen — but it is a real limit at this width.
+- The stat strip's three numbers are derived in the browser from state the page
+  already holds, not read from an endpoint. They cannot disagree with the panels
+  below them (same source), but they are the first numbers on this console not
+  computed server-side. If a fourth consumer ever needs them, they should move.
+- The queue's row patching keys on `data-job-id` and re-sorts by removing and
+  re-appending rows in order. A queue whose ORDER changes still moves under the
+  operator; only the rebuild-on-every-tick is fixed. Does not matter at current
+  scale — order changes when safety or SLA changes, which is rare and is
+  exactly when moving is correct.
+
+### Concepts now genuinely in use
+Keyed DOM reconciliation applied to a sorted list (as opposed to the timeline's
+append-only case); region-based information architecture as a substitute for a
+component library; correcting a user-facing claim as the cheaper half of a
+build-or-cut decision.
+
+### Interview angle
+"Your degraded-mode banner promised a screen that did not exist. How did that
+happen and what did you do?" — answerable with the Phase 9 removal, the Phase 17
+spec written before it, and the choice to correct the sentence rather than
+rebuild a workflow whose audience is a fifteen-second window. And: "how do you
+decide what goes where on an operator console?" — monitoring versus
+investigating, tested against which panels are actually job-scoped, which is how
+the action queue ended up on the other side from where the brief put it.

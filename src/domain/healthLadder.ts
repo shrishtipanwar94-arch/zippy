@@ -87,7 +87,18 @@ const LADDER: Record<HealthComponent, LadderEntry> = {
   DISPATCH_CORE: {
     component: 'DISPATCH_CORE',
     label: 'Automatic dispatch',
-    fallback: 'Manual dispatcher workflow: the queue stays visible and assignments are made by hand. Every write is still audited.',
+    // WHAT ACTUALLY HAPPENS, not what would be nice. This sentence used to
+    // promise "assignments are made by hand", and the screen for doing that
+    // does not exist — the per-row unit dropdown was deliberately removed at
+    // Phase 9, and Phase 22b's audit found the promise still standing. A
+    // fallback describing a workflow an operator cannot reach is a silent
+    // degraded state wearing a banner, which is the exact failure the GPS entry
+    // above was already corrected for.
+    //
+    // The manual workflow is CUT rather than pending (see DECISIONS.log). So
+    // this now says the two true things: the queue does not disappear, and the
+    // outage is what an operator is waiting on.
+    fallback: 'The priority queue stays visible and every write is still audited. New assignments resume automatically when dispatch recovers.',
     worstCase: 'CRITICAL',
   },
 };

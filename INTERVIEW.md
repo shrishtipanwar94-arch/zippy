@@ -805,11 +805,13 @@ ever had.
   report prints "treat the entropy-driven hedging as unproven rather than
   validated", because it is written to print whichever way the number falls.
 
-- *What does CRITICAL mean in your system?* Not a crash. The queue is still on
-  screen, assignments are made by hand, and every write is still audited. It is
-  reached by exactly one component — the solver queue being unreachable — and
-  it recovers on its own within one fifteen-second probe cycle once the queue
-  is back.
+- *What does CRITICAL mean in your system?* Not a crash. The priority queue is
+  still on screen, ordered as always, and every write is still audited — what
+  stops is automatic RE-PLANNING. It is reached by exactly one component, the
+  solver queue being unreachable, and it recovers on its own within one
+  fifteen-second probe cycle once the queue is back. The banner said
+  "assignments are made by hand" until Phase 22b; that screen was cut at
+  Phase 9 and the sentence was corrected rather than the workflow rebuilt (§15).
 
 - *Your planner is O(n³). What happens when it does not finish?* It is given a
   deadline and checks it BEFORE candidate generation, because generation is the

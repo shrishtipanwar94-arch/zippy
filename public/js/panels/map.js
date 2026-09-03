@@ -61,6 +61,34 @@ export function render(state) {
     // ONE layer group for the life of the page. Markers are added to and
     // removed from it individually; it is never replaced.
     markerLayer = L.layerGroup().addTo(map);
+
+    // LEAFLET CACHES ITS CONTAINER'S SIZE at construction and has no way to
+    // learn that the page moved underneath it. Phase 22c put this panel in a
+    // CSS grid column, which lays out after the map is built — so the tiles
+    // rendered into a stale, much smaller box and the rest of the card stayed
+    // grey. `invalidateSize` is the documented fix; a ResizeObserver is what
+    // makes it fire without a render loop calling it on every socket event.
+    // `pan: false` matters as much as the call itself: the default pans the view
+    // to preserve the centre point, so an observer that fires on every layout
+    // change would walk the operator's map around underneath them once the
+    // console starts resizing panels. This is a correction to Leaflet's idea of
+    // the box, and after the first one it must move nothing.
+    //
+    // THE FIRST FIRE IS DIFFERENT, and re-centres. The map was constructed
+    // against a box the grid had not laid out yet, so its centre is anchored to
+    // the wrong origin — `invalidateSize` alone widens the viewport from that
+    // wrong anchor and leaves Bengaluru off the edge. Re-applying the opening
+    // view once is the only way to recover the intended framing; doing it every
+    // time would yank a panning operator back to the city.
+    if (typeof ResizeObserver === 'function') {
+      let sized = false;
+      new ResizeObserver(() => {
+        map.invalidateSize({ animate: false, pan: false });
+        if (sized) return;
+        sized = true;
+        map.setView(BENGALURU, DEFAULT_ZOOM, { animate: false });
+      }).observe(container);
+    }
   }
 
   const jobs = mappableJobs(state);

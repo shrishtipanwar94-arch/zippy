@@ -16,10 +16,43 @@
     />
     <link href="/css/tokens.css" rel="stylesheet" />
     <link href="/css/console.css" rel="stylesheet" />
+    <link href="/css/console-regions.css" rel="stylesheet" />
   </head>
+  <!--
+    THE DISPATCH CONSOLE, IN FOUR REGIONS.
+
+    Every panel that was here is still here and still works. What changed is
+    where each one sits, because a dispatcher does two different jobs on this
+    screen and the old layout rendered a dozen co-equal cards that did not say
+    which was which:
+
+      REPORT      the health banner and a three-figure strip. Static, small,
+                  never competing for attention.
+      MONITOR     left. The priority queue, the action queue, and flagged
+                  messages — the three lists that answer "what needs me now".
+                  This is the column a dispatcher lives in.
+      BOARD       centre. Solve and the competing plans, the map, the incident
+                  timeline. The whole fleet rather than one job.
+      INVESTIGATE right. Everything that answers a question about the ONE
+                  SELECTED JOB, in a single column with section headings —
+                  why this crew, what was rejected, which workshops were
+                  screened, and the escalation card when nothing was feasible.
+                  Renders one line until a job is picked.
+      AMBIENT     bottom. Capability scarcity, the raw job table, and the chaos
+                  controls in a dev build. Glanced at, not worked in.
+
+    TWO THINGS SIT WHERE THE BRIEF DID NOT PUT THEM, both deliberate and both
+    recorded in DECISIONS.log. The ACTION QUEUE is on the left, not the right:
+    GET /actions returns every pending row across every job, so filtering it to
+    the selected job would hide approvals, and not filtering it would put
+    cross-job rows under a heading that says "this job". COMPETING PLANS are in
+    the centre, not the right: a plan is a statement about the whole board, and
+    putting it in a column that stays empty until a job is selected would mean
+    a dispatcher could not press Solve without first clicking an unrelated job.
+  -->
   <body class="p-3 console">
-    <div class="d-flex align-items-center gap-2 mb-3">
-      <h1 class="h4 mb-0">Dispatcher</h1>
+    <div class="d-flex align-items-center gap-2 mb-2">
+      <h1 class="h6 mb-0 text-uppercase">Dispatcher</h1>
       <span data-field="connection" class="badge bg-secondary">disconnected</span>
       <span data-field="session" class="text-muted small">signed out</span>
       <a href="/" class="ms-auto small">index</a>
@@ -40,98 +73,107 @@
     </form>
 
     <div data-panel="workspace" hidden>
+      <!-- ================= REPORT ================= -->
+
       <!-- THE DEGRADATION BANNER (Phase 17). Hidden while everything is
            normal — a permanent green bar is furniture that stops being read.
            Every word in it is written by the server (src/domain/
-           healthLadder.ts); this page picks a colour. -->
-      <div data-panel="health" class="alert alert-warning py-2 px-3 mb-3" hidden>
+           healthLadder.ts); this page picks a colour.
+
+           The degraded-payments drill-through lives INSIDE this banner rather
+           than in the ambient strip: it is a disclosure control on the
+           "3 authorisations waiting" line, and a button separated from the
+           count it opens is worse in both places. -->
+      <div data-panel="health" class="alert alert-warning py-2 px-3 mb-2" hidden>
         <div data-field="health-message" class="fw-semibold"></div>
         <ul data-field="health-components" class="mb-0 mt-1 small"></ul>
       </div>
 
-      <!-- THE BREAK-IT PANEL. Rendered only if the server answers GET /chaos,
-           which a production build does not — there is no build flag in the
-           browser to get wrong. -->
-      <details data-panel="chaos" class="card mb-3" hidden>
-        <summary class="card-header">Chaos controls — dev and demo builds only</summary>
-        <div class="card-body p-2">
-          <div class="row g-3">
-            <div class="col-md-6">
-              <p class="small text-muted mb-1">Stays on until switched back:</p>
-              <div data-field="chaos-switches"></div>
-            </div>
-            <div class="col-md-6">
-              <p class="small text-muted mb-1">Happens once:</p>
-              <div class="d-grid gap-1">
-                <button class="btn btn-sm btn-outline-warning" data-chaos-action="TECHNICIAN_OFFLINE">
-                  Take a technician offline
-                </button>
-                <button class="btn btn-sm btn-outline-warning" data-chaos-action="BREAK_UNIT">
-                  Break a unit
-                </button>
-                <button class="btn btn-sm btn-outline-warning" data-chaos-action="DECLINE_DESTINATION">
-                  Force a destination decline
-                </button>
-                <button class="btn btn-sm btn-outline-warning" data-chaos-action="INJECT_JOBS">
-                  Inject 5 jobs
-                </button>
-              </div>
-            </div>
-          </div>
-          <div class="d-flex align-items-center gap-2 mt-3">
-            <button class="btn btn-sm btn-success" data-action="chaos-reset">Reset everything</button>
-            <span data-field="chaos-note" class="small text-muted"></span>
-          </div>
+      <!-- THREE FIGURES, and nothing else at this altitude. Counted in the
+           browser from the same state the panels below render — see
+           panels/stats.js for why that is a deliberate limit. -->
+      <div data-panel="stats" class="stat-strip mb-2" hidden>
+        <div class="stat">
+          <span class="stat-label">Active incidents</span>
+          <span class="stat-value" data-field="stat-active">0</span>
         </div>
-      </details>
+        <div class="stat">
+          <span class="stat-label">SLA at risk</span>
+          <span class="stat-value" data-field="stat-sla-risk">0</span>
+        </div>
+        <div class="stat">
+          <span class="stat-label">Pending approvals</span>
+          <span class="stat-value" data-field="stat-approvals">0</span>
+        </div>
+      </div>
 
-      <p class="small text-muted">
-        Jobs on the board: <span data-field="job-count">0</span>. Rows are patched by
-        <code>data-job-id</code>; the table is never rebuilt.
-      </p>
-      <button data-action="solve" class="btn btn-primary mb-2">Solve — plan every pending job</button>
-      <span data-field="solve-summary" class="ms-2 small text-muted"></span>
-
-      <!-- THE THREE PLANS. Phase 4's per-row unit dropdown lived in this page
-           and is gone: a dispatcher chooses between whole plans now, not
-           between units one job at a time. Selecting one RECORDS the decision
-           (and its override reason); it does not reserve anything — that is
-           Phase 13's action queue, one job at a time. -->
-      <div data-field="plan-error" class="alert alert-warning py-1 px-2 small" hidden></div>
-      <div class="row g-2 mb-3" data-panel="plans"></div>
-
-      <!-- THE CONSOLE. Two panels side by side: what happened, and why the
-           system decided what it did about it. Phase 14 Stage 1 builds only
-           these two — the scarcity panel, competing plans, the priority queue
-           and the map are later stages. -->
-      <!-- SCARCITY AND THE QUEUE. Two whole-board reads: what the fleet is thin
-           on, and which job to look at next. Both refresh on demand rather
-           than per event — a single job event rarely changes either. -->
-      <div class="row g-3 mb-3">
-        <div class="col-lg-5">
-          <div class="card h-100">
+      <div class="console-grid">
+        <!-- ================= MONITOR (left) ================= -->
+        <section class="console-col" aria-label="What needs attention">
+          <div class="card">
             <div class="card-header d-flex gap-2 align-items-center">
-              <span>Capability scarcity</span>
+              <span>Priority queue</span>
               <button data-action="refresh-board" class="btn btn-sm btn-outline-secondary ms-auto py-0">
                 Refresh
               </button>
             </div>
-            <div class="card-body p-2" data-panel="scarcity"></div>
+            <div class="card-body p-2 queue-scroll">
+              <p class="small text-muted mb-2">Safety, then SLA risk, then age.</p>
+              <!-- Rows are patched by data-job-id; the table is never rebuilt. -->
+              <div data-panel="queue">
+                <div class="text-muted small" data-field="queue-empty">Nothing waiting.</div>
+              </div>
+            </div>
           </div>
-        </div>
-        <div class="col-lg-7">
-          <div class="card h-100">
-            <div class="card-header">Priority queue — safety first, then SLA risk, then age</div>
-            <div class="card-body p-2" data-panel="queue"></div>
-          </div>
-        </div>
-      </div>
 
-      <div class="row g-3 mb-3">
-        <div class="col-lg-7">
-          <div class="card h-100">
+          <!-- THE ACTION QUEUE (Phase 13). RECOMMEND and APPROVE rows waiting
+               on a person, across every job — which is why it is here and not
+               in the investigation column. -->
+          <div data-panel="actions"></div>
+
+          <!-- FLAGGED MESSAGES WAITING ON AN OPERATOR (Phase 15b). Arrive over
+               the zone room for any job in this dispatcher's geography, so
+               they are a worklist too. Each card names its own job. Safety
+               cards are the driver's alone and are filtered out by the panel. -->
+          <div data-panel="promotions" data-show-job="true"></div>
+        </section>
+
+        <!-- ================= BOARD (centre) ================= -->
+        <section class="console-col" aria-label="The board">
+          <div class="card">
             <div class="card-header d-flex gap-2 align-items-center">
-              <span>Live incident timeline</span>
+              <span>Plan the board</span>
+              <span data-field="solve-summary" class="ms-auto text-muted"></span>
+            </div>
+            <div class="card-body p-2">
+              <button data-action="solve" class="btn btn-primary btn-sm mb-2">
+                Solve — plan every pending job
+              </button>
+              <div data-field="plan-error" class="alert alert-warning py-1 px-2 small" hidden></div>
+              <!-- THE THREE PLANS. Phase 4's per-row unit dropdown lived in
+                   this page and is gone: a dispatcher chooses between whole
+                   plans now, not between units one job at a time. Selecting one
+                   RECORDS the decision (and its override reason); it does not
+                   reserve anything — that is Phase 13's action queue. -->
+              <div class="row g-2" data-panel="plans"></div>
+            </div>
+          </div>
+
+          <!-- THE LIVE MAP. Markers are created once and moved in place — see
+               panels/map.js. -->
+          <div class="card">
+            <div class="card-header d-flex gap-2 align-items-center">
+              <span>Live map</span>
+              <span data-field="map-summary" class="ms-auto text-muted"></span>
+            </div>
+            <div class="card-body p-0">
+              <div data-panel="map" class="console-map"></div>
+            </div>
+          </div>
+
+          <div class="card">
+            <div class="card-header d-flex gap-2 align-items-center">
+              <span>Incident timeline</span>
               <span data-field="timeline-summary" class="ms-auto text-muted"></span>
             </div>
             <div class="card-body p-2" data-panel="timeline">
@@ -166,35 +208,22 @@
               </div>
             </div>
           </div>
-        </div>
+        </section>
 
-        <div class="col-lg-5">
-          <div class="card h-100">
-            <div class="card-header">Why this technician?</div>
+        <!-- ================= INVESTIGATE (right) ================= -->
+        <!-- ONE COLUMN, ONE SUBJECT: the selected job. Everything in here is
+             empty until a row is picked, and says so in one line rather than
+             showing six empty cards. -->
+        <section class="console-col" aria-label="The selected job">
+          <div class="card">
+            <div class="card-header">Selected job</div>
             <div class="card-body p-2" data-panel="inspector"></div>
           </div>
 
           <!-- WHEN THERE IS NO PLAN AT ALL. UNSERVICEABLE is a handover, not
                an end state: the reason with its feasibility code, the option
                that came closest, and three things a dispatcher can do. -->
-          <!-- THE ACTION QUEUE (Phase 13). RECOMMEND and APPROVE rows waiting
-               on a person. The backend has served these since Phase 13 and
-               nothing rendered them until Phase 22b's audit — a queue nobody
-               can see is a queue nobody works. -->
-          <div data-panel="actions"></div>
-
-          <!-- FLAGGED MESSAGES WAITING ON AN OPERATOR (Phase 15b). A driver's
-               message that proposed a location correction or an access
-               restriction is confirmed by whoever is driving the road or
-               looking at the map — src/domain/promotionPolicy.ts routes both to
-               OPERATOR, which means the assigned technician OR a dispatcher.
-               The technician's page has had this panel since Phase 15b; this
-               console never did, and could not have received the card anyway
-               (see realtime/publish.ts). Safety cards are the driver's alone
-               and are filtered out by the panel. -->
-          <div data-panel="promotions" data-show-job="true" class="mt-3"></div>
-
-          <div data-panel="escalation" class="card mt-3 border-danger" hidden>
+          <div data-panel="escalation" class="card border-danger" hidden>
             <div class="card-header text-danger">No plan for this job</div>
             <div class="card-body p-2">
               <p class="mb-1"><strong data-field="escalation-reason"></strong></p>
@@ -210,34 +239,80 @@
               <p class="small text-success mt-2 mb-0" data-field="escalation-decided" hidden></p>
             </div>
           </div>
-        </div>
+        </section>
       </div>
 
-      <!-- THE LIVE MAP. Built last and deliberately: most time, least insight.
-           Markers are created once and moved in place — see panels/map.js. -->
-      <div class="card mb-3">
-        <div class="card-header d-flex gap-2 align-items-center">
-          <span>Live map</span>
-          <span data-field="map-summary" class="ms-auto text-muted"></span>
+      <!-- ================= AMBIENT (bottom) ================= -->
+      <!-- Muted, smaller, and last in tab order: things you glance at rather
+           than work in. Collapsed by default so the console opens on the three
+           columns above. -->
+      <details class="console-ambient mt-3">
+        <summary>Fleet reference — scarcity, every job, and the break-it panel</summary>
+        <div class="row g-3 mt-0">
+          <div class="col-lg-4">
+            <div class="card h-100">
+              <div class="card-header">Capability scarcity</div>
+              <div class="card-body p-2" data-panel="scarcity"></div>
+            </div>
+          </div>
+          <div class="col-lg-8">
+            <div class="card h-100">
+              <div class="card-header">Every job on the board</div>
+              <div class="card-body p-2">
+                <table class="table table-sm mb-0" data-panel="jobs-table">
+                  <thead>
+                    <tr>
+                      <th>job</th>
+                      <th>status</th>
+                      <th>safety</th>
+                      <th>events</th>
+                      <th>latest</th>
+                      <th>unit</th>
+                    </tr>
+                  </thead>
+                  <tbody></tbody>
+                </table>
+              </div>
+            </div>
+          </div>
         </div>
-        <div class="card-body p-0">
-          <div data-panel="map" style="height: 22rem"></div>
-        </div>
-      </div>
 
-      <table class="table table-sm" data-panel="jobs-table">
-        <thead>
-          <tr>
-            <th>job</th>
-            <th>status</th>
-            <th>safety</th>
-            <th>events</th>
-            <th>latest</th>
-            <th>unit</th>
-          </tr>
-        </thead>
-        <tbody></tbody>
-      </table>
+        <!-- THE BREAK-IT PANEL. Rendered only if the server answers GET /chaos,
+             which a production build does not — there is no build flag in the
+             browser to get wrong. -->
+        <details data-panel="chaos" class="card mt-3" hidden>
+          <summary class="card-header">Chaos controls — dev and demo builds only</summary>
+          <div class="card-body p-2">
+            <div class="row g-3">
+              <div class="col-md-6">
+                <p class="small text-muted mb-1">Stays on until switched back:</p>
+                <div data-field="chaos-switches"></div>
+              </div>
+              <div class="col-md-6">
+                <p class="small text-muted mb-1">Happens once:</p>
+                <div class="d-grid gap-1">
+                  <button class="btn btn-sm btn-outline-warning" data-chaos-action="TECHNICIAN_OFFLINE">
+                    Take a technician offline
+                  </button>
+                  <button class="btn btn-sm btn-outline-warning" data-chaos-action="BREAK_UNIT">
+                    Break a unit
+                  </button>
+                  <button class="btn btn-sm btn-outline-warning" data-chaos-action="DECLINE_DESTINATION">
+                    Force a destination decline
+                  </button>
+                  <button class="btn btn-sm btn-outline-warning" data-chaos-action="INJECT_JOBS">
+                    Inject 5 jobs
+                  </button>
+                </div>
+              </div>
+            </div>
+            <div class="d-flex align-items-center gap-2 mt-3">
+              <button class="btn btn-sm btn-success" data-action="chaos-reset">Reset everything</button>
+              <span data-field="chaos-note" class="small text-muted"></span>
+            </div>
+          </div>
+        </details>
+      </details>
     </div>
 
     <script src="https://cdn.jsdelivr.net/npm/morphdom@2.7.4/dist/morphdom-umd.min.js"></script>
