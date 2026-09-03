@@ -20,6 +20,8 @@ import { prismaBase } from '../infra/prismaBase.js';
 import { authenticate, requirePermission } from './middleware/authenticate.js';
 import { summarise, byUrgency } from '../domain/scarcity.js';
 import { orderQueue, slaRisk, ageMinutes, countAtRisk } from '../domain/priority.js';
+import { labelForFault } from '../domain/driverNarrative.js';
+import { isFaultCode } from '../domain/faults.js';
 import { selectPlan, latestDecisionFor, RECOMMENDED_PLAN } from '../commit/decisionRecords.js';
 import { PAYMENT_PENDING_AFTER_MS } from '../health/probes.js';
 import { formatRupees } from '../domain/money.js';
@@ -38,6 +40,11 @@ const MAX_EVENT_LIMIT = 500;
 // the sort rather than in the query.
 const DEFAULT_QUEUE_LIMIT = 50;
 const MAX_QUEUE_LIMIT = 200;
+
+// A job the board has finished with. Counted OUT rather than counting statuses
+// in, so a status added by a later phase shows up as active — the safe
+// direction to be wrong in on a figure that says "how much is happening".
+const FINISHED_JOB_STATUSES = ['RESOLVED', 'CANCELLED', 'UNSERVICEABLE'] as const;
 
 consoleRouter.get(
   '/events',
@@ -372,33 +379,70 @@ consoleRouter.get('/queue', authenticate, requirePermission('read', 'job'), asyn
     ? Math.min(Math.max(1, Math.trunc(requested)), MAX_QUEUE_LIMIT)
     : DEFAULT_QUEUE_LIMIT;
 
-  const jobs = await prismaBase.job.findMany({
-    where: { status: { in: ['INTAKE', 'PLANNED'] }, assignedUnitId: null },
-    select: {
-      id: true,
-      safetyLevel: true,
-      createdAt: true,
-      zoneId: true,
-      status: true,
-      // The breakdown's position. The console's map plots exactly this list, and
-      // a job with no coordinates is simply not plotted — see
-      // public/js/panels/map.js.
-      lat: true,
-      lng: true,
-      slaPolicy: { select: { responseMinutes: true } },
-    },
-  });
+  // TWO READS, BECAUSE THEY ARE TWO POPULATIONS. The queue is jobs waiting for
+  // a crew; "active incidents" counts everything the board has not finished
+  // with, assigned and en route included. The console's stat strip used to
+  // derive the second by counting the rows GET /jobs sent it, which is the
+  // newest fifty — so the strip read 50 on a board of thousands and 50 again on
+  // a board of sixty. A figure that reports the whole board has to be counted
+  // over the whole board.
+  const [jobs, activeIncidentCount] = await Promise.all([
+    prismaBase.job.findMany({
+      where: { status: { in: ['INTAKE', 'PLANNED'] }, assignedUnitId: null },
+      select: {
+        id: true,
+        safetyLevel: true,
+        createdAt: true,
+        zoneId: true,
+        status: true,
+        // The breakdown's position. The console's map plots exactly this list,
+        // and a job with no coordinates is simply not plotted — see
+        // public/js/panels/map.js.
+        lat: true,
+        lng: true,
+        // WHAT AND WHERE, so a queue row has a subject. Urgency without a
+        // subject — an id, an age and two badges — tells a dispatcher a job is
+        // on fire without telling them what is burning or where.
+        landmark: true,
+        nearestExit: true,
+        kmMarker: true,
+        vehicle: { select: { registration: true } },
+        zone: { select: { name: true } },
+        // The believed fault, newest hypothesis only. Intake revises this as
+        // answers arrive, so an older version is a diagnosis that has already
+        // been superseded.
+        faultHypotheses: { orderBy: { version: 'desc' }, take: 1, select: { topFault: true } },
+        slaPolicy: { select: { responseMinutes: true } },
+      },
+    }),
+    prismaBase.job.count({ where: { status: { notIn: [...FINISHED_JOB_STATUSES] } } }),
+  ]);
 
-  const queued = jobs.map((job) => ({
-    id: job.id,
-    safetyLevel: job.safetyLevel,
-    createdAt: job.createdAt,
-    slaResponseMinutes: job.slaPolicy?.responseMinutes ?? null,
-    zoneId: job.zoneId,
-    status: job.status,
-    lat: job.lat,
-    lng: job.lng,
-  }));
+  const queued = jobs.map((job) => {
+    // Named rather than reached through twice: `faultHypotheses[0]?.topFault` is
+    // a nullable string reached through an array index, and TypeScript cannot
+    // narrow the second access from a guard on the first.
+    const topFault = job.faultHypotheses[0]?.topFault ?? null;
+
+    return {
+      id: job.id,
+      safetyLevel: job.safetyLevel,
+      createdAt: job.createdAt,
+      slaResponseMinutes: job.slaPolicy?.responseMinutes ?? null,
+      zoneId: job.zoneId,
+      status: job.status,
+      lat: job.lat,
+      lng: job.lng,
+      registration: job.vehicle.registration,
+      // THE SAME WORDS THE FLEET DASHBOARD USES. `labelForFault` is what
+      // src/api/fleet.ts turns an incident's `topFault` into, so a dispatcher
+      // and a fleet manager reading about the same job read the same phrase.
+      // Null while intake is still asking — an unnamed fault is honest, a
+      // guessed one is not.
+      faultLabel: topFault !== null && isFaultCode(topFault) ? labelForFault(topFault) : null,
+      locationLabel: describeLocation(job),
+    };
+  });
 
   // The three sort keys are returned alongside the order, so an operator can
   // see WHY a job sits where it does rather than trusting the sequence.
@@ -411,6 +455,7 @@ consoleRouter.get('/queue', authenticate, requirePermission('read', 'job'), asyn
   // a NORMAL job hours past its promise sorts below every HIGH_RISK one.
   res.json({
     total: queued.length,
+    activeIncidentCount,
     slaAtRiskCount: countAtRisk(queued, now),
     limit,
     jobs: orderQueue(queued, now)
@@ -425,10 +470,36 @@ consoleRouter.get('/queue', authenticate, requirePermission('read', 'job'), asyn
         slaResponseMinutes: job.slaResponseMinutes,
         lat: job.lat,
         lng: job.lng,
+        registration: job.registration,
+        faultLabel: job.faultLabel,
+        locationLabel: job.locationLabel,
       })),
     at: now.toISOString(),
   });
 });
+
+// WHERE THE VEHICLE IS, in the words the driver's own answers produced.
+//
+// Two shapes, because intake captures two. A highway breakdown has an exit and
+// a km marker and no landmark — those are the things that get a van to the
+// right side of a carriageway. Everywhere else has a landmark and neither. The
+// zone always comes last so a row that has nothing else still says which part
+// of the city it is in.
+//
+// Deliberately NOT coordinates: a dispatcher reading a list is placing the job
+// in a city they know, and "12.9352, 77.6245" is not that. The map has the
+// numbers.
+function describeLocation(job: {
+  landmark: string | null;
+  nearestExit: string | null;
+  kmMarker: string | null;
+  zone: { name: string };
+}): string {
+  const highway = [job.nearestExit, job.kmMarker].filter((part) => part !== null);
+  if (highway.length > 0) return `${highway.join(' · ')} — ${job.zone.name}`;
+  if (job.landmark) return `${job.landmark} — ${job.zone.name}`;
+  return job.zone.name;
+}
 
 // ---------------------------------------------------------------------------
 // SELECTING A PLAN. The only write in this file.

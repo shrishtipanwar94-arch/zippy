@@ -115,31 +115,51 @@ function ensureTable(panel) {
   // THREE COLUMNS, NOT FIVE. The left column is 19rem on a 1280px laptop and
   // five columns of badges do not fit in it — the first version of this table
   // grew a horizontal scrollbar, which on the panel a dispatcher lives in is
-  // worse than any amount of stacking. Age moves under the job id and the two
-  // badges share a wrapping cell, so all three sort keys are still on the row.
+  // worse than any amount of stacking. The subject stacks into two lines in one
+  // cell and the two badges share a wrapping cell, so all three sort keys are
+  // still on the row.
   table.innerHTML =
     '<thead><tr>' +
-    '<th>#</th><th>job</th><th>risk &amp; sla</th>' +
+    '<th>#</th><th>vehicle &amp; fault</th><th>risk &amp; sla</th>' +
     '</tr></thead><tbody></tbody>';
   panel.appendChild(table);
   return table;
 }
 
+// THE ROW HAS A SUBJECT NOW.
+//
+// It used to read `g59jpmrj / 2m / HIGH RISK / SLA 19m` — four facts about how
+// urgent a job is and not one about what it is. A dispatcher could tell that
+// the top row was on fire without being able to tell what was burning, where,
+// or whether they had the van for it, which meant every row had to be clicked
+// before it could be triaged. Registration and fault answer "what", the second
+// line answers "where", and the badges keep answering "how urgent".
+//
+// The REGISTRATION is the clickable identifier rather than the job id: it is
+// what a driver reads off their own car and what the fleet dashboard lists, so
+// it is the string two people on a phone can agree on. The job id is still on
+// the button's title for anyone cross-referencing the timeline.
 function buildRow(job) {
   const row = document.createElement('tr');
   row.dataset.jobId = job.id;
   row.innerHTML =
     '<td class="text-muted" data-cell="rank"></td>' +
-    '<td data-cell="job"><div class="queue-age text-muted" data-cell="age"></div></td>' +
+    '<td data-cell="job">' +
+    '<div class="queue-subject"><span data-cell="fault" class="queue-fault"></span></div>' +
+    '<div class="queue-where text-muted">' +
+    '<span data-cell="age"></span><span data-cell="where"></span>' +
+    '</div>' +
+    '</td>' +
     '<td class="queue-badges"><span data-cell="risk"></span> <span data-cell="sla"></span></td>';
 
   const button = document.createElement('button');
   button.type = 'button';
-  button.className = 'btn btn-link btn-sm p-0 mono';
+  button.className = 'btn btn-link btn-sm p-0 mono queue-rego';
   button.dataset.action = 'inspect';
   button.dataset.jobId = job.id;
-  button.textContent = job.id.slice(-8);
-  row.querySelector('[data-cell="job"]').prepend(button);
+  button.title = job.id;
+  button.textContent = job.registration ?? job.id.slice(-8);
+  row.querySelector('.queue-subject').prepend(button);
 
   return row;
 }
@@ -149,6 +169,19 @@ function buildRow(job) {
 function updateRow(row, job, index, state) {
   setCell(row, 'rank', String(index + 1));
   setCell(row, 'age', `${job.ageMinutes}m`);
+
+  // A fault the server has not named yet is a job intake is still questioning.
+  // Saying so beats both a blank and a guess — the hypothesis exists, it just
+  // is not settled, and a dispatcher reading "Diagnosing" knows to wait rather
+  // than to wonder whether the row is broken.
+  setCell(row, 'fault', job.faultLabel ?? 'Diagnosing…');
+  setCell(row, 'where', job.locationLabel ?? '');
+
+  // The fault and the place both truncate, so the untruncated string has to be
+  // reachable. Title rather than a tooltip component: it costs nothing and
+  // works on a keyboard focus as well as a hover.
+  setTitle(row, 'fault', job.faultLabel ?? '');
+  setTitle(row, 'where', job.locationLabel ?? '');
 
   const risk = SAFETY_BADGE[job.safetyLevel] ?? SAFETY_BADGE.NORMAL;
   setBadge(row, 'risk', risk.label, risk.className);
@@ -183,6 +216,11 @@ function slaBadge(job) {
 function setCell(row, cell, text) {
   const node = row.querySelector(`[data-cell="${cell}"]`);
   if (node && node.textContent !== text) node.textContent = text;
+}
+
+function setTitle(row, cell, text) {
+  const node = row.querySelector(`[data-cell="${cell}"]`);
+  if (node && node.title !== text) node.title = text;
 }
 
 function setBadge(row, cell, label, className) {

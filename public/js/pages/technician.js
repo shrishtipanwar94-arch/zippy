@@ -160,7 +160,11 @@ onJobEvent(() => refreshWork());
 document.querySelector('[data-action="login"]').addEventListener('click', async () => {
   try {
     const result = await api.login(value('#email'), value('#password'));
-    setSession(result.accessToken, { role: result.user.role, userId: result.user.id });
+    setSession(result.accessToken, {
+      role: result.user.role,
+      userId: result.user.id,
+      email: result.user.email,
+    });
     connect();
     syncOutbox();
     watchConnectivity();

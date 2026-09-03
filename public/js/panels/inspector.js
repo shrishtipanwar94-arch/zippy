@@ -27,6 +27,14 @@ export function render(state) {
   const panel = document.querySelector('[data-panel="inspector"]');
   if (!panel) return;
 
+  // WHETHER THIS COLUMN IS WORTH ITS WIDTH. Keyed off `jobId` rather than
+  // `decision` on purpose: the id is set the moment a row is clicked and the
+  // decision arrives a request later, so keying off the decision would leave
+  // the column collapsed for the whole round trip and then pop it open — the
+  // click would look like it had failed. See console-regions.css.
+  const grid = document.querySelector('.console-grid');
+  if (grid) grid.classList.toggle('no-selection', !state.inspector.jobId);
+
   const decision = state.inspector.decision;
   if (!decision) {
     // RULE ONE OF THE READABILITY PASS: one line, not six empty cards. This

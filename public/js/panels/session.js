@@ -16,26 +16,37 @@ const CONNECTION_WORDS = {
   disconnected: 'No connection',
 };
 
-// WHO IS SIGNED IN, in words. `state.session.role` is a Prisma enum, and this
-// header sits on all four surfaces — including the fleet manager's, who is a
-// customer and was reading FLEET_MANAGER in their own page header. One map here
-// rather than a per-page one: the header markup is identical everywhere, so the
-// leak was too.
-const ROLE_WORDS = {
-  DRIVER: 'Driver',
-  TECHNICIAN: 'Technician',
-  DISPATCHER: 'Dispatcher',
-  FLEET_MANAGER: 'Fleet manager',
-};
+// WHO IS SIGNED IN — and only who.
+//
+// This used to read "Dispatcher · user-dispatcher", which is two problems in
+// one line. The role was already the page's own <h1> on both surfaces that
+// carry this field, so the header said "DISPATCHER … Dispatcher"; and
+// `user-dispatcher` is a database primary key, which identifies the row rather
+// than the person. A header that repeats the page title and then prints an
+// internal id is furniture.
+//
+// The email's local part is the shortest thing here that is genuinely about a
+// person, and the full address goes on the title for anyone who needs to be
+// sure which account they are on. The role word is gone entirely, which also
+// closes the leak the old map existed to patch: a fleet manager cannot read
+// FLEET_MANAGER in their own header if the header never prints a role.
+function describeSession(session) {
+  if (!session) return { text: 'signed out', title: '' };
+  const email = session.email ?? '';
+  const localPart = email.includes('@') ? email.slice(0, email.indexOf('@')) : email;
+  // Falls back to the id only when a caller did not pass an email — visible and
+  // ugly on purpose rather than blank.
+  return { text: localPart || session.userId, title: email };
+}
 
 export function render(state) {
   renderConnection(state);
 
   const who = document.querySelector('[data-field="session"]');
   if (who) {
-    const role = state.session ? (ROLE_WORDS[state.session.role] ?? state.session.role) : null;
-    const text = state.session ? `${role} · ${state.session.userId}` : 'signed out';
+    const { text, title } = describeSession(state.session);
     if (who.textContent !== text) who.textContent = text;
+    if (who.title !== title) who.title = title;
   }
 
   // The login form disappears once there is a session, and the working area

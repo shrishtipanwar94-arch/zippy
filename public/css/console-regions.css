@@ -59,12 +59,73 @@
   .console-grid {
     grid-template-columns: 19rem minmax(0, 1fr) 23rem;
   }
+
+  /* THE INVESTIGATE COLUMN, COLLAPSED. It is about one selected job, so for
+   * most of a shift it holds a single sentence — and it was holding it in
+   * 23rem, a quarter of the screen reserved against a click that had not
+   * happened. Collapsed to a rail, the space goes to the board (the map and the
+   * timeline are the panels that actually wanted it) and the region stays on
+   * screen, so selecting a row expands a column rather than conjuring one.
+   *
+   * Only from 1200px: below that the grid is a single stack and a vertical rail
+   * in a stack is just a strange-looking card. */
+  .console-grid.no-selection {
+    grid-template-columns: 19rem minmax(0, 1fr) 2.25rem;
+  }
+
+  .console-grid.no-selection .investigate-full {
+    display: none;
+  }
+
+  .console-grid.no-selection .investigate-rail {
+    display: flex;
+  }
 }
 
 @media (min-width: 1600px) {
   .console-grid {
     grid-template-columns: 22rem minmax(0, 1fr) 28rem;
   }
+
+  .console-grid.no-selection {
+    grid-template-columns: 22rem minmax(0, 1fr) 2.25rem;
+  }
+}
+
+/* Hidden by default and revealed by the collapse rule above, so the expanded
+ * column is the state that needs no qualification. */
+.investigate-rail {
+  display: none;
+  align-items: center;
+  justify-content: center;
+  writing-mode: vertical-rl;
+  /* Reads bottom-to-top, the convention for a vertical label in a left-to-right
+   * interface — `vertical-rl` alone renders it top-to-bottom, which is a
+   * different language's convention rather than a style choice. */
+  transform: rotate(180deg);
+  height: 100%;
+  min-height: 12rem;
+  padding: 0.5rem 0;
+  border: 1px solid var(--border);
+  border-radius: 0.375rem;
+  font-size: 0.75rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--text-muted);
+  user-select: none;
+}
+
+/* ---------------------------------------------------------------------------
+ * THE BOARD'S CONTROL BAR. Solve used to be a card: a header, a border and body
+ * padding around one button, so the centre column opened on a box containing
+ * nothing that had happened yet. A bar states the same thing in one line.
+ */
+
+.board-bar {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  flex-wrap: wrap;
 }
 
 /* `min-width: 0` matters: without it a wide table inside a grid column refuses

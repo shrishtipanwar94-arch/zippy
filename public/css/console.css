@@ -189,11 +189,59 @@ body.console {
   outline: 1px solid var(--accent);
 }
 
-/* The queue row's second line: how long this job has been waiting, under the id
- * it belongs to. Two lines rather than a fifth column — the left column is
- * 19rem on a laptop and five columns of badges do not fit in it. */
-.queue-age {
+/* THE QUEUE ROW'S TWO LINES. Registration and fault on the first, how long it
+ * has waited and where it is on the second. Two lines rather than five columns
+ * — the left column is 19rem on a laptop and five columns do not fit in it. */
+.queue-table td {
+  padding-top: 0.3rem;
+  padding-bottom: 0.3rem;
+}
+
+.queue-subject {
+  display: flex;
+  align-items: baseline;
+  gap: 0.375rem;
+  min-width: 0;
+}
+
+/* The registration is the row's identifier, so it reads as one: mono like every
+ * other identifier on this console, but not link-blue — the whole row is
+ * clickable in effect and a column of blue would drown the badges. */
+.queue-rego {
+  color: var(--text);
+  text-decoration: none;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.queue-rego:hover,
+.queue-rego:focus-visible {
+  color: var(--accent);
+  text-decoration: underline;
+}
+
+/* The fault takes whatever the registration leaves and truncates rather than
+ * wrapping: "Battery has failed and needs replacing" must not push a row to
+ * three lines in a list read by scanning. The full string is on the title. */
+.queue-fault {
   font-size: 0.75rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+}
+
+.queue-where {
+  font-size: 0.75rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* The separator lives in CSS rather than in a text node, so the age and the
+ * place stay two independently patched cells. */
+.queue-where > [data-cell='where']:not(:empty)::before {
+  content: ' · ';
 }
 
 /* Both badges in one wrapping cell, so a long "SLA LATE 947m" drops below the

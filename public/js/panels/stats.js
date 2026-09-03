@@ -6,16 +6,33 @@
 // smallest thing on the page that is not muted: three figures, no chart, no
 // trend arrow, no colour unless the number is one worth acting on.
 //
-// DERIVED FROM STATE THE PAGE ALREADY HOLDS, not from an endpoint of its own.
-// Every figure below is counted from the same objects the panels underneath
-// render, so the strip cannot disagree with them — it is the same data read at
-// a different altitude. That is also the honest limit: these are the first
-// numbers on this console not computed server-side, and if anything else ever
-// needs them they should move to a route. See DECISIONS.log.
+// EVERY FIGURE HERE IS A POPULATION, AND POPULATIONS ARE COUNTED SERVER-SIDE.
+//
+// This strip used to be counted in the browser from the arrays the panels
+// below render, on the argument that the strip then could not disagree with
+// them. That argument was wrong, and quietly: those arrays are PAGES. GET
+// /jobs returns the newest fifty and GET /queue returns the top fifty, so
+// "active incidents" read 50 on a board of nine thousand and 50 again on a
+// board of sixty — a number that cannot move is not a report, and it was most
+// wrong exactly when the board was busiest.
+//
+// So the rule for this file is now one line long: if a figure describes the
+// board, the server counts it over the board. The strip renders what it is
+// told and derives nothing.
+//
+//   active incidents  — /queue activeIncidentCount   every non-finished job
+//   SLA at risk       — /queue slaAtRiskCount        every pending job
+//   pending approvals — /actions                     unbounded: the whole set
+//
+// The third is the exception that proves the rule rather than a hole in it:
+// GET /actions has no `take` and returns every PENDING row across every job,
+// so counting the array IS counting the population. It is audited here, in
+// comment, so the next person does not have to re-derive it.
 
-// A job the board has finished with. Counted out rather than counting statuses
-// in, so a status added later shows up as active — which is the safe direction
-// to be wrong in on a strip that says "how much is happening".
+// Each figure keeps a browser-side fallback for one narrow case: a response
+// that predates the field. Showing a stale-but-shaped number beats showing a
+// blank strip, and the fallbacks are labelled so nobody mistakes them for the
+// primary path.
 const FINISHED = new Set(['RESOLVED', 'CANCELLED', 'UNSERVICEABLE']);
 
 // Three quarters of the promised window gone. The same threshold the queue's
@@ -30,16 +47,21 @@ export function render(state) {
   panel.hidden = !state.session;
   if (panel.hidden) return;
 
-  const active = Object.values(state.jobs).filter((job) => !FINISHED.has(job.status)).length;
+  // Fallback counts the newest fifty from GET /jobs, which is a page — see the
+  // note at the top of this file. It exists only for a response that predates
+  // `activeIncidentCount`, and it under-reports whenever it fires.
+  const active = Number.isFinite(state.queue.activeIncidentCount)
+    ? state.queue.activeIncidentCount
+    : Object.values(state.jobs).filter((job) => !FINISHED.has(job.status)).length;
 
-  // THE SERVER COUNTS THIS ONE, over every pending job. GET /queue returns only
-  // the top of the queue, so filtering the rows we were sent would report "at
-  // risk among the fifty shown" and quietly under-count a backlog. Falling back
-  // to the rows keeps the strip working against a response that predates the
-  // field rather than showing a blank.
+  // Same shape, same reason: the fallback filters the top fifty and would
+  // report "at risk among the fifty most urgent".
   const atRisk = Number.isFinite(state.queue.slaAtRiskCount)
     ? state.queue.slaAtRiskCount
     : state.queue.jobs.filter((job) => job.slaRisk >= SLA_AT_RISK).length;
+
+  // No fallback needed: GET /actions is unbounded, so this array is the
+  // population rather than a page of it.
   const approvals = (state.actions ?? []).filter((action) => action.tier === 'APPROVE').length;
 
   setStat(panel, 'active', active, false);

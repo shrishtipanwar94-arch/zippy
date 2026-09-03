@@ -74,19 +74,20 @@ export function render(state) {
     // console starts resizing panels. This is a correction to Leaflet's idea of
     // the box, and after the first one it must move nothing.
     //
-    // THE FIRST FIRE IS DIFFERENT, and re-centres. The map was constructed
+    // THE FIRST FIRE IS DIFFERENT, and re-frames. The map was constructed
     // against a box the grid had not laid out yet, so its centre is anchored to
     // the wrong origin — `invalidateSize` alone widens the viewport from that
-    // wrong anchor and leaves Bengaluru off the edge. Re-applying the opening
-    // view once is the only way to recover the intended framing; doing it every
-    // time would yank a panning operator back to the city.
+    // wrong anchor and leaves the city off the edge. Re-applying the framing
+    // once is the only way to recover it; doing it every time would yank a
+    // panning operator back. `frameTheJobs` falls back to the city when there
+    // is nothing to fit, which is what the opening view used to hardcode.
     if (typeof ResizeObserver === 'function') {
       let sized = false;
       new ResizeObserver(() => {
         map.invalidateSize({ animate: false, pan: false });
         if (sized) return;
         sized = true;
-        map.setView(BENGALURU, DEFAULT_ZOOM, { animate: false });
+        frameTheJobs();
       }).observe(container);
     }
   }
@@ -135,8 +136,72 @@ export function render(state) {
     markers.set(job.id, marker);
   }
 
+  // 4. FRAME what is there. Moving the VIEW is not rebuilding the layer: every
+  // marker created above is still the same object at the same coordinates, and
+  // nothing below touches `markers` or `markerLayer`.
+  if (shouldRefit(wanted)) {
+    fittedIds = wanted;
+    frameTheJobs();
+  }
+
   const summary = document.querySelector('[data-field="map-summary"]');
   if (summary) summary.textContent = `${jobs.length} job(s) with a position`;
+}
+
+// WHY THE MAP HAS TO FIT ITSELF, and why it must not do it often.
+//
+// The opening view was a hardcoded centre on Bengaluru at zoom 11, chosen
+// before anything was ever plotted on it. That looked correct on a small
+// reseeded board by luck — the jobs happened to be near the centroid — and was
+// plainly broken on a real one, where every marker crushed into the top-left
+// corner while the viewport sat on empty countryside. A map that does not
+// contain its own markers is not a map.
+//
+// The opposite failure is worse though: refitting on every render would fight
+// the operator. This panel re-renders on every socket event, and a dispatcher
+// who has zoomed into one junction to compare two vans would be thrown back
+// out to the whole city several times a minute. So the fit is deliberately
+// rare — the first time there is anything to fit, and afterwards only when the
+// set has changed enough that the old framing is answering a stale question.
+//
+// SUBSTANTIALLY is defined rather than felt: a third of the jobs on screen
+// being different. One arrival among forty does not move the view; a zone
+// filling up, or the board draining after a solve, does.
+const REFIT_CHURN_FRACTION = 1 / 3;
+
+// The ids the current framing was chosen for. Null until the first fit.
+let fittedIds = null;
+
+function shouldRefit(wanted) {
+  if (wanted.size === 0) return false;
+  if (fittedIds === null) return true;
+
+  let changed = 0;
+  for (const id of wanted) if (!fittedIds.has(id)) changed += 1;
+  for (const id of fittedIds) if (!wanted.has(id)) changed += 1;
+
+  // Against the larger of the two sets, so a board draining from ninety jobs to
+  // three counts as the upheaval it is rather than as three arrivals.
+  const scale = Math.max(wanted.size, fittedIds.size);
+  return changed / scale >= REFIT_CHURN_FRACTION;
+}
+
+// Fits the view to the live markers, reading their positions off the markers
+// themselves rather than off a job array — the markers are the thing on screen,
+// and anything that moves one has already moved what this should frame.
+function frameTheJobs() {
+  if (!map) return;
+
+  const positions = [...markers.values()].map((marker) => marker.getLatLng());
+  if (positions.length === 0) {
+    map.setView(BENGALURU, DEFAULT_ZOOM, { animate: false });
+    return;
+  }
+
+  // `maxZoom` stops a single job — or several within one car park — from
+  // filling the panel with one building at street level, which reads as a
+  // broken map rather than a precise one.
+  map.fitBounds(positions, { padding: [24, 24], maxZoom: 14, animate: false });
 }
 
 // Only jobs that have coordinates. A job whose location has not been captured

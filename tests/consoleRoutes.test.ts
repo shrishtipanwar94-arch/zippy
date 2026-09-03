@@ -12,6 +12,7 @@ import { createApp } from '../src/api/app.js';
 import { prismaBase } from '../src/infra/prismaBase.js';
 import { issueAccessToken } from '../src/auth/tokens.js';
 import { selectPlan } from '../src/commit/decisionRecords.js';
+import { labelForFault } from '../src/domain/driverNarrative.js';
 
 const app = createApp();
 const PREFIX = 'console';
@@ -525,6 +526,30 @@ describe('GET /queue', () => {
     expect(response.body.total).toBeGreaterThanOrEqual(response.body.jobs.length);
     // Counted over every pending job, so it can legitimately exceed the rows.
     expect(response.body.slaAtRiskCount).toBeGreaterThanOrEqual(0);
+    // Counted over every job the board has not finished with, which is a wider
+    // population again — every queued job is active, plus everything already
+    // assigned and on the road.
+    expect(response.body.activeIncidentCount).toBeGreaterThanOrEqual(response.body.total);
+  });
+
+  // A row that carries urgency and no subject cannot be triaged without being
+  // clicked. These are the three fields that say what the job actually is.
+  it('names the vehicle, the fault and the place on every row', async () => {
+    const response = await request(app)
+      .get('/queue?limit=200')
+      .set('Authorization', `Bearer ${dispatcherToken()}`);
+
+    const own = response.body.jobs.find((job: { id: string }) => job.id === jobA);
+    expect(own).toBeDefined();
+    expect(own.registration).toBe('CNS00001');
+    // The zone always ends the location string, so a job with no landmark and
+    // no highway detail still says which part of the city it is in.
+    expect(own.locationLabel).toContain('Console Zone A');
+    // The fixture's newest hypothesis tops out at EV_HV_FAULT, and the row
+    // carries the WORDED form — the same string src/api/fleet.ts puts in front
+    // of a fleet manager, which is the point of routing both through
+    // labelForFault rather than letting each surface invent a phrase.
+    expect(own.faultLabel).toBe(labelForFault('EV_HV_FAULT'));
   });
 
   it('honours an explicit limit without changing which job is first', async () => {

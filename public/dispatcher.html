@@ -37,7 +37,8 @@
                   SELECTED JOB, in a single column with section headings —
                   why this crew, what was rejected, which workshops were
                   screened, and the escalation card when nothing was feasible.
-                  Renders one line until a job is picked.
+                  Collapsed to a narrow rail until a job is picked, so the
+                  width goes to the board rather than to an empty column.
       AMBIENT     bottom. Capability scarcity, the raw job table, and the chaos
                   controls in a dev build. Glanced at, not worked in.
 
@@ -55,7 +56,7 @@
       <h1 class="h6 mb-0 text-uppercase">Dispatcher</h1>
       <span data-field="connection" class="badge bg-secondary">disconnected</span>
       <span data-field="session" class="text-muted small">signed out</span>
-      <a href="/" class="ms-auto small">index</a>
+      <a href="/" class="ms-auto small">All surfaces</a>
     </div>
 
     <div data-field="error" class="alert alert-danger" hidden></div>
@@ -89,9 +90,10 @@
         <ul data-field="health-components" class="mb-0 mt-1 small"></ul>
       </div>
 
-      <!-- THREE FIGURES, and nothing else at this altitude. Counted in the
-           browser from the same state the panels below render — see
-           panels/stats.js for why that is a deliberate limit. -->
+      <!-- THREE FIGURES, and nothing else at this altitude. Each one is a
+           POPULATION counted server-side, not a count of the rows this page was
+           sent — see panels/stats.js for why that distinction is the whole
+           point of the file. -->
       <div data-panel="stats" class="stat-strip mb-2" hidden>
         <div class="stat">
           <span class="stat-label">Active incidents</span>
@@ -143,24 +145,25 @@
 
         <!-- ================= BOARD (centre) ================= -->
         <section class="console-col" aria-label="The board">
-          <div class="card">
-            <div class="card-header d-flex gap-2 align-items-center">
-              <span>Plan the board</span>
-              <span data-field="solve-summary" class="ms-auto text-muted"></span>
-            </div>
-            <div class="card-body p-2">
-              <button data-action="solve" class="btn btn-primary btn-sm mb-2">
-                Solve — plan every pending job
-              </button>
-              <div data-field="plan-error" class="alert alert-warning py-1 px-2 small" hidden></div>
-              <!-- THE THREE PLANS. Phase 4's per-row unit dropdown lived in
-                   this page and is gone: a dispatcher chooses between whole
-                   plans now, not between units one job at a time. Selecting one
-                   RECORDS the decision (and its override reason); it does not
-                   reserve anything — that is Phase 13's action queue. -->
-              <div class="row g-2" data-panel="plans"></div>
-            </div>
+          <!-- SOLVE IS A CONTROL, NOT A PANEL. It spent a whole card — header,
+               border, body padding — on one button and an empty row, which made
+               the board region open on furniture. It is now a slim bar at the
+               top of the column: the button, the run summary, and the error
+               line, with the plans appearing underneath only once a solve has
+               produced any. -->
+          <div class="board-bar">
+            <button data-action="solve" class="btn btn-primary btn-sm">
+              Solve — plan every pending job
+            </button>
+            <span data-field="solve-summary" class="text-muted small ms-auto"></span>
           </div>
+          <div data-field="plan-error" class="alert alert-warning py-1 px-2 small" hidden></div>
+          <!-- THE THREE PLANS. Phase 4's per-row unit dropdown lived in this
+               page and is gone: a dispatcher chooses between whole plans now,
+               not between units one job at a time. Selecting one RECORDS the
+               decision (and its override reason); it does not reserve anything
+               — that is Phase 13's action queue. -->
+          <div class="row g-2" data-panel="plans"></div>
 
           <!-- THE LIVE MAP. Markers are created once and moved in place — see
                panels/map.js. -->
@@ -217,8 +220,16 @@
         <!-- ONE COLUMN, ONE SUBJECT: the selected job. Everything in here is
              empty until a row is picked, and says so in one line rather than
              showing six empty cards. -->
-        <section class="console-col" aria-label="The selected job">
-          <div class="card">
+        <!-- COLLAPSED TO A RAIL UNTIL A JOB IS PICKED. This column held one
+             sentence for most of a shift and still took a quarter of the
+             screen; the wording was right and the footprint was not. The rail
+             keeps the region visible — so the layout does not appear to change
+             shape when a row is clicked — and gives the width back to the
+             board. panels/inspector.js owns the toggle, because it already owns
+             "is a job selected". -->
+        <section class="console-col console-investigate" aria-label="The selected job">
+          <div class="investigate-rail" aria-hidden="true">Selected job</div>
+          <div class="card investigate-full">
             <div class="card-header">Selected job</div>
             <div class="card-body p-2" data-panel="inspector"></div>
           </div>
@@ -226,7 +237,7 @@
           <!-- WHEN THERE IS NO PLAN AT ALL. UNSERVICEABLE is a handover, not
                an end state: the reason with its feasibility code, the option
                that came closest, and three things a dispatcher can do. -->
-          <div data-panel="escalation" class="card border-danger" hidden>
+          <div data-panel="escalation" class="card border-danger investigate-full" hidden>
             <div class="card-header text-danger">No plan for this job</div>
             <div class="card-body p-2">
               <p class="mb-1"><strong data-field="escalation-reason"></strong></p>

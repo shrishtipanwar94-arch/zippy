@@ -77,7 +77,11 @@ function value(selector) {
 document.querySelector('[data-action="login"]').addEventListener('click', async () => {
   try {
     const result = await api.login(value('#email'), value('#password'));
-    setSession(result.accessToken, { role: result.user.role, userId: result.user.id });
+    setSession(result.accessToken, {
+      role: result.user.role,
+      userId: result.user.id,
+      email: result.user.email,
+    });
 
     // The socket carries changes, not the starting picture. The board is
     // seeded once over HTTP and kept current over the socket from then on —
