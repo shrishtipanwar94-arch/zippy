@@ -10,6 +10,14 @@
 // status underneath comes from the server (src/api/driver.ts) so this panel
 // owns no vocabulary of its own.
 
+// Local time, hours and minutes. The driver is choosing between things that
+// happened today; a date would be noise.
+function timeOfDay(iso) {
+  const at = new Date(iso);
+  if (Number.isNaN(at.getTime())) return 'earlier';
+  return at.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+}
+
 export function render(state) {
   const panel = document.querySelector('[data-panel="resume"]');
   if (!panel) return;
@@ -35,9 +43,14 @@ export function render(state) {
       plate.className = 'resume-plate';
       plate.textContent = job.registration;
 
+      // THE PLATE ALONE IS NOT ENOUGH TO CHOOSE BY. A driver with two open
+      // requests very often has them on the SAME vehicle — a car that would not
+      // start this morning and would not start again this afternoon — so the
+      // list showed three identical rows. The status and the time raised are
+      // what actually tell them apart.
       const status = document.createElement('span');
       status.className = 'resume-status';
-      status.textContent = job.status;
+      status.textContent = `${job.status} · raised ${timeOfDay(job.raisedAt)}`;
 
       const stack = document.createElement('span');
       stack.append(plate, status);

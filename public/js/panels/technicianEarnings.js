@@ -116,8 +116,21 @@ function entryMarkup(entry) {
     </li>`;
 }
 
+// RUPEES, THE SAME WAY src/domain/money.ts DOES IT — no trailing ".00" on a
+// whole rupee. Almost every price in this catalogue is whole rupees, and two
+// decimal places that are always zero are two more characters between a
+// technician and the number they are looking for.
+//
+// A second copy of a formatting rule is exactly the hazard this codebase keeps
+// finding, so it is spelled the same on purpose: if the server's rule changes,
+// this is the other place to change.
 function rupees(paise) {
-  return `₹${(paise / 100).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+  const value = paise / 100;
+  const fractionDigits = Number.isInteger(value) ? 0 : 2;
+  return `₹${value.toLocaleString('en-IN', {
+    minimumFractionDigits: fractionDigits,
+    maximumFractionDigits: 2,
+  })}`;
 }
 
 function escapeText(value) {

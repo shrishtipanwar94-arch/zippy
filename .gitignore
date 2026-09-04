@@ -21,3 +21,6 @@ coverage/
 # preprocessed routing graph. Produced by scripts/setup-osrm.sh, never
 # committed; the script is what a fresh clone re-runs to get it back.
 osrm/data/
+
+# Screenshot captures. Build output of a review pass, not source.
+shots/

@@ -44,6 +44,15 @@ import type { FaultCode, FaultDistribution } from '../domain/faults.js';
 
 export const driverRouter = Router();
 
+// The statuses during which "when will they get here" is still the driver's
+// question. Once the crew is on site it has been answered by their being there.
+const STILL_ARRIVING: ReadonlySet<string> = new Set([
+  'PLANNED',
+  'OFFERED',
+  'COMMITTED',
+  'EN_ROUTE',
+]);
+
 // The re-dispatch actions that mean "we are arranging different help". An open
 // one of these is what the driver's REPLANNING sentence is driven by — the
 // same rows the dispatcher's action queue shows, read from the driver's side.
@@ -215,7 +224,13 @@ driverRouter.get(
         intakeComplete,
       }),
       detail: whatWeThinkItIs(contendersFrom(hypothesis?.distribution)),
-      arrival: arrivalView(arrivingAt, eta?.degraded ?? false),
+      // ONLY WHILE THEY ARE STILL COMING. An arrival estimate above the words
+      // "Anil is working on your vehicle now" is not just redundant, it is
+      // wrong — the number is in the past and the driver has to work out that
+      // it no longer applies.
+      arrival: STILL_ARRIVING.has(job.status)
+        ? arrivalView(arrivingAt, eta?.degraded ?? false)
+        : null,
       helper,
       guidance: guidanceFor(job.safetyLevel),
       estimate: withDeclineOption(estimateView(estimate), approvedTotalPaise),
