@@ -186,7 +186,7 @@ const state = {
   // `loaded` distinguishes "we have not asked yet" from "you have no job in
   // hand", which are opposite news and looked identical while both rendered as
   // an empty panel. It is what the ladder's skeleton keys off.
-  work: { offers: [], jobs: [], releases: [], loaded: false },
+  work: { offers: [], jobs: [], releases: [], duty: null, loaded: false },
 
   // What the technician is owed. Read on demand rather than on every board
   // poll: it is a running account that outlives every job on the screen.
@@ -473,7 +473,7 @@ export function setVehicles(vehicles) {
 }
 
 export function setWork(work) {
-  state.work = { releases: [], ...work, loaded: true };
+  state.work = { releases: [], duty: null, ...work, loaded: true };
 }
 
 export function setEarnings(earnings) {

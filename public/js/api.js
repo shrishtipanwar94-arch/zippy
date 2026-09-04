@@ -203,6 +203,12 @@ export function sendTechnicianAction(action) {
 
 // --- the van, and what came out of it (Phase 18) -----------------------------
 
+// ON DUTY OR OFF. Writes a shift, which is what the solver already reads — see
+// src/commit/technicianDuty.ts for why it is a shift and not a new flag.
+export function setDuty(onDuty) {
+  return request('POST', '/technician/duty', { onDuty });
+}
+
 // The technician's own running account: balance, why it stands where it does,
 // and what the next payout run will do about it. See
 // src/commit/technicianEarnings.ts for why a negative balance needs a sentence.

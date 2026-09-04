@@ -18,9 +18,9 @@
 // gone by the time it is read.
 
 const CONFIDENCE = {
-  VERIFIED: { badge: 'bg-success', label: 'counted recently' },
-  AGEING: { badge: 'bg-warning text-dark', label: 'getting old' },
-  UNVERIFIED: { badge: 'bg-danger', label: 'not counted' },
+  VERIFIED: { badge: 'bg-success', pill: 'is-ok', label: 'counted' },
+  AGEING: { badge: 'bg-warning text-dark', pill: 'is-warn', label: 'getting old' },
+  UNVERIFIED: { badge: 'bg-danger', pill: 'is-danger', label: 'not counted' },
 };
 
 export function render(state) {
@@ -46,21 +46,32 @@ function stockMarkup(stock, state) {
   const offline = !state.outbox.online;
 
   return `
-    <h2 class="h6">
-      My van <span class="text-muted">${escapeText(stock.unitCode)}</span>
-    </h2>
+    <p class="section-head">My van <span class="meta mono">${escapeText(stock.unitCode)}</span></p>
     <div class="card">
       <div class="card-body">
-        <p class="small mb-3">
-          <span class="badge bg-success">${stock.summary.verified}</span> counted recently ·
-          <span class="badge bg-warning text-dark">${stock.summary.ageing}</span> getting old ·
-          <span class="badge bg-danger">${stock.summary.unverified}</span> not counted
+        <!-- ONE LINE, NOT THREE COUNTS THAT WRAP MID-PHRASE. The old summary
+             put three badge-and-label pairs on one row, which orphaned "not
+             counted" onto a line of its own at 390px. The number that needs
+             acting on is the uncounted one; the rest is arithmetic the list
+             below already shows. -->
+        <p class="van-summary mb-3">
+          ${
+            stock.summary.unverified > 0
+              ? `<span class="pill is-danger">${stock.summary.unverified} to count</span>`
+              : `<span class="pill is-ok">All counted</span>`
+          }
+          <span class="text-muted">of ${stock.lines.length} parts</span>
         </p>
         ${stock.lines.length === 0 ? '<p class="mb-0">This van carries no parts.</p>' : ''}
         <ul class="list-unstyled mb-3">
           ${stock.lines.map((line) => lineMarkup(line, job, offline, state)).join('')}
         </ul>
-        <button class="btn btn-outline-success w-100" data-action="confirm-count">
+        <!-- ONE ACTION FOR THE WHOLE VAN. Fourteen uncounted parts at one tap
+             each is not something anybody does at the end of a shift, so this
+             confirms every line at whatever figure is in its box — which is the
+             on-board figure unless the technician changed one. Per-line
+             adjustment above stays for the ones that are wrong. -->
+        <button class="btn btn-secondary-solid w-100 tech-action" data-action="confirm-count">
           I have counted the van
         </button>
       </div>
@@ -76,9 +87,16 @@ function lineMarkup(line, job, offline, state) {
       <div class="d-flex justify-content-between align-items-start gap-2">
         <div>
           <span class="d-block">${escapeText(line.name)}</span>
-          <span class="small text-muted">${escapeText(line.sku)} · ${escapeText(lastCounted(line))}</span>
+          <!-- THE SAME FACT WAS STATED THREE TIMES per part: in the summary
+               count, in the badge, and again as "never counted" under the SKU.
+               The badge is the one that carries it — it is the coloured thing
+               the eye lands on — so the sub-line now only says when, and only
+               when there is a when to say. -->
+          <span class="small text-muted">${escapeText(line.sku)}${
+            line.minutesSinceConfirmed === null ? '' : ` · ${escapeText(lastCounted(line))}`
+          }</span>
         </div>
-        <span class="badge ${confidence.badge}">${escapeText(confidence.label)}</span>
+        <span class="pill ${confidence.pill}">${escapeText(confidence.label)}</span>
       </div>
       <div class="d-flex align-items-center gap-2 mt-2">
         <span class="small">on board</span>

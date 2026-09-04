@@ -137,6 +137,21 @@ async function refreshEarnings() {
   render();
 }
 
+// ON DUTY OR OFF. Refetches the board rather than patching state locally: going
+// off duty is a dispatch fact, and the board is where dispatch facts come from.
+document.querySelector('[data-action="toggle-duty"]')?.addEventListener('click', async () => {
+  const duty = getState().work.duty;
+  if (!duty) return;
+  try {
+    await api.setDuty(!duty.onDuty);
+    setError(null);
+  } catch (error) {
+    setError(error.message);
+  }
+  await refreshWork();
+  render();
+});
+
 // ACKNOWLEDGED BY THE PERSON. A release notice stays until it is pressed —
 // see technicianRelease.js for why it is not cleared on a timer.
 document.addEventListener('click', (clicked) => {
@@ -177,6 +192,12 @@ document.querySelector('[data-action="login"]').addEventListener('click', async 
     connect();
     syncOutbox();
     watchConnectivity();
+    // PAINT BEFORE FETCHING. Without this the workspace stayed hidden until
+    // every read had answered, so the skeleton it renders while `work.loaded`
+    // is false was never on screen for a single frame — the page went from a
+    // sign-in form straight to a finished board, and on a slow connection that
+    // is a long blank pause with nothing to look at.
+    render();
     await refreshWork();
     await refreshVanStock();
     await refreshEarnings();

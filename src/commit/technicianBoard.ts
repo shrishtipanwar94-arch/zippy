@@ -25,6 +25,7 @@ import type { PrismaClient } from '@prisma/client';
 import { nextStepFor } from '../domain/jobLadder.js';
 import { technicianUpdatesFor, RELEASE_EVENTS, releaseSentenceFor } from '../domain/technicianUpdates.js';
 import { inWords } from '../domain/vehicleWords.js';
+import { readDuty } from './technicianDuty.js';
 
 // The statuses a technician still has work to do on. A RESOLVED or CANCELLED
 // job drops off their screen; the dispatcher keeps it.
@@ -48,14 +49,17 @@ const RELEASE_WINDOW_MS = 6 * 60 * 60 * 1000;
 const UPDATE_LIMIT = 12;
 
 export async function buildTechnicianBoard(db: PrismaClient, technicianId: string) {
-  const [offers, jobs, releases] = await Promise.all([
+  const [offers, jobs, releases, duty] = await Promise.all([
     openOffers(db, technicianId),
     openJobs(db, technicianId),
     recentReleases(db, technicianId),
+    // Rides along with the board rather than needing its own poll: it changes
+    // rarely and is read on every render.
+    readDuty(db, technicianId, new Date()),
   ]);
 
   const detailed = await Promise.all(jobs.map((job) => withContext(db, job)));
-  return { offers, jobs: detailed, releases };
+  return { offers, jobs: detailed, releases, duty };
 }
 
 // ---------------------------------------------------------------------------

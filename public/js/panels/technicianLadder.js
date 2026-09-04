@@ -118,11 +118,32 @@ function skeletonMarkup() {
     </div>`;
 }
 
+// FOUR THINGS, FOUR CONTAINERS.
+//
+// This was one card running from the vehicle name through the person, the map,
+// the parts note, the primary button, a divider and the whole "found something
+// different" flow — identity, context, the action and a secondary flow in a
+// single box, which is why the status stripe ran down 1,400px of screen and
+// nothing on it looked more important than anything else.
+//
+// Now: the CARD is who and where (and keeps the stripe, because that is what
+// the stripe is about). PARTS is a hairline block beneath it. The primary
+// action is in the sticky bar, where it cannot scroll away. Re-diagnosing is a
+// section of its own, outside the card, because it is a different task.
 function jobMarkup(job, state) {
-  const offline = !state.outbox.online;
-
   return `
-    <div class="card job-card" data-job-id="${escapeText(job.jobId)}">
+    ${jobCardMarkup(job)}
+    ${contextMarkup(job)}
+    ${estimateMarkup(job)}
+    ${nextActionMarkup(job, state)}
+    ${diagnosisMarkup(job, state)}`;
+}
+
+// WHO AND WHERE. Identity, progress, the person and the map — the things a
+// technician glances at to confirm they are at the right job.
+function jobCardMarkup(job) {
+  return `
+    <div class="card job-card mb-3" data-job-id="${escapeText(job.jobId)}">
       <div class="card-body">
         <p class="h5 mb-1">${escapeText(job.vehicle)}</p>
         <p class="small text-secondary mb-3">
@@ -130,43 +151,47 @@ function jobMarkup(job, state) {
         </p>
 
         ${rungTrackMarkup(job.status)}
-        <p class="mb-3"><span class="pill is-quiet">${escapeText(STATUS_LABEL[job.status] ?? job.status)}</span></p>
 
         ${driverMarkup(job)}
         ${trackingMarkup(job)}
-
-        ${contextMarkup(job)}
-        ${estimateMarkup(job)}
-        ${nextActionMarkup(job, state)}
-
-        <hr />
-        <p class="small mb-1">Found something different?</p>
-        <label class="sr-only" for="diagnosis-complaint">What you found</label>
-        <select id="diagnosis-complaint" class="form-select mb-2" data-field="diagnosis-complaint" ${offline ? 'disabled' : ''}>
-          <option value="WONT_START">Will not start</option>
-          <option value="FLAT_TYRE">Flat tyre</option>
-          <option value="LOCKED_OUT">Locked out</option>
-          <option value="WARNING_LIGHT">Warning light</option>
-          <option value="NOISE_OR_SMELL">Noise or smell</option>
-          <option value="STUCK_OR_DAMAGED">Stuck or damaged</option>
-        </select>
-        <button class="btn btn-outline-secondary btn-lg w-100 mb-2 tech-action" data-diagnose="${escapeText(job.jobId)}" ${offline ? 'disabled' : ''}>
-          Tell us what you found
-        </button>
-        <!-- Online only, like the diagnosis: pricing reads the job's pinned
-             price list and its current diagnosis, neither of which the phone
-             holds, and a queued estimate would be priced against a fault the
-             driver has already been quoted for. -->
-        <button class="btn btn-outline-secondary btn-lg w-100 tech-action" data-estimate="${escapeText(job.jobId)}" ${offline ? 'disabled' : ''}>
-          Send the driver a cost
-        </button>
-        ${
-          offline
-            ? '<p class="small mt-2 mb-0">Telling us what you found may change who is sent, so it needs a signal. Try again when you are back online.</p>'
-            : ''
-        }
       </div>
     </div>`;
+}
+
+// FOUND SOMETHING DIFFERENT — its own section, outside the card. It is a
+// different task from working the job in hand, and burying it under a divider
+// inside the card is what made that card 1,400px long.
+function diagnosisMarkup(job, state) {
+  const offline = !state.outbox.online;
+
+  return `
+    <section class="mb-4">
+      <p class="section-head">Found something different?</p>
+      <label class="sr-only" for="diagnosis-complaint">What you found</label>
+      <select id="diagnosis-complaint" class="form-select mb-2" data-field="diagnosis-complaint" ${offline ? 'disabled' : ''}>
+        <option value="WONT_START">Will not start</option>
+        <option value="FLAT_TYRE">Flat tyre</option>
+        <option value="LOCKED_OUT">Locked out</option>
+        <option value="WARNING_LIGHT">Warning light</option>
+        <option value="NOISE_OR_SMELL">Noise or smell</option>
+        <option value="STUCK_OR_DAMAGED">Stuck or damaged</option>
+      </select>
+      <button class="btn btn-secondary-solid w-100 mb-2 tech-action" data-diagnose="${escapeText(job.jobId)}" ${offline ? 'disabled' : ''}>
+        Tell us what you found
+      </button>
+      <!-- Online only, like the diagnosis: pricing reads the job's pinned price
+           list and its current diagnosis, neither of which the phone holds, and
+           a queued estimate would be priced against a fault the driver has
+           already been quoted for. -->
+      <button class="btn btn-secondary-solid w-100 tech-action" data-estimate="${escapeText(job.jobId)}" ${offline ? 'disabled' : ''}>
+        Send the driver a cost
+      </button>
+      ${
+        offline
+          ? '<p class="small mt-2 mb-0">Telling us what you found may change who is sent, so it needs a signal. Try again when you are back online.</p>'
+          : ''
+      }
+    </section>`;
 }
 
 // WHERE AM I IN THIS JOB, in one glance. Filled behind, amber on the current
@@ -178,13 +203,24 @@ function rungTrackMarkup(status) {
   // would read as "not started".
   const reached = status === 'AWAITING_APPROVAL' ? RUNGS.length - 1 : index;
 
+  // THE NAME SITS WITH THE BARS, not in a chip underneath. Five coloured
+  // segments alone are colour as the only signal — a technician should not have
+  // to remember what segment three means — and putting the word in a pill below
+  // gave status the same geometry as the action buttons, so the two read as the
+  // same kind of thing.
   return `
-    <div class="rung-track" role="img" aria-label="${escapeText(STATUS_LABEL[status] ?? status)}">
-      ${RUNGS.map((rung, position) => {
-        const className =
-          position < reached ? 'rung is-done' : position === reached ? 'rung is-current' : 'rung';
-        return `<span class="${className}"></span>`;
-      }).join('')}
+    <div class="rung-block mb-3">
+      <div class="rung-track" role="img" aria-label="${escapeText(STATUS_LABEL[status] ?? status)}">
+        ${RUNGS.map((rung, position) => {
+          const className =
+            position < reached ? 'rung is-done' : position === reached ? 'rung is-current' : 'rung';
+          return `<span class="${className}"></span>`;
+        }).join('')}
+      </div>
+      <p class="rung-name mb-0">
+        ${escapeText(STATUS_LABEL[status] ?? status)}
+        <span class="rung-count">${reached + 1} of ${RUNGS.length}</span>
+      </p>
     </div>`;
 }
 
@@ -509,13 +545,13 @@ export function renderOutbox(state) {
     banner.hidden = count === 0;
   }
 
+  // ONLY WHEN THERE IS NO SIGNAL. Having signal is not news; losing it is, and
+  // it changes what every button on the page does — taps go into a queue rather
+  // than to the server.
   const network = document.querySelector('[data-field="network"]');
-  if (network) {
-    const text = state.outbox.online ? 'online' : 'offline';
-    if (network.textContent !== text) network.textContent = text;
-    const className = `badge ${state.outbox.online ? 'text-bg-success' : 'text-bg-danger'}`;
-    if (network.className !== className) network.className = className;
-  }
+  if (network) network.hidden = state.outbox.online;
+
+  renderDuty(state);
 
   const results = document.querySelector('[data-field="outbox-results"]');
   if (!results) return;
@@ -552,4 +588,34 @@ function escapeText(value) {
   const node = document.createElement('div');
   node.textContent = String(value ?? '');
   return node.innerHTML;
+}
+
+
+// ON DUTY OR OFF — a control, not a chip.
+//
+// It is deliberately NOT the network badge next to it. Whether you have signal
+// is a fact about the phone and nobody chooses it; whether you are taking
+// offers is a decision, and it had no control at all. Putting them in one
+// indicator is what made an unswitchable state look switchable.
+//
+// The label says the CURRENT state rather than the action, and `aria-pressed`
+// carries the same fact — a button reading "Go off duty" leaves somebody
+// glancing at a phone unsure which way round it is, which is the one thing this
+// control must never be.
+function renderDuty(state) {
+  const button = document.querySelector('[data-action="toggle-duty"]');
+  if (!button) return;
+
+  const duty = state.work.duty;
+  // Hidden until the board has answered. A toggle that guesses its own state
+  // and then corrects itself is worse than one that arrives a moment late.
+  button.hidden = !duty;
+  if (!duty) return;
+
+  button.classList.toggle('is-on', duty.onDuty);
+  button.setAttribute('aria-pressed', String(duty.onDuty));
+
+  const label = button.querySelector('[data-field="duty-label"]');
+  const text = duty.onDuty ? 'On duty' : 'Off duty';
+  if (label && label.textContent !== text) label.textContent = text;
 }

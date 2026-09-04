@@ -26,6 +26,9 @@ export function createTrackingMap(container, options = {}) {
 
   // `a` is the viewer, `b` is the other party. Either may be null: a job with
   // no crew yet has one dot, and that is honest.
+  // `aClass` / `bClass` are the two marker shapes. They differ on purpose: two
+  // identical circles need a legend, and a map with a legend on a phone is a map
+  // nobody reads.
   return function draw({ a, b, aClass = 'driver-dot', bClass = 'helper-dot', fade = false }) {
     const L = typeof window !== 'undefined' ? window.L : undefined;
     if (!L || !container) return false;
@@ -81,8 +84,21 @@ export function createTrackingMap(container, options = {}) {
       marker.setOpacity(fade ? 0.55 : 1);
       return marker;
     }
+    // A pin is taller than it is wide and is anchored at its point, not its
+    // centre — a pin centred on its coordinate points at the wrong place.
+    const pin = className.includes('job-pin');
+    // THE SHAPE GOES IN AN INNER ELEMENT, not on the icon itself. Leaflet
+    // positions a divIcon with a `transform: translate3d(...)`, so a
+    // `transform: rotate()` used to draw the pin's point lands on the same
+    // element and overwrites it — the marker renders as a rounded blob in
+    // roughly the right place. The wrapper is Leaflet's; the shape is ours.
     const created = L.marker([at.lat, at.lng], {
-      icon: L.divIcon({ className: `map-dot ${className}`, iconSize: [18, 18] }),
+      icon: L.divIcon({
+        className: `map-dot ${className}`,
+        html: pin ? '<span class="job-pin-shape"></span>' : '',
+        iconSize: pin ? [22, 28] : [18, 18],
+        iconAnchor: pin ? [11, 28] : [9, 9],
+      }),
       keyboard: false,
       interactive: false,
     });

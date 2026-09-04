@@ -541,3 +541,224 @@
 .icon-action.is-navigate {
   border-color: var(--text-muted);
 }
+
+/* ---------------------------------------------- STATUS PILL vs ACTION
+ * A pill had the same geometry as the secondary buttons beneath it — same
+ * height, same border, same radius — so status and action read as the same kind
+ * of thing. A pill is a FACT and a button is a CONTROL, and the difference has
+ * to be visible before the words are read: soft filled ground, no border,
+ * smaller type.
+ */
+.pill {
+  border: 0;
+  padding: 3px var(--space-2);
+  font-size: var(--size-4);
+  line-height: 1.4;
+}
+
+.pill.is-quiet {
+  background: var(--surface-2);
+  color: var(--text-muted);
+}
+
+/* SECONDARY, NOT DEAD. Grey text on a transparent ground with a faint border,
+ * sitting under a filled amber button, reads as disabled — and two of the
+ * technician's three routine actions looked switched off. A solid neutral fill
+ * and full-strength text says "press me, just not first". */
+.btn-secondary-solid {
+  background: var(--surface-2);
+  border: 1px solid var(--line);
+  color: var(--text);
+  font-weight: var(--weight-strong);
+}
+
+.btn-secondary-solid:hover,
+.btn-secondary-solid:focus-visible {
+  background: var(--surface);
+  border-color: var(--text-muted);
+  color: var(--text);
+}
+
+/* A genuinely disabled control has to look different from a secondary one, or
+ * the distinction above buys nothing. */
+.btn-secondary-solid:disabled {
+  background: transparent;
+  color: var(--text-faint);
+  border-color: var(--line);
+  font-weight: var(--weight-normal);
+}
+
+/* ------------------------------------------------ THE RUNG TRACK'S NAME
+ * The stage name sits WITH the bars rather than in a chip below them. Five
+ * coloured segments on their own are colour as the only signal — a technician
+ * should not have to remember what segment three is — and the count says how
+ * far through without needing the segments read at all.
+ */
+
+.rung-block {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.rung-name {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-2);
+  font-size: var(--size-3);
+  font-weight: var(--weight-strong);
+}
+
+.rung-count {
+  margin-left: auto;
+  font-size: var(--size-4);
+  font-weight: var(--weight-normal);
+  color: var(--text-muted);
+  font-variant-numeric: tabular-nums;
+}
+
+/* ----------------------------------------------------- TELLING THE DOTS APART
+ * Two identical circles need a legend, and a map with a legend on a phone is a
+ * map nobody reads. The job is a PIN — the shape every map in the world uses
+ * for a destination — and the viewer is a plain dot.
+ */
+
+.job-pin {
+  /* Leaflet owns this element's transform (it positions with translate3d), so
+   * the shape is drawn on the child. */
+  background: none;
+}
+
+.job-pin-shape {
+  display: block;
+  width: 20px;
+  height: 20px;
+  margin: 0 auto;
+  background: var(--brand);
+  border: 2px solid var(--ground);
+  border-radius: 50% 50% 50% 0;
+  transform: rotate(-45deg);
+  box-shadow: 0 0 0 2px var(--brand-soft);
+}
+
+/* -------------------------------------------------------------- SECTION RHYTHM
+ * Every section on the field surfaces announces itself the same way: a
+ * small-caps label. Before this, one section was an <h2>, one was a bare
+ * disclosure triangle with no container at all, and one mixed plain text with
+ * link-coloured code — three conventions on one screen, which reads as three
+ * screens.
+ */
+
+.field-section {
+  border: 1px solid var(--line);
+  border-radius: var(--radius-card);
+  padding: var(--space-4);
+}
+
+.field-section > summary {
+  list-style: none;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  font-size: var(--size-4);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--text-muted);
+}
+
+.field-section > summary::-webkit-details-marker {
+  display: none;
+}
+
+.field-section > summary::after {
+  content: '';
+  margin-left: auto;
+  width: 8px;
+  height: 8px;
+  border-right: 2px solid currentColor;
+  border-bottom: 2px solid currentColor;
+  transform: rotate(45deg);
+  transition: transform var(--motion);
+}
+
+.field-section[open] > summary::after {
+  transform: rotate(-135deg);
+}
+
+/* The van's one-line summary. Room to breathe so nothing orphans onto its own
+ * line at 390px, which is what three badge-and-label pairs on one row did. */
+.van-summary {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  flex-wrap: wrap;
+  font-size: var(--size-4);
+}
+
+/* ------------------------------------------------------------ DUTY TOGGLE
+ * A CONTROL, and it has to look like one. The chip it replaces looked like a
+ * state you could not change, sitting next to a state you genuinely cannot
+ * change (signal) — so neither read correctly.
+ *
+ * The label says where you ARE, not what pressing it does: "Go off duty" leaves
+ * somebody glancing at a phone unsure which way round it is, and this is the one
+ * control on the screen that must never be ambiguous.
+ */
+
+.duty-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-1) var(--space-3);
+  min-height: 36px;
+  border-radius: 999px;
+  border: 1px solid var(--line);
+  background: var(--surface-2);
+  color: var(--text-muted);
+  font-size: var(--size-4);
+  font-weight: var(--weight-strong);
+  cursor: pointer;
+}
+
+.duty-toggle .duty-dot {
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  background: var(--text-faint);
+}
+
+/* On duty is the working state, so it is the one that is coloured — and it is
+ * OK green rather than brand amber, because it is a status. */
+.duty-toggle.is-on {
+  color: var(--ok);
+  border-color: var(--ok);
+  background: var(--ok-soft);
+}
+
+.duty-toggle.is-on .duty-dot {
+  background: var(--ok);
+}
+
+/* THE HEADER AT 390px. Wordmark, surface, signal, duty and a link do not fit on
+ * one line on a phone, and the duty toggle wrapped to two lines — a control
+ * that changes shape is a control somebody mis-taps. The surface name is the
+ * first thing to go: the page it is on is not in doubt. */
+.duty-toggle {
+  white-space: nowrap;
+  flex: none;
+}
+
+@media (max-width: 430px) {
+  .app-bar-role {
+    display: none;
+  }
+
+  .app-bar {
+    gap: var(--space-2);
+  }
+
+  .app-bar .link-secondary {
+    white-space: nowrap;
+  }
+}

@@ -24,6 +24,7 @@ import { Router } from 'express';
 import { z } from 'zod';
 import { prismaBase } from '../infra/prismaBase.js';
 import { recordUnitPositionQuietly } from '../commit/unitPosition.js';
+import { setDuty } from '../commit/technicianDuty.js';
 import { authenticate, requirePermission } from './middleware/authenticate.js';
 import { recordTechnicianDecision } from '../commit/saga.js';
 import { applyTechnicianAction } from '../commit/technicianActions.js';
@@ -79,6 +80,30 @@ technicianRouter.get(
 // ---------------------------------------------------------------------------
 
 const respondSchema = z.object({ decision: z.enum(['ACCEPTED', 'DECLINED']) }).strict();
+
+// ON DUTY OR OFF — the technician's own switch.
+//
+// The green "online" chip on their phone looked like a state and was not a
+// control, so somebody who wanted to stop receiving offers had no way to say
+// so. This writes the thing the SOLVER already reads (a TechnicianShift), so
+// nothing in dispatch needs to know this route exists — see
+// src/commit/technicianDuty.ts for why that is a shift and not a new flag.
+const dutySchema = z.object({ onDuty: z.boolean() }).strict();
+
+technicianRouter.post(
+  '/technician/duty',
+  authenticate,
+  requirePermission('update', 'technicianAction'),
+  async (req, res) => {
+    const technicianId = req.auth?.actorId;
+    if (!technicianId) {
+      res.status(403).json({ error: 'not_a_technician' });
+      return;
+    }
+    const body = dutySchema.parse(req.body);
+    res.json(await setDuty(prismaBase, { technicianId, onDuty: body.onDuty, now: new Date() }));
+  },
+);
 
 technicianRouter.post(
   '/technician/offers/:id/respond',

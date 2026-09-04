@@ -43,5 +43,7 @@ export function render(state) {
   // `a` is the viewer — the technician — so the two surfaces colour themselves
   // consistently: your own dot is the quiet one, the other party's is the brand
   // colour. On this screen the car is what you are heading towards.
-  draw({ a: tracking.you, b: tracking.job, aClass: 'driver-dot', bClass: 'helper-dot' });
+  // The technician is a plain dot; the car they are heading to is a pin. The
+  // shapes differ so neither needs a legend.
+  draw({ a: tracking.you, b: tracking.job, aClass: 'driver-dot', bClass: 'job-pin' });
 }
