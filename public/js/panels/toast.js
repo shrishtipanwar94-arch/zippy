@@ -18,67 +18,48 @@
 // to ACT on is a card in the page, never this.
 
 import { icon } from '../icons.js';
+import { decideToast, initialToastState, resultKeyOf } from '../toastDecision.js';
 
 const VISIBLE_MS = 4000;
 
-// Two different things to confirm, and they come from two different places —
-// which is the bug the first version of this file had. `recentResults()` is
-// only appended when the SERVER answers, so keying the toast off it meant the
-// one case that actually needs a toast — a tap that went into the queue and
-// changed nothing on screen — produced nothing at all. And the results array is
-// newest-FIRST, so reading the last element showed the oldest answer.
+// THE DECISION LIVES IN js/toastDecision.js, with no DOM in it, because the
+// branch that was wrong is a decision rather than a rendering: a queued tap
+// appends no result, so keying off results alone produced nothing in exactly
+// the case a toast exists for. tests/toast.test.ts covers it.
 //
-//   pending grows   -> "Saved. It will send when you have signal."
-//   results[0] new  -> "On your way." (the server took it)
-let lastPending = 0;
-let lastResultKey = null;
+// What is left here is the element, the timer and the wording.
+let seen = initialToastState();
 let hideTimer = null;
-let primed = false;
 
 export function render(state) {
   const outbox = state.outbox;
   if (!outbox) return;
 
-  const pendingCount = outbox.pending?.length ?? 0;
   const newest = outbox.results?.[0] ?? null;
-  const resultKey = newest ? `${newest.step}:${newest.outcome}:${newest.detail ?? ''}` : null;
+  const { toast, next } = decideToast(seen, {
+    pendingCount: outbox.pending?.length ?? 0,
+    resultKey: resultKeyOf(newest),
+    step: newest?.step ?? null,
+  });
+  seen = next;
 
-  // THE FIRST RENDER PRIMES RATHER THAN ANNOUNCES. A page loaded with a queue
-  // already on disk from a previous session, or with a history of results,
-  // should not fire a toast for something that happened yesterday.
-  if (!primed) {
-    primed = true;
-    lastPending = pendingCount;
-    lastResultKey = resultKey;
-    return;
-  }
-
-  if (resultKey && resultKey !== lastResultKey) {
-    lastResultKey = resultKey;
-    lastPending = pendingCount;
-    show({ queued: false, step: newest.step });
-    return;
-  }
-
-  if (pendingCount > lastPending) {
-    lastPending = pendingCount;
-    show({ queued: true });
-    return;
-  }
-
-  lastPending = pendingCount;
+  if (toast) show(toast);
 }
 
-function show({ queued, step }) {
+function show(toast) {
+  const queued = toast.kind === 'queued';
   const node = document.querySelector('[data-panel="toast"]') ?? create();
 
   node.className = `toast${queued ? ' is-queued' : ''}`;
   node.innerHTML = `${icon(queued ? 'clock' : 'check', 'icon icon-sm')}<span></span>`;
   node.querySelector('span').textContent = queued
     ? 'Saved. It will send when you have signal.'
-    : STEP_WORD[step] ?? 'Sent.';
+    : (STEP_WORD[toast.step] ?? 'Sent.');
   node.hidden = false;
 
+  // IT DISMISSES ITSELF because it is a confirmation, not a decision. A toast
+  // that needs closing is a dialog wearing a costume; anything a technician has
+  // to ACT on is a card in the page, never this.
   clearTimeout(hideTimer);
   hideTimer = setTimeout(() => {
     node.hidden = true;

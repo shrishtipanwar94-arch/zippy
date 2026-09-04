@@ -17,6 +17,8 @@
 // once a second on the offer countdown, so a value living only in an input is
 // gone by the time it is read.
 
+import { icon } from '../icons.js';
+
 const CONFIDENCE = {
   VERIFIED: { badge: 'bg-success', pill: 'is-ok', label: 'counted' },
   AGEING: { badge: 'bg-warning text-dark', pill: 'is-warn', label: 'getting old' },
@@ -30,11 +32,19 @@ export function render(state) {
   const stock = state.van.stock;
   const markup = `
     <div data-panel="van-stock" class="mb-4">
-      ${stock ? stockMarkup(stock, state) : '<p class="text-muted">No van stock loaded.</p>'}
+      ${stock ? stockMarkup(stock, state) : emptyMarkup('The van list has not loaded yet.')}
     </div>`;
 
   // eslint-disable-next-line no-undef
   morphdom(panel, markup);
+}
+
+// AN EMPTY PANEL SHOULD LOOK EMPTY, NOT BROKEN. A bare grey line reads as a
+// panel that failed to load — which is exactly the wrong impression for the
+// one that says whether the van has been counted. `.empty` is the shared
+// component (components.css); the technician's ladder uses the same one.
+function emptyMarkup(sentence) {
+  return `<div class="empty">${icon('inbox')}<p class="mb-0">${escapeText(sentence)}</p></div>`;
 }
 
 function stockMarkup(stock, state) {
@@ -62,7 +72,7 @@ function stockMarkup(stock, state) {
           }
           <span class="text-muted">of ${stock.lines.length} parts</span>
         </p>
-        ${stock.lines.length === 0 ? '<p class="mb-0">This van carries no parts.</p>' : ''}
+        ${stock.lines.length === 0 ? emptyMarkup('This van carries no parts.') : ''}
         <ul class="list-unstyled mb-3">
           ${stock.lines.map((line) => lineMarkup(line, job, offline, state)).join('')}
         </ul>
