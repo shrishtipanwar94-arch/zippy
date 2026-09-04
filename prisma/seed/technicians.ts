@@ -101,6 +101,31 @@ function shiftId(technicianId: string, dayOffset: number): string {
   return dayOffset === 0 ? `shift-${technicianId}` : `shift-${technicianId}-d${dayOffset}`;
 }
 
+// REAL FIRST NAMES, BECAUSE A DRIVER READS THEM.
+//
+// These users were seeded as "Technician 01" … "Technician 31", and the driver
+// surface takes the first word of the name to say who is coming. So a stranded
+// driver's phone read "Technician is on the way" — a role, not a person, which
+// is exactly the reassurance that sentence exists to give. docs/UI.md's own
+// example is "Ravi is on the way".
+//
+// Bengaluru-plausible and deliberately mixed across the languages actually
+// spoken in that workforce. Indexed by technician number, so the same seed
+// always produces the same crew.
+const TECHNICIAN_NAMES = [
+  'Ravi Kumar', 'Anil Shetty', 'Suresh Nayak', 'Manjunath Rao', 'Imran Khan',
+  'Deepak Reddy', 'Vijay Gowda', 'Prakash Hegde', 'Naveen Bhat', 'Santosh Pai',
+  'Arun Menon', 'Kiran Desai', 'Ganesh Iyer', 'Mahesh Patil', 'Rakesh Jain',
+  'Sunil Verma', 'Harish Acharya', 'Vinod Kamath', 'Rajesh Prabhu', 'Girish Rai',
+  'Basavaraj Patil', 'Shivakumar Gowda', 'Nagaraj Bhat', 'Yusuf Sheikh', 'Praveen Kulkarni',
+  'Dinesh Shenoy', 'Ashok Naik', 'Lokesh Murthy', 'Farhan Ahmed', 'Ramesh Poojary',
+  'Srinivas Char',
+];
+
+function technicianName(index: number): string {
+  return TECHNICIAN_NAMES[index] ?? `Technician ${index + 1}`;
+}
+
 export async function seedTechnicians(prisma: PrismaClient): Promise<void> {
   for (let i = 0; i < TECHNICIAN_COUNT; i++) {
     const number = String(i + 1).padStart(2, '0');
@@ -111,13 +136,13 @@ export async function seedTechnicians(prisma: PrismaClient): Promise<void> {
 
     await prisma.user.upsert({
       where: { email },
-      update: { name: `Technician ${number}`, passwordHash: DEV_PASSWORD_HASH },
+      update: { name: technicianName(i), passwordHash: DEV_PASSWORD_HASH },
       create: {
         id: userId,
         email,
         passwordHash: DEV_PASSWORD_HASH,
         role: 'TECHNICIAN',
-        name: `Technician ${number}`,
+        name: technicianName(i),
       },
     });
 

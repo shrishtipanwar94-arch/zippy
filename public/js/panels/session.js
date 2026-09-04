@@ -78,12 +78,23 @@ function renderConnection(state) {
   const node = document.querySelector('[data-field="connection"]');
   if (!node) return;
 
+  // NO CONNECTION INDICATOR BEFORE THERE IS A SESSION.
+  //
+  // A sign-in form under a grey badge reading "No connection" tells somebody
+  // who has not signed in yet that the software is broken — and they are right
+  // to read it that way, because at that moment the badge is reporting a socket
+  // nobody has opened rather than a network that has failed. It becomes real
+  // information the moment there is a session it could interrupt.
+  const spoken = document.querySelector('[data-field="connection-text"]');
+  node.hidden = !state.session;
+  if (spoken) spoken.hidden = !state.session;
+  if (!state.session) return;
+
   const words = CONNECTION_WORDS[state.connection] ?? state.connection;
 
   if (node.classList.contains('conn-dot')) {
     if (node.title !== words) node.title = words;
     node.classList.toggle('is-down', state.connection !== 'connected');
-    const spoken = document.querySelector('[data-field="connection-text"]');
     if (spoken && spoken.textContent !== words) spoken.textContent = words;
     return;
   }

@@ -1,56 +1,216 @@
-/* THE PALETTE, DEFINED ONCE — and mapped onto Bootstrap rather than fought.
+/* THE DESIGN SYSTEM, DEFINED ONCE. No surface defines a colour, a size or a
+ * spacing value after this file.
  *
  * docs/UI.md has specified this file since Phase 0: "defined once as CSS custom
- * properties and referenced everywhere, no hardcoded hex in panel code".
+ * properties and referenced everywhere, no hardcoded hex in panel code". What
+ * changed in this pass is that the tokens now cover TYPE, SPACE and ELEVATION
+ * as well as colour, because those were the three things every surface was
+ * still inventing for itself.
  *
- * WHAT CHANGED IN PHASE 22b, and why it is less code rather than more.
+ * THE ONE RULE WORTH READING BEFORE THE REST:
  *
- * This file used to re-skin Bootstrap by hand — `.driver .card`,
- * `.technician .form-control`, `.console .table` and so on — one override per
- * component per surface. That list can only ever be incomplete: every Bootstrap
- * component nobody had thought of yet (dropdowns, list groups, modals, the
- * focus ring) kept its light-mode colours and looked broken on a dark ground,
- * and every new panel meant another override.
+ *   AMBER IS THE BRAND AND THE SINGLE PRIMARY ACTION ON A SCREEN.
+ *   IT IS NEVER A STATUS.
+ *   GREEN, WARN-AMBER AND RED ARE STATUSES. THEY ARE NEVER BUTTONS.
  *
- * Bootstrap 5.3 supports dark mode natively through `data-bs-theme="dark"` on
- * the html element, with the whole component library reading from `--bs-*`
- * custom properties. So the palette below is mapped onto THOSE, once, and every
- * component is themed for free — including the ones this project has not used
- * yet. The per-surface override blocks are gone.
+ * Before this pass one amber did both jobs everywhere — the Solve button, the
+ * ELEVATED badge, the live ETA, a selected row and half the borders were the
+ * same hue, so nothing on any page read as more important than anything else.
+ * Two hues that were doing one job are now two hues doing two jobs: --brand for
+ * "this is Zippy, and this is the thing to press", --warn for "pay attention to
+ * this fact". They are deliberately close but not equal, and the difference is
+ * carried by the word beside them as well as the colour — every status on every
+ * surface still spells itself out, which is docs/UI.md's accessibility rule and
+ * not a stylistic preference.
  *
- * NEVER USE COLOUR AS THE ONLY SIGNAL — docs/UI.md is explicit, and it is an
- * accessibility rule rather than a stylistic one. Every coloured thing in the
- * panels pairs the colour with a word: a HIGH_RISK row says HIGH_RISK, a
- * rejection reason shows its code, a feasible option is labelled chosen.
- *
- * The surfaces themselves live in console.css (the dispatcher) and field.css
- * (the driver and the technician).
+ * Bootstrap is mapped onto these tokens rather than fought (see the second half
+ * of this file). The surfaces themselves live in console.css (dispatcher and
+ * fleet), field.css (driver and technician) and home.css (the landing page).
  */
 
+/* IBM PLEX, AND THE MONO IS NOT DECORATION.
+ *
+ * Registration plates, job ids, the six-digit completion code and every column
+ * of money or cost terms are set in Plex Mono so digits line up in a column and
+ * a plate reads unambiguously — KA01AB1001 is a string somebody has to repeat
+ * down a phone line, and a proportional 1/l/I is a real hazard there rather
+ * than a typographic nicety. Everything else is Plex Sans.
+ *
+ * `display=swap` and a full system fallback stack: this is a roadside product
+ * and the first paint must not wait on a font. */
+@import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;600&family=IBM+Plex+Sans:wght@400;600&display=swap');
+
 :root {
-  --surface: #0f172a;
-  --surface-alt: #1e293b;
-  /* One step lighter than surface-alt. Introduced in Phase 22b so a card can
-   * sit on a panel that sits on the page and all three read as distinct — with
-   * two greys the field surfaces were flat and nothing looked grouped. */
-  --surface-raised: #273449;
-  --text: #e2e8f0;
-  --text-muted: #94a3b8;
-  --border: #334155;
+  --sans:
+    'IBM Plex Sans', system-ui, -apple-system, 'Segoe UI', Roboto, 'Helvetica Neue', Arial,
+    sans-serif;
+  --mono: 'IBM Plex Mono', ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
 
-  --accent: #f59e0b; /* amber — primary actions and live status */
-  --accent-strong: #fbbf24; /* hover and focus only, never a fill */
-  --danger: #ef4444; /* red — HIGH_RISK and failures, nothing else */
-  --ok: #22c55e; /* green — confirmed / resolved only */
+  /* TWO WEIGHTS. 600 for headings and for numbers that carry meaning, 400 for
+   * everything else. No 300 (unreadable on a phone in daylight), no 800. */
+  --weight-strong: 600;
+  --weight-normal: 400;
 
-  --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  /* ------------------------------------------------------------------ COLOUR
+   * Named once. Nothing below this block, and nothing in any other file, may
+   * write a hex value. */
+  --ground: #0e141f; /* the page */
+  --surface: #172131; /* cards and panels */
+  --surface-2: #1e2a3c; /* nested blocks, table stripes */
+  --line: #2b3849; /* every border and divider */
 
-  /* Elevation, as two named steps rather than a shadow invented per card.
-   * Subtle on purpose: on a dark ground a heavy shadow reads as a smudge. */
-  --lift: 0 1px 2px rgb(0 0 0 / 0.4);
-  --lift-high: 0 8px 24px rgb(0 0 0 / 0.45);
+  --text: #e9edf3;
+  --text-muted: #8d9aad;
+  --text-faint: #616e80;
 
-  --radius: 0.75rem;
+  /* THE BRAND. Zippy amber: the wordmark, and the one primary action per
+   * screen. Never a status. */
+  --brand: #e8a33d;
+  --brand-soft: rgb(232 163 61 / 0.14);
+  /* Hover and press only, never a resting fill. */
+  --brand-strong: #f2b45a;
+  /* Amber is a light colour — white on it is around 2:1. Every foreground that
+   * sits on brand uses this, which is why it is a token and not a literal. */
+  --on-brand: #1f1300;
+
+  /* THE STATUSES. Never buttons. */
+  --ok: #35a06a;
+  --warn: #d98c2b;
+  --danger: #e0574f;
+  --ok-soft: rgb(53 160 106 / 0.14);
+  --warn-soft: rgb(217 140 43 / 0.14);
+  --danger-soft: rgb(224 87 79 / 0.14);
+
+  /* ----------------------------------------------------------------- SPACING
+   * Seven steps and nothing between them. Gaps come from flex/grid `gap`, not
+   * from a margin invented per element — that is what kept producing 6px here
+   * and 14px there and made the pages feel unresolved. */
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 24px;
+  --space-6: 32px;
+  --space-7: 48px;
+
+  /* ---------------------------------------------- BORDERS AND ELEVATION
+   * Spent, not stamped. One shadow definition, used on exactly ONE card per
+   * screen — the one carrying the answer. Everything else is a 1px --line
+   * border, or nothing at all. A shadow on every card is the same as a shadow
+   * on none. */
+  --radius-card: 10px;
+  --radius-control: 8px;
+  --radius-badge: 4px;
+  --shadow-answer: 0 10px 30px rgb(0 0 0 / 0.45);
+
+  /* --------------------------------------------------------------- MOTION
+   * Hover and press only. Nothing on page load — the first frame must be the
+   * finished page, because an operator watching a board animate itself in has
+   * to wait to find out whether anything changed. */
+  --motion: 150ms ease-out;
+
+  /* Icons are 24px, 1.75 stroke, inline SVG, currentColor. Stated here so a
+   * panel never picks its own size. */
+  --icon: 24px;
+  --icon-stroke: 1.75;
+}
+
+/* -------------------------------------------------------------- THE TYPE SCALE
+ *
+ * FOUR SIZES PER SURFACE CLASS AND NO MORE. Two classes, because the two
+ * audiences are not doing the same thing:
+ *
+ *   FIELD (driver, technician) — one person, on a phone, outdoors, under
+ *   stress, often in bad light. Large, few, generous.
+ *   OPERATOR (dispatcher, fleet) — a trained reader scanning many rows at once.
+ *   Dense is correct here; making it larger would make it worse.
+ *
+ * Nine distinct sizes turned up on the console in an earlier audit, none of
+ * them chosen by anybody — they were the arithmetic of nested `em` units. Sizes
+ * are declared in `px` for that reason: `rem` compounds, `px` does not.
+ */
+
+body.driver,
+body.technician {
+  --size-1: 28px; /* the number or name the screen exists to show */
+  --size-2: 19px; /* headings, and the primary button */
+  --size-3: 16px; /* body */
+  --size-4: 13px; /* labels, captions, the small print */
+}
+
+body.console {
+  --size-1: 20px; /* the stat strip's figures */
+  --size-2: 15px; /* card and section headings */
+  --size-3: 13px; /* body and table rows */
+  --size-4: 11.5px; /* labels, badges, muted detail */
+}
+
+html {
+  color-scheme: dark;
+}
+
+body {
+  font-family: var(--sans);
+  font-weight: var(--weight-normal);
+  font-size: var(--size-3);
+  background: var(--ground);
+  color: var(--text);
+}
+
+/* DIGITS THAT LINE UP. Applied to every money figure and every numeric column,
+ * so a column of rupees can be compared down its length rather than read one
+ * row at a time. */
+.mono,
+.tabular,
+.stat-value,
+.money,
+input[type='number'] {
+  font-variant-numeric: tabular-nums;
+}
+
+.mono {
+  font-family: var(--mono);
+}
+
+/* ------------------------------------------------------------- THE WORDMARK
+ *
+ * The same mark in the same place on all five surfaces, sign-in included. Five
+ * screens that share one mark read as one product; five screens that each have
+ * their own header read as five projects, and that was the single biggest thing
+ * making this feel unfinished.
+ */
+
+.wordmark {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  font-family: var(--sans);
+  font-weight: var(--weight-strong);
+  color: var(--text);
+  text-decoration: none;
+  letter-spacing: -0.01em;
+}
+
+.wordmark svg {
+  width: 1.1em;
+  height: 1.1em;
+  color: var(--brand);
+  flex: none;
+}
+
+/* Concrete objects, currentColor, one size. Never an abstract glyph on the
+ * field surfaces and never an emoji anywhere. */
+.icon {
+  width: var(--icon);
+  height: var(--icon);
+  flex: none;
+  stroke-width: var(--icon-stroke);
+  vertical-align: middle;
+}
+
+.icon-sm {
+  width: 18px;
+  height: 18px;
 }
 
 /* ---------------------------------------------------------------------------
@@ -60,30 +220,57 @@
  */
 
 [data-bs-theme='dark'] {
-  --bs-body-bg: var(--surface);
+  --bs-body-bg: var(--ground);
   --bs-body-color: var(--text);
-  --bs-emphasis-color: #f8fafc;
+  --bs-body-font-family: var(--sans);
+  --bs-font-monospace: var(--mono);
+  --bs-emphasis-color: #ffffff;
   --bs-secondary-color: var(--text-muted);
-  --bs-secondary-bg: var(--surface-alt);
-  --bs-tertiary-bg: var(--surface-raised);
+  --bs-secondary-bg: var(--surface-2);
+  --bs-tertiary-bg: var(--surface-2);
   --bs-tertiary-color: var(--text-muted);
-  --bs-border-color: var(--border);
-  --bs-border-radius: var(--radius);
-  --bs-link-color: var(--accent);
-  --bs-link-hover-color: var(--accent-strong);
+  --bs-border-color: var(--line);
+  --bs-border-radius: var(--radius-card);
+  --bs-link-color: var(--brand);
+  --bs-link-hover-color: var(--brand-strong);
 
-  /* The framework's own primary becomes the hazard amber, so `btn-primary`
-   * needs no override anywhere. Dark text on amber: amber against white fails
-   * contrast badly, and this is the one button a driver must not miss. */
-  --bs-primary: var(--accent);
-  --bs-primary-rgb: 245, 158, 11;
+  /* The framework's own primary becomes the brand amber, so `btn-primary` needs
+   * no override anywhere — and, because the brand is reserved for one action
+   * per screen, neither does any status. */
+  --bs-primary: var(--brand);
+  --bs-primary-rgb: 232, 163, 61;
   --bs-danger: var(--danger);
-  --bs-danger-rgb: 239, 68, 68;
+  --bs-danger-rgb: 224, 87, 79;
   --bs-success: var(--ok);
-  --bs-success-rgb: 34, 197, 94;
+  --bs-success-rgb: 53, 160, 106;
+  --bs-warning: var(--warn);
+  --bs-warning-rgb: 217, 140, 43;
 
-  --bs-card-bg: var(--surface-alt);
-  --bs-card-border-color: var(--border);
+  --bs-card-bg: var(--surface);
+  --bs-card-border-color: var(--line);
+  --bs-card-border-radius: var(--radius-card);
+  --bs-btn-border-radius: var(--radius-control);
+}
+
+/* LEGACY ALIASES — a migration shim, not part of the system.
+ *
+ * console.css and field.css were written against the previous names. They are
+ * mapped rather than renamed in one sweep so this pass changes appearance in
+ * reviewable steps instead of one unreadable diff. `--accent` is deliberately
+ * mapped to --warn rather than --brand: almost every remaining use of it is a
+ * STATUS (an ELEVATED badge, an at-risk figure, a selected row), which is
+ * exactly the confusion this pass exists to end. The handful that were genuine
+ * brand actions have been moved to --brand explicitly.
+ */
+:root {
+  --surface-alt: var(--surface);
+  --surface-raised: var(--surface-2);
+  --border: var(--line);
+  --accent: var(--warn);
+  --accent-strong: var(--brand-strong);
+  --lift: none;
+  --lift-high: var(--shadow-answer);
+  --radius: var(--radius-card);
 }
 
 /* THE `hidden` ATTRIBUTE HAS TO WIN, AND WITHOUT THIS IT DOES NOT.
@@ -110,13 +297,14 @@
  * the Sass variable rather than from the custom property above — so this pair
  * has to be stated. */
 [data-bs-theme='dark'] .btn-primary {
-  --bs-btn-color: #1f1300;
-  --bs-btn-hover-color: #1f1300;
-  --bs-btn-active-color: #1f1300;
-  --bs-btn-bg: var(--accent);
-  --bs-btn-hover-bg: var(--accent-strong);
-  --bs-btn-border-color: var(--accent);
-  --bs-btn-hover-border-color: var(--accent-strong);
+  --bs-btn-color: var(--on-brand);
+  --bs-btn-hover-color: var(--on-brand);
+  --bs-btn-active-color: var(--on-brand);
+  --bs-btn-bg: var(--brand);
+  --bs-btn-hover-bg: var(--brand-strong);
+  --bs-btn-border-color: var(--brand);
+  --bs-btn-hover-border-color: var(--brand-strong);
+  font-weight: var(--weight-strong);
 }
 
 /* THE OUTLINE VARIANT NEEDS THE REAL PROPERTIES, not just the variables, and
@@ -130,39 +318,44 @@
  * No `!important`: this selector is (0,2,0) against Bootstrap's (0,1,0) and
  * this file loads after theirs, so it wins on its own. */
 [data-bs-theme='dark'] .btn-outline-primary {
-  color: var(--accent);
-  border-color: var(--accent);
-  --bs-btn-color: var(--accent);
-  --bs-btn-border-color: var(--accent);
-  --bs-btn-hover-bg: var(--accent);
-  --bs-btn-hover-color: #1f1300;
-  --bs-btn-hover-border-color: var(--accent);
-  --bs-btn-active-bg: var(--accent);
-  --bs-btn-active-color: #1f1300;
-  --bs-btn-active-border-color: var(--accent);
+  color: var(--brand);
+  border-color: var(--brand);
+  --bs-btn-color: var(--brand);
+  --bs-btn-border-color: var(--brand);
+  --bs-btn-hover-bg: var(--brand);
+  --bs-btn-hover-color: var(--on-brand);
+  --bs-btn-hover-border-color: var(--brand);
+  --bs-btn-active-bg: var(--brand);
+  --bs-btn-active-color: var(--on-brand);
+  --bs-btn-active-border-color: var(--brand);
 }
 
 [data-bs-theme='dark'] .btn-outline-primary:hover,
 [data-bs-theme='dark'] .btn-outline-primary:active {
-  color: #1f1300;
-  background-color: var(--accent);
-  border-color: var(--accent);
+  color: var(--on-brand);
+  background-color: var(--brand);
+  border-color: var(--brand);
 }
 
-/* A TICKED BOX IS AMBER, NOT BLUE. Bootstrap compiles the checked colour into
- * its stylesheet from the Sass primary rather than reading the custom property,
- * so remapping `--bs-primary` above does not reach it and this pair has to be
- * stated — the same reason `.btn-primary` needs its own block.
- *
- * The tick itself is redrawn dark. The default is a white glyph, and white on
- * amber is around 2:1 — a tick nobody can see is a checkbox with no visible
- * state, which on the safety questions would be a real problem rather than a
- * cosmetic one.
- */
+/* A ticked box is brand amber, not blue, for the same compiled-Sass reason as
+ * the buttons. The tick itself is redrawn dark: the default is a white glyph,
+ * and white on amber is around 2:1 — a tick nobody can see is a checkbox with
+ * no visible state, which on the safety questions would be a real problem
+ * rather than a cosmetic one. */
 [data-bs-theme='dark'] .form-check-input:checked {
-  background-color: var(--accent);
-  border-color: var(--accent);
+  background-color: var(--brand);
+  border-color: var(--brand);
   --bs-form-check-bg-image: url("data:image/svg+xml,%3csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 20 20'%3e%3cpath fill='none' stroke='%231f1300' stroke-linecap='round' stroke-linejoin='round' stroke-width='3' d='m6 10 3 3 6-6'/%3e%3c/svg%3e");
+}
+
+/* Buttons, links and inputs respond in 150ms and nothing else moves. */
+.btn,
+.choice,
+a {
+  transition:
+    background-color var(--motion),
+    border-color var(--motion),
+    color var(--motion);
 }
 
 /* ---------------------------------------------------------------------------
@@ -177,16 +370,16 @@
  */
 
 :focus-visible {
-  outline: 3px solid var(--accent-strong);
+  outline: 3px solid var(--brand-strong);
   outline-offset: 2px;
-  border-radius: 4px;
+  border-radius: var(--radius-badge);
 }
 
 .btn:focus-visible,
 .form-control:focus,
 .form-select:focus {
-  border-color: var(--accent);
-  box-shadow: 0 0 0 3px rgb(245 158 11 / 0.35);
+  border-color: var(--brand);
+  box-shadow: 0 0 0 3px var(--brand-soft);
 }
 
 /* People who have asked their operating system to stop animating things are
@@ -200,4 +393,74 @@
     transition-duration: 0.01ms !important;
     scroll-behavior: auto !important;
   }
+}
+
+/* ---------------------------------------------------------------------------
+ * SIGN IN. One layout, all four surfaces.
+ *
+ * It was two bare fields and a button in the top-left corner of an empty page,
+ * under a header reading "No connection · signed out". Three separate problems
+ * in one screen: nothing said which product you had opened, nothing said which
+ * surface you were entering, and the first fact offered was a failure. A
+ * centred card with the mark and the role fixes all three, and the connection
+ * indicator is now hidden until there is a session it could describe.
+ */
+
+.signin {
+  display: flex;
+  justify-content: center;
+  padding: var(--space-7) var(--space-4);
+}
+
+.signin-card {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  width: 100%;
+  max-width: 22rem;
+  padding: var(--space-5);
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-card);
+  /* THE ONE SHADOW ON THIS SCREEN. Sign-in has exactly one card, so it is by
+   * definition the card carrying the answer. */
+  box-shadow: var(--shadow-answer);
+}
+
+.signin-mark {
+  font-size: var(--size-1);
+}
+
+/* WHICH DOOR THIS IS. A person arriving from the landing page picked a role;
+ * this line confirms they are in the right place before they type anything. */
+.signin-role {
+  margin: 0 0 var(--space-2);
+  font-size: var(--size-3);
+  color: var(--text-muted);
+}
+
+.signin-field {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+
+.signin-label {
+  font-size: var(--size-4);
+  color: var(--text-muted);
+}
+
+.signin-submit {
+  margin-top: var(--space-2);
+  min-height: 48px;
+  font-size: var(--size-2);
+}
+
+/* The role beside the wordmark in a signed-in header. Muted and normal weight:
+ * the mark is the product, this is just which of its surfaces you are on. */
+.app-bar-role {
+  margin: 0;
+  font-size: var(--size-3);
+  font-weight: var(--weight-normal);
+  color: var(--text-muted);
 }

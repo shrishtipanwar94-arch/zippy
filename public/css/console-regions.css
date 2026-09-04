@@ -46,18 +46,23 @@
 .console .badge,
 .console .reason-code,
 .console .timeline-row {
-  font-size: 0.75rem;
+  font-size: var(--size-4);
 }
 
 .console-grid {
   display: grid;
-  gap: 0.75rem;
+  gap: var(--space-3);
   grid-template-columns: minmax(0, 1fr);
 }
 
 @media (min-width: 1200px) {
   .console-grid {
-    grid-template-columns: 19rem minmax(0, 1fr) 23rem;
+    /* The queue column carries a registration, a worded fault and a place now,
+     * and at 19rem it was ellipsing half of every subject — "the engine ov…"
+     * and "Near landmark 26 —…" are not information. The width comes out of the
+     * centre column, which is a map and a timeline and loses nothing by being
+     * 72px narrower. */
+    grid-template-columns: 23.5rem minmax(0, 1fr) 23rem;
   }
 
   /* THE INVESTIGATE COLUMN, COLLAPSED. It is about one selected job, so for
@@ -70,7 +75,7 @@
    * Only from 1200px: below that the grid is a single stack and a vertical rail
    * in a stack is just a strange-looking card. */
   .console-grid.no-selection {
-    grid-template-columns: 19rem minmax(0, 1fr) 2.25rem;
+    grid-template-columns: 23.5rem minmax(0, 1fr) 2.25rem;
   }
 
   .console-grid.no-selection .investigate-full {
@@ -84,11 +89,11 @@
 
 @media (min-width: 1600px) {
   .console-grid {
-    grid-template-columns: 22rem minmax(0, 1fr) 28rem;
+    grid-template-columns: 26rem minmax(0, 1fr) 28rem;
   }
 
   .console-grid.no-selection {
-    grid-template-columns: 22rem minmax(0, 1fr) 2.25rem;
+    grid-template-columns: 26rem minmax(0, 1fr) 2.25rem;
   }
 }
 
@@ -105,10 +110,10 @@
   transform: rotate(180deg);
   height: 100%;
   min-height: 12rem;
-  padding: 0.5rem 0;
-  border: 1px solid var(--border);
-  border-radius: 0.375rem;
-  font-size: 0.75rem;
+  padding: var(--space-2) 0;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-control);
+  font-size: var(--size-4);
   text-transform: uppercase;
   letter-spacing: 0.04em;
   color: var(--text-muted);
@@ -124,7 +129,7 @@
 .board-bar {
   display: flex;
   align-items: center;
-  gap: 0.75rem;
+  gap: var(--space-3);
   flex-wrap: wrap;
 }
 
@@ -133,7 +138,7 @@
 .console-col {
   display: flex;
   flex-direction: column;
-  gap: 0.75rem;
+  gap: var(--space-3);
   min-width: 0;
 }
 
@@ -158,37 +163,38 @@
 
 .stat-strip {
   display: flex;
-  gap: 1.5rem;
+  gap: var(--space-5);
   flex-wrap: wrap;
-  padding: 0.25rem 0.125rem;
-  border-bottom: 1px solid var(--border);
+  padding: var(--space-1) 0;
+  border-bottom: 1px solid var(--line);
 }
 
 .stat {
   display: flex;
   align-items: baseline;
-  gap: 0.5rem;
+  gap: var(--space-2);
 }
 
 .stat-label {
-  font-size: 0.75rem;
+  font-size: var(--size-4);
   color: var(--text-muted);
   text-transform: uppercase;
   letter-spacing: 0.04em;
 }
 
 .stat-value {
-  font-size: 1.25rem;
-  font-weight: 650;
+  font-size: var(--size-1);
+  font-weight: var(--weight-strong);
   font-variant-numeric: tabular-nums;
   line-height: 1.1;
 }
 
-/* Amber only when the number is one worth acting on. A permanently coloured
- * strip is a strip nobody reads — the same argument the health banner makes
- * for staying hidden while everything is normal. */
+/* WARN amber, not brand amber. This is a status — "act on this number" — and
+ * the brand hue is reserved for the one button on the page. A permanently
+ * coloured strip is a strip nobody reads, which is the same argument the health
+ * banner makes for staying hidden while everything is normal. */
 .stat-value.is-urgent {
-  color: var(--accent);
+  color: var(--warn);
 }
 
 /* ---------------------------------------------------------------------------
@@ -197,15 +203,15 @@
  */
 
 .console-ambient > summary {
-  font-size: 0.75rem;
+  font-size: var(--size-4);
   text-transform: uppercase;
   letter-spacing: 0.04em;
   color: var(--text-muted);
   cursor: pointer;
-  padding: 0.375rem 0;
+  padding: var(--space-1) 0;
 }
 
 .console-ambient[open] > summary {
-  border-bottom: 1px solid var(--border);
-  margin-bottom: 0.5rem;
+  border-bottom: 1px solid var(--line);
+  margin-bottom: var(--space-2);
 }

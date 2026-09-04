@@ -262,9 +262,52 @@ function screeningRow(row) {
   return `<div class="small">${mark} ${escapeHtml(name)}${priced}${why}</div>`;
 }
 
+// THE COST TERMS, IN OPERATOR VOCABULARY.
+//
+// These rows used to print the solver's own property names — `slaRisk`,
+// `partSourcingCost`, `contractSlaExposure`. An ENUM on this console is
+// correct: CAPABILITY_MISSING and NO_TECHNICIAN_ON_SHIFT are the words the
+// system and the operator genuinely share, and softening them would lose
+// precision. A camelCase VARIABLE NAME is not the same thing — it is an
+// implementation detail that leaked into a table a dispatcher has to read
+// under time pressure, and "SLA risk" is the same width.
+//
+// A term with no entry here still renders, as its raw key. A missing label
+// should look slightly wrong rather than hide a term that is moving the total.
+const TERM_LABELS = {
+  slaRisk: 'SLA risk',
+  travelDistance: 'Travel distance',
+  travelTime: 'Travel time',
+  operationalCost: 'Operational cost',
+  partSourcingCost: 'Part sourcing',
+  contractSlaExposure: 'Contract exposure',
+  destinationRefusalRisk: 'Workshop refusal risk',
+  capabilityShortfallRisk: 'Capability shortfall',
+  expectedTimeToResolution: 'Time to resolution',
+};
+
+// MONEY IN RUPEES, NOT PAISE. `20901 paise` is a number nobody converts in
+// their head while comparing two crews, and the money column was the only one
+// on the console still in the storage unit.
+//
+// A NEGATIVE EXPOSURE IS A CREDIT, and saying so is the point. Contract
+// exposure is negative when the assignment protects a contract rather than
+// risking one, so the figure that reads as a broken minus sign is actually the
+// best news in the table.
+function formatTermValue(term) {
+  const value = Number(term.value);
+  if (term.unit !== 'paise' || !Number.isFinite(value)) {
+    return { text: formatNumber(term.value), unit: term.unit ?? '' };
+  }
+
+  const rupees = Math.round(Math.abs(value) / 100).toLocaleString('en-IN');
+  if (value < 0) return { text: `₹${rupees}`, unit: 'credit' };
+  return { text: `₹${rupees}`, unit: '' };
+}
+
 // The cost breakdown, term by term. Each term carries its own unit because
 // they are not commensurable — minutes, kilometres, two probabilities and
-// paise — and the weights are what convert them, so showing a bare number per
+// money — and the weights are what convert them, so showing a bare number per
 // term would be meaningless.
 function chosenOption(option) {
   const box = document.createElement('div');
@@ -278,11 +321,12 @@ function chosenOption(option) {
     .map(([key, term]) => {
       const contribution = Number(term.weighted ?? term.contribution ?? 0);
       const share = total > 0 ? Math.min(100, Math.abs(contribution / total) * 100) : 0;
+      const shown = formatTermValue(term);
       return `
         <tr>
-          <td class="mono">${escapeHtml(key)}</td>
-          <td class="text-end">${escapeHtml(formatNumber(term.value))} <span class="text-muted">${escapeHtml(term.unit ?? '')}</span></td>
-          <td class="text-end">${escapeHtml(formatNumber(contribution))}</td>
+          <td>${escapeHtml(TERM_LABELS[key] ?? key)}</td>
+          <td class="text-end mono">${escapeHtml(shown.text)} <span class="text-muted">${escapeHtml(shown.unit)}</span></td>
+          <td class="text-end mono">${escapeHtml(formatNumber(contribution))}</td>
           <td style="width:30%"><div class="term-bar" style="width:${share.toFixed(0)}%"></div></td>
         </tr>`;
     })

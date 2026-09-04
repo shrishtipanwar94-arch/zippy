@@ -47,7 +47,10 @@ export function render(state) {
 
   // The flow disappears once a job exists — from then on this page is about
   // one incident, not about starting another.
-  panel.hidden = Boolean(state.activeJobId);
+  // Hidden while a job is open, and also while the driver is being asked WHICH
+  // of several open jobs they mean — offering "What has happened?" underneath
+  // that question invites a second report for a breakdown already in hand.
+  panel.hidden = Boolean(state.activeJobId) || (state.openJobs ?? []).length > 0;
   if (panel.hidden) return;
 
   for (const step of STEPS) {

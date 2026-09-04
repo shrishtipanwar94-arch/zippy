@@ -12,7 +12,7 @@
  */
 
 body.console {
-  font-size: 0.875rem;
+  font-size: var(--size-3);
 }
 
 .console .card-header {
@@ -20,7 +20,7 @@ body.console {
   color: var(--text-muted);
   text-transform: uppercase;
   letter-spacing: 0.04em;
-  font-size: 0.75rem;
+  font-size: var(--size-4);
 }
 
 /* The timeline is a long scrolling region that must NOT move under the
@@ -36,18 +36,18 @@ body.console {
 }
 
 .timeline-row.is-selected {
-  background: rgb(245 158 11 / 0.12);
+  background: var(--brand-soft);
 }
 
 .event-type {
   font-family: var(--mono);
-  font-size: 0.75rem;
+  font-size: var(--size-4);
   color: var(--accent);
 }
 
 .mono {
   font-family: var(--mono);
-  font-size: 0.75rem;
+  font-size: var(--size-4);
 }
 
 .safety-HIGH_RISK {
@@ -83,7 +83,7 @@ body.console {
  * but genuinely on the screen — Phase 21 requires the rule to be labelled as a
  * rule, and a tooltip is not a label. */
 .rule-note {
-  font-size: 0.75rem;
+  font-size: var(--size-4);
   opacity: 0.85;
 }
 
@@ -146,7 +146,7 @@ body.console {
 
 .queue-badge {
   display: inline-block;
-  font-size: 0.75rem;
+  font-size: var(--size-4);
   font-family: var(--mono);
   line-height: 1.4;
   padding: 0 0.3rem;
@@ -185,8 +185,8 @@ body.console {
 /* WHICH ROW THE RIGHT-HAND COLUMN IS ABOUT. Without this there is nothing on
  * screen tying the investigation column to the row that opened it. */
 .queue-table tr.is-selected {
-  background: rgb(245 158 11 / 0.12);
-  outline: 1px solid var(--accent);
+  background: var(--brand-soft);
+  outline: 1px solid var(--brand);
 }
 
 /* THE QUEUE ROW'S TWO LINES. Registration and fault on the first, how long it
@@ -252,7 +252,7 @@ body.console {
  * wrapping: "Battery has failed and needs replacing" must not push a row to
  * three lines in a list read by scanning. The full string is on the title. */
 .queue-fault {
-  font-size: 0.75rem;
+  font-size: var(--size-4);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -260,7 +260,7 @@ body.console {
 }
 
 .queue-where {
-  font-size: 0.75rem;
+  font-size: var(--size-4);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -279,11 +279,3 @@ body.console {
   line-height: 1.6;
 }
 
-/* The job a queued action belongs to. Allowed to wrap and to shrink: a cuid is
- * 25 characters and the monitoring column is 19rem on a laptop, so left
- * unconstrained it clipped off the edge of every card. */
-.action-job {
-  word-break: break-all;
-  text-align: right;
-  min-width: 0;
-}

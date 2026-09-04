@@ -17,8 +17,8 @@
 
 import { Router } from 'express';
 import { z } from 'zod';
-import { prisma } from '../infra/db.js';
 import { prismaBase } from '../infra/prismaBase.js';
+import { visibleJobId } from './visibleJob.js';
 import { authenticate, requirePermission } from './middleware/authenticate.js';
 import { buildEstimate } from '../commit/estimates.js';
 import { respondToEstimate } from '../commit/estimateResponses.js';
@@ -28,11 +28,6 @@ import { formatRupees } from '../domain/money.js';
 
 export const estimatesRouter = Router();
 
-async function visibleJobId(id: unknown): Promise<string | null> {
-  if (typeof id !== 'string' || id.length === 0) return null;
-  const job = await prisma.job.findFirst({ where: { id }, select: { id: true } });
-  return job?.id ?? null;
-}
 
 const buildSchema = z
   .object({

@@ -22,7 +22,7 @@ import { join } from 'node:path';
 import { createApp } from '../src/api/app.js';
 import { prismaBase } from '../src/infra/prismaBase.js';
 import { issueAccessToken } from '../src/auth/tokens.js';
-import { headlineFor, whatWeThinkItIs } from '../src/domain/driverNarrative.js';
+import { formatArrivalIn, headlineFor, whatWeThinkItIs } from '../src/domain/driverNarrative.js';
 import { guidanceFor } from '../src/domain/safetyGuidance.js';
 import { ladderMove, nextStepFor, LADDER_STEPS } from '../src/domain/jobLadder.js';
 import { driverUpdatesFor } from '../src/domain/driverUpdates.js';
@@ -125,17 +125,36 @@ describe('the translation map — no enum reaches a driver', () => {
     expect(sentence).not.toMatch(SCREAMING_CASE);
   });
 
-  it('gives a clock time, never a countdown', () => {
+  // THE HEADLINE NAMES THE PERSON AND SAYS NOTHING ABOUT TIME. It used to carry
+  // the arrival clock as well, and the card underneath showed the same figure
+  // again as its largest line — one fact in two places. The number now lives
+  // only where it is a number.
+  it('names who is coming and leaves the time to the arrival line', () => {
     const sentence = headlineFor({
       status: 'COMMITTED',
       helperName: 'Ravi',
-      // 15:54 UTC is 21:24 in Bengaluru — the brief's own example.
       arrivingAt: new Date('2026-08-31T15:54:00.000Z'),
       replanning: false,
       sourcingPart: false,
       intakeComplete: true,
     });
-    expect(sentence).toBe('Ravi is on the way, arriving 21:24.');
+    expect(sentence).toBe('Ravi is on the way.');
+    expect(sentence).not.toMatch(/\d/);
+  });
+
+  // A DURATION, NOT A CLOCK TIME. Reading 21:24 and subtracting the current
+  // time is a skill; this product is read at the side of a road. It is still
+  // not a countdown — it is computed once per response from the recorded
+  // estimate and nothing in the browser ticks it.
+  it('says how long rather than what time', () => {
+    const now = new Date('2026-08-31T15:42:00.000Z');
+    expect(formatArrivalIn(new Date('2026-08-31T15:54:00.000Z'), now)).toBe('About 10 minutes');
+    expect(formatArrivalIn(new Date('2026-08-31T15:47:00.000Z'), now)).toBe('About 5 minutes');
+    // Rounded to five minutes above ten: a roadside ETA is not accurate to the
+    // minute and printing "about 23 minutes" would claim that it is.
+    expect(formatArrivalIn(new Date('2026-08-31T16:05:00.000Z'), now)).toBe('About 25 minutes');
+    // Already due, or overdue — never a negative number on a driver's phone.
+    expect(formatArrivalIn(new Date('2026-08-31T15:41:00.000Z'), now)).toBe('Any moment now');
   });
 
   it('says nothing about time when there is no honest estimate', () => {
@@ -147,7 +166,7 @@ describe('the translation map — no enum reaches a driver', () => {
       sourcingPart: false,
       intakeComplete: true,
     });
-    expect(sentence).toBe('Ravi is on the way to you now.');
+    expect(sentence).toBe('Ravi is on the way.');
   });
 
   // A job sits at INTAKE from the last answer until the solver plans it. During

@@ -82,6 +82,11 @@ const state = {
   // Which job the driver / technician detail panels are showing.
   activeJobId: null,
 
+  // OPEN JOBS OFFERED BACK TO A DRIVER WHO HAS JUST SIGNED IN. Non-empty only
+  // while the choice is on screen: one open job restores itself without asking,
+  // and picking from this list empties it again.
+  openJobs: [],
+
   // The intake question flow on the driver page.
   nextQuestion: null, // { code, prompt, answers } | null
   intakeDone: null, // stop reason string | null
@@ -239,6 +244,10 @@ export function setSession(token, session) {
   state.token = token;
   state.session = session;
   state.error = null;
+}
+
+export function setOpenJobs(jobs) {
+  state.openJobs = jobs;
 }
 
 export function setConnection(status) {

@@ -23,8 +23,8 @@
 
 import { Router } from 'express';
 import { z } from 'zod';
-import { prisma } from '../infra/db.js';
 import { prismaBase } from '../infra/prismaBase.js';
+import { visibleJobId } from './visibleJob.js';
 import { config } from '../infra/config.js';
 import { logger } from '../infra/logger.js';
 import { authenticate, requirePermission } from './middleware/authenticate.js';
@@ -35,11 +35,6 @@ import { verifyCheckoutSignature } from '../payments/razorpaySignature.js';
 
 export const checkoutRouter = Router();
 
-async function visibleJobId(id: unknown): Promise<string | null> {
-  if (typeof id !== 'string' || id.length === 0) return null;
-  const job = await prisma.job.findFirst({ where: { id }, select: { id: true } });
-  return job?.id ?? null;
-}
 
 checkoutRouter.post(
   '/jobs/:id/checkout',

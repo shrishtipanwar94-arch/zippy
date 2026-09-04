@@ -90,7 +90,11 @@ describe('what a line comes to', () => {
     // Itemised means reconstructable: "1.5h @ ₹600" is readable off the row.
     expect(line.quantity).toBe(1.5);
     expect(line.unitPricePaise).toBe(60000);
-    expect(line.description).toContain('1.5h');
+    // The row is worded for the person being billed, not for a ledger:
+    // "Your time · 1.5 hours", never "Labour, 1.5h". The quantity above is
+    // still the exact figure the line is priced on.
+    expect(line.description).toContain('1.5 hours');
+    expect(line.description).not.toContain('Labour');
   });
 
   it('meters a tow by distance', () => {

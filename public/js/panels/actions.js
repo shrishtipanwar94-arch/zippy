@@ -26,10 +26,20 @@ const TIER_LABEL = {
   APPROVE: 'Needs sign-off',
 };
 
-// Kinds, in words. The raw kind is shown too — an operator who has seen
-// REASSIGN_AFTER_DIAGNOSIS_CHANGE three times this week knows more about their
-// fleet than the sentence alone tells them, exactly as the escalation card
-// shows its feasibility code.
+// Kinds, in words — and ONLY in words now.
+//
+// This card used to print the sentence and the raw kind beside it, on the
+// argument that an operator who has seen REASSIGN_AFTER_DIAGNOSIS_CHANGE three
+// times this week knows more than the sentence tells them. That argument holds
+// for the escalation card's FEASIBILITY CODE, which is a reason a specific
+// option was rejected and has no plain-English equivalent. It does not hold
+// here: "Two jobs want the same crew" already says everything
+// APPROVE_CROSS_TENANT_CONTENTION says, in fewer characters, so the raw kind
+// was pure duplication sitting under well-written copy.
+//
+// The truncated job id went with it. A cuid wrapped across four lines in a
+// 3rem column identifies nothing — it was neither readable nor clickable, and
+// the reason line underneath already names what the action is about.
 //
 // ONE ENTRY PER KIND IN src/domain/actionTiers.ts, INCLUDING THE AUTO ONES.
 // Two of the four keys this map opened with — `SLA_BREACH_FOLLOW_UP` and
@@ -92,9 +102,7 @@ function cardMarkup(action) {
             ${escapeHtml(TIER_LABEL[action.tier] ?? action.tier)}
           </span>
           <strong class="ms-1">${escapeHtml(KIND_LABEL[action.kind] ?? action.kind)}</strong>
-          <div class="reason-code d-inline-block ms-1">${escapeHtml(action.kind)}</div>
         </div>
-        <span class="mono action-job">${escapeHtml(action.jobId ?? '—')}</span>
       </div>
 
       <p class="small mb-1 mt-1">${escapeHtml(action.reason)}</p>

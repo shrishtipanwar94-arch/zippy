@@ -25,15 +25,42 @@ import type { FaultCode } from './faults.js';
 // night with.
 const IST_OFFSET_MINUTES = 5 * 60 + 30;
 
-// "arriving 21:24" — a clock time, never a countdown. The phase brief is
-// emphatic about this and the reason is human rather than technical: a
-// countdown that stalls at "2 minutes" for a quarter of an hour reads as a
-// broken promise, while a clock time that moves reads as new information.
+// A clock time in IST. Still used where an absolute instant is the right thing
+// to show; the driver's arrival line is not one of those — see below.
 export function formatIstClock(at: Date): string {
   const local = new Date(at.getTime() + IST_OFFSET_MINUTES * 60 * 1000);
   const hours = String(local.getUTCHours()).padStart(2, '0');
   const minutes = String(local.getUTCMinutes()).padStart(2, '0');
   return `${hours}:${minutes}`;
+}
+
+// HOW LONG, NOT WHAT TIME.
+//
+// This screen showed "arriving 00:44". Reading a 24-hour clock and subtracting
+// the current time from it is a skill, and this is a product for someone
+// standing at the side of a road, possibly at night, possibly not a confident
+// reader — "about 12 minutes" is the same fact with the arithmetic already
+// done.
+//
+// THIS IS NOT THE COUNTDOWN THE BRIEF RULES OUT. The objection there was to a
+// fake countdown that ticks down in the browser and stalls at "2 minutes" for
+// a quarter of an hour, which reads as a broken promise. This number is
+// computed once per response from the real recorded estimate and only changes
+// when a new estimate is recorded — it is relative phrasing of a real figure,
+// not a timer.
+//
+// Rounded to five minutes above ten, because a roadside ETA is not accurate to
+// the minute and printing "about 23 minutes" claims a precision the routing
+// engine does not have.
+export function formatArrivalIn(arrivingAt: Date, now: Date): string {
+  const minutes = Math.round((arrivingAt.getTime() - now.getTime()) / 60_000);
+
+  if (minutes <= 1) return 'Any moment now';
+  if (minutes < 10) return `About ${minutes} minutes`;
+  if (minutes < 60) return `About ${Math.round(minutes / 5) * 5} minutes`;
+
+  const hours = Math.round(minutes / 30) / 2;
+  return hours === 1 ? 'About an hour' : `About ${hours} hours`;
 }
 
 export type NarrativeContext = {
@@ -103,11 +130,13 @@ export function headlineFor(context: NarrativeContext): string {
       return 'We have found a crew for this and are contacting them now.';
     case 'OFFERED':
       return 'We have asked a technician to come. Waiting for them to confirm.';
+    // NO TIME IN THIS SENTENCE. The arrival figure is the biggest thing on the
+    // card directly underneath, and it was being said twice — once buried in
+    // this headline and once as a large line below it. One fact, one place, and
+    // the place is the one where it is a number rather than a clause.
     case 'COMMITTED':
     case 'EN_ROUTE':
-      return context.arrivingAt
-        ? `${who} is on the way, arriving ${formatIstClock(context.arrivingAt)}.`
-        : `${who} is on the way to you now.`;
+      return `${who} is on the way.`;
     case 'ON_SITE':
       return `${who} has arrived and is with your vehicle.`;
     case 'DIAGNOSING':

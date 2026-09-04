@@ -52,12 +52,25 @@ export function priceParts(rate: PartRate, quantity: number): PricedLine {
   };
 }
 
+// Hours as minutes, in words. Rounded to five minutes above a quarter of an
+// hour for the same reason the driver's ETA is: a labour estimate is not
+// accurate to the minute and printing "23 minutes" claims that it is.
+function labourMinutes(hours: number): string {
+  const minutes = Math.max(1, Math.round(hours * 60));
+  if (minutes < 15) return `${minutes} minutes`;
+  if (minutes < 60) return `${Math.round(minutes / 5) * 5} minutes`;
+  const wholeHours = Math.round((minutes / 60) * 2) / 2;
+  return wholeHours === 1 ? '1 hour' : `${wholeHours} hours`;
+}
+
 export function priceLabour(rate: LabourRate, hours: number): PricedLine {
   return {
     kind: 'LABOUR',
-    // The hours are on the line, so "1h @ ₹600" is reconstructable from the
-    // row rather than only from the sentence.
-    description: `Labour, ${hours}h`,
+    // "Your time · 25 minutes", not "Labour, 0.42h". Nobody reads a decimal
+    // fraction of an hour, and "labour" is a billing word rather than a word
+    // the person being billed uses. The figure is still exactly what the row is
+    // priced on — it is the same number, said the way it would be said aloud.
+    description: `Your time · ${labourMinutes(hours)}`,
     quantity: hours,
     unitPricePaise: rate.ratePerHourPaise,
     amountPaise: roundToPaise(rate.ratePerHourPaise * hours),
@@ -90,7 +103,9 @@ export function priceTow(rate: TowRate, kilometres: number): PricedLine {
 export function priceCallout(rate: CalloutRate): PricedLine {
   return {
     kind: 'CALLOUT',
-    description: 'Callout',
+    // "Callout" is trade vocabulary. What the driver is paying for is somebody
+    // driving out to them.
+    description: 'Coming out to you',
     // A flat fee is one of itself at its own price. Modelling it as quantity 1
     // rather than as a special case keeps every line the same shape, which is
     // what lets the total be a plain sum.

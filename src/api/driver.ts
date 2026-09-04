@@ -25,7 +25,9 @@ import { prismaBase } from '../infra/prismaBase.js';
 import { authenticate, requirePermission } from './middleware/authenticate.js';
 import {
   headlineFor,
+  formatArrivalIn,
   formatIstClock,
+  labelForJobStatus,
   labelForUnit,
   whatWeThinkItIs,
 } from '../domain/driverNarrative.js';
@@ -58,6 +60,56 @@ function isWorkshopRun(stored: unknown): boolean {
   if (!stored || typeof stored !== 'object') return false;
   return (stored as { status?: unknown }).status === 'WORKSHOP_RUN';
 }
+
+// A JOB THE DRIVER HAS NOT FINISHED WITH. Counted out rather than in, the same
+// direction src/api/console.ts counts them: a status added by a later phase
+// shows up as open, and the failure is a driver being offered a job that has
+// ended rather than being unable to reach one that has not.
+const FINISHED_JOB_STATUSES = ['RESOLVED', 'CANCELLED', 'UNSERVICEABLE'] as const;
+
+// WHAT THIS DRIVER STILL HAS OPEN — the list the phone needs to find its way
+// back after a reload.
+//
+// The driver page used to hold the job id only in memory, set at the moment it
+// created one, so locking the phone or dropping the browser tab dumped a driver
+// with a technician already en route back onto "What has happened?". This is the
+// one surface where the person using it is guaranteed to be having a bad day,
+// and a lost session is a second problem on top of the first.
+//
+// SERVER-SIDE, and worded here, for the reason the whole file exists: the
+// browser must not own a second copy of "which statuses are finished" or of how
+// a status is spelled in English. Both already live here.
+driverRouter.get(
+  '/driver/open-jobs',
+  authenticate,
+  requirePermission('read', 'job'),
+  async (_req, res) => {
+    // The scoped client narrows a DRIVER to their own jobs, so there is no
+    // driver id in this query and no way to ask for somebody else's.
+    const jobs = await prisma.job.findMany({
+      where: { status: { notIn: [...FINISHED_JOB_STATUSES] } },
+      orderBy: { createdAt: 'desc' },
+      take: 10,
+      select: {
+        id: true,
+        status: true,
+        createdAt: true,
+        vehicle: { select: { registration: true } },
+      },
+    });
+
+    res.json({
+      jobs: jobs.map((job) => ({
+        jobId: job.id,
+        // The plate, because that is what a driver with two cars is choosing
+        // between — not a cuid and not a status.
+        registration: job.vehicle.registration,
+        status: labelForJobStatus(job.status),
+        raisedAt: job.createdAt.toISOString(),
+      })),
+    });
+  },
+);
 
 driverRouter.get(
   '/jobs/:id/driver-view',
@@ -212,10 +264,17 @@ function contendersFrom(distribution: unknown): FaultCode[] {
 function arrivalView(
   arrivingAt: Date | null,
   degraded: boolean,
-): { at: string; clock: string; rough: boolean } | null {
+): { at: string; inWords: string; clock: string; rough: boolean } | null {
   if (!arrivingAt) return null;
   return {
     at: arrivingAt.toISOString(),
+    // HOW LONG, not what time — the figure the phone puts at the top of the
+    // card. See formatArrivalIn for why this is not the countdown the brief
+    // rules out.
+    inWords: formatArrivalIn(arrivingAt, new Date()),
+    // Kept alongside it: the absolute time is what a driver reads back to
+    // somebody on the phone, and it is the only honest thing to show once the
+    // relative figure has gone stale in a backgrounded tab.
     clock: formatIstClock(arrivingAt),
     // Invariant 8: a degraded estimate is visible rather than silently
     // substituted. On this surface it becomes "this is a rough time", not a

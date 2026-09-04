@@ -33,6 +33,39 @@ export function tenantFilterValue(context: AuthContext | undefined): string | nu
   return NO_TENANT;
 }
 
+// A TECHNICIAN'S AUTHORITY OVER A JOB IS ASSIGNMENT, NOT TENANT MEMBERSHIP.
+//
+// The fleet is shared. The solver picks the best crew for a job wherever that
+// crew's own membership happens to sit, and APPROVE_CROSS_TENANT_CONTENTION
+// exists precisely to arbitrate when two tenants want the same one — so a
+// technician being assigned a job outside their own tenant is the design
+// working, not an anomaly. Every technician belongs to exactly one of the three
+// fleet tenants, so it is also the common case rather than the edge.
+//
+// The tenant filter then hid the job from the one person standing next to the
+// vehicle. They could climb the entire ladder, because those routes read
+// through `prismaBase`, but could not read the job or price it, because those
+// routes resolve it through the scoped client first. Two paths, one rule, and
+// only one of them right — the same shape as KIND_LABEL, the driverUpdates
+// whitelist and the population counts before it.
+//
+// So Job READS by a TECHNICIAN are exempt here, and narrowed instead by
+// jobOwnershipExtension, which AND-composes `assignedTechnicianId = them`. That
+// is strictly narrower than any tenant filter — it is one technician's own
+// assigned jobs and nothing else — so this exemption cannot widen a result set.
+//
+// READS ONLY, and that restriction is load-bearing: the ownership extension
+// deliberately does not constrain writes, so exempting writes here would let a
+// technician update any job in the database by id. A technician's own writes go
+// through `prismaBase` and are scoped by technicianId inside the commit layer.
+export function technicianReadingOwnJob(
+  model: string | undefined,
+  operation: string,
+  context: AuthContext | undefined,
+): boolean {
+  return context?.role === 'TECHNICIAN' && model === 'Job' && isReadOperation(operation);
+}
+
 const READ_OPERATIONS: ReadonlySet<string> = new Set([
   'findMany',
   'findFirst',

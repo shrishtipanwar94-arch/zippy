@@ -13,7 +13,8 @@
   </head>
   <body class="p-3 console">
     <div class="d-flex align-items-center gap-2 mb-3">
-      <h1 class="h4 mb-0">Fleet dashboard</h1>
+      <span class="wordmark"><svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M13.5 2 4 13.2h6.2L9.8 22 20 10.4h-6.4z" /></svg>Zippy</span>
+      <h1 class="app-bar-role">Fleet dashboard</h1>
       <span data-field="connection" class="badge bg-secondary">disconnected</span>
       <span data-field="session" class="text-muted small">signed out</span>
       <button data-action="refresh" class="btn btn-outline-light btn-sm ms-auto">Refresh</button>
@@ -22,15 +23,25 @@
 
     <div data-field="error" class="alert alert-danger" hidden></div>
 
-    <form data-panel="login" class="row g-2 mb-3" onsubmit="return false">
-      <div class="col-auto">
-        <input id="email" class="form-control" value="fm-metrocab@zippy.internal" />
-      </div>
-      <div class="col-auto">
-        <input id="password" type="password" class="form-control" value="password-dev-only" />
-      </div>
-      <div class="col-auto">
-        <button data-action="login" class="btn btn-primary">Sign in</button>
+    <!-- SIGN IN — a centred card carrying the mark and the surface being
+         entered; the connection badge stays hidden until there is a session
+         (panels/session.js). -->
+    <form data-panel="login" class="signin" onsubmit="return false">
+      <div class="signin-card">
+        <span class="wordmark signin-mark">
+          <svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M13.5 2 4 13.2h6.2L9.8 22 20 10.4h-6.4z" /></svg>
+          Zippy
+        </span>
+        <p class="signin-role">Fleet manager</p>
+        <div class="signin-field">
+          <label class="signin-label" for="email">Email</label>
+          <input id="email" class="form-control" value="fm-metrocab@zippy.internal" />
+        </div>
+        <div class="signin-field">
+          <label class="signin-label" for="password">Password</label>
+          <input id="password" type="password" class="form-control" value="password-dev-only" />
+        </div>
+        <button data-action="login" class="btn btn-primary signin-submit">Sign in</button>
       </div>
     </form>
 

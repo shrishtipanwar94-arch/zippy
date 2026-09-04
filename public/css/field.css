@@ -231,3 +231,78 @@ body.technician {
   white-space: nowrap;
   border: 0;
 }
+
+/* ---------------------------------------------------------------------------
+ * PART 8's SHAPE, APPLIED TO THE TWO FIELD SURFACES.
+ *
+ * ONE AMBER BUTTON PER SCREEN. Before this pass the technician's card carried a
+ * warning-amber "File a new diagnosis", an info-blue "Send the driver a cost"
+ * and a green "Finish job" — three equally loud calls to action, so the screen
+ * had no answer to "what do I press now?". The rung button and the completion
+ * button are never on screen together, so both may be the primary; everything
+ * else is a neutral outline.
+ */
+
+.tech-primary {
+  /* A thumb, not a cursor. 56px is the low end of what is comfortable to hit
+   * on a phone held in one hand at the roadside. */
+  min-height: 56px;
+  font-size: var(--size-2);
+  font-weight: var(--weight-strong);
+}
+
+.tech-action {
+  min-height: 48px;
+  font-size: var(--size-3);
+}
+
+/* THE MONEY IS THE MESSAGE. A person who reads English slowly still reads a
+ * rupee figure reliably, so on both field surfaces the amount is the largest
+ * thing in its block and the words around it are small. */
+.estimate-total {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: var(--space-3);
+  font-size: var(--size-2);
+}
+
+.estimate-total .money {
+  font-family: var(--mono);
+  font-size: var(--size-1);
+  font-weight: var(--weight-strong);
+}
+
+/* THE ONE CARD CARRYING THE ANSWER gets the shadow and a lighter ground; every
+ * other block on these two pages sits on a hairline. Four identical cards
+ * stacked down a phone is what flattened the hierarchy — the job card, the
+ * cost, the parts question and the diagnosis block all looked equally
+ * important, so none of them was. */
+.answer-card {
+  background: var(--surface-2);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-card);
+  box-shadow: var(--shadow-answer);
+  padding: var(--space-4);
+}
+
+/* Sections beneath the answer, separated by a rule rather than boxed. */
+.quiet-section {
+  border-top: 1px solid var(--line);
+  padding-top: var(--space-4);
+  margin-top: var(--space-4);
+}
+
+/* The plate on a resume choice, and the worded status under it. */
+.resume-plate {
+  display: block;
+  font-family: var(--mono);
+  font-weight: var(--weight-strong);
+  font-size: var(--size-2);
+}
+
+.resume-status {
+  display: block;
+  font-size: var(--size-4);
+  color: var(--text-muted);
+}

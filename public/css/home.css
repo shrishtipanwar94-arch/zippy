@@ -1,26 +1,63 @@
-/* THE LANDING PAGE — four links and nothing else.
+/* THE LANDING PAGE — a hero, four cards, a footer note. Nothing else.
  *
- * Everything structural here is borrowed: `.choice` and `.app-bar` come from
- * field.css, the palette from tokens.css. What this file adds is the two-line
- * shape inside a choice — a role and a line saying what that person does — and
- * a reading width, because a full-width column of text on a desktop monitor is
+ * Everything structural is borrowed: `.choice` from field.css, the palette,
+ * type scale and spacing from tokens.css. What this file adds is the hero and
+ * the two-line shape inside a choice — a role, and a line saying what that
+ * person does.
+ *
+ * A reading width, because a full-width column of text on a desktop monitor is
  * the one thing the field surfaces never have to handle.
  */
 
 .home-main {
   max-width: 34rem;
+  margin: 0 auto;
+  padding-top: var(--space-7);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-6);
+}
+
+.home-hero {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+
+/* The one place the wordmark is set at display size. Everywhere else it sits in
+ * a header at body size — this page is the only one whose job is to say what
+ * the product is called. */
+.home-wordmark {
+  font-size: var(--size-1);
+  line-height: 1.1;
+}
+
+/* ONE SENTENCE, ABOUT THE PRODUCT. Not about the architecture: what replaced it
+ * described an event stream and separate browser windows, which tells a visitor
+ * how it is built and nothing about what it does. */
+.home-lede {
+  margin: 0;
+  font-size: var(--size-2);
+  line-height: 1.45;
+  color: var(--text-muted);
+  max-width: 30rem;
+}
+
+.home-choices {
+  display: grid;
+  gap: var(--space-2);
 }
 
 .home-role {
   display: block;
-  font-weight: 600;
+  font-weight: var(--weight-strong);
 }
 
 /* Dimmer and smaller than the role: somebody who already knows which surface
  * they want should be able to skip this line entirely. */
 .home-note {
   display: block;
-  font-size: 0.875rem;
+  font-size: var(--size-4);
   color: var(--text-muted);
   line-height: 1.35;
 }
@@ -31,4 +68,27 @@
 .home .choice {
   text-decoration: none;
   color: var(--text);
+}
+
+.home .choice .icon {
+  color: var(--text-muted);
+}
+
+.home .choice:hover .icon,
+.home .choice:focus-visible .icon {
+  color: var(--brand);
+}
+
+/* A credential is not a headline. It belongs at the bottom, quiet, on a page
+ * whose first job is explaining a product. */
+.home-footer {
+  font-size: var(--size-4);
+  color: var(--text-faint);
+  border-top: 1px solid var(--line);
+  padding-top: var(--space-4);
+}
+
+.home-footer code {
+  font-family: var(--mono);
+  color: var(--text-muted);
 }

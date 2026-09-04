@@ -33,7 +33,7 @@
   -->
   <body class="p-3 driver">
     <header class="app-bar">
-      <h1>Zippy</h1>
+      <span class="wordmark"><svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M13.5 2 4 13.2h6.2L9.8 22 20 10.4h-6.4z" /></svg>Zippy</span>
       <!-- A DOT, NOT A BADGE. "connected" is not news; losing the connection
            is. The word lives in the title and in screen-reader text so colour
            is never the only signal. -->
@@ -44,22 +44,43 @@
 
     <div data-field="error" class="alert alert-danger" role="alert" hidden></div>
 
-    <form data-panel="login" class="card mb-3" onsubmit="return false">
-      <div class="card-body">
-        <h2 class="h6 mb-3">Sign in</h2>
-        <div class="mb-2">
-          <label class="form-label small text-secondary" for="email">Email</label>
+    <!-- SIGN IN — a centred card carrying the mark and the surface being
+         entered. It used to be two bare fields and a button in the top-left
+         corner of an empty page, under a badge reading "No connection", which
+         is what broken software looks like to somebody who has not signed in
+         yet. The badge is now hidden until there is a session (panels/session.js). -->
+    <form data-panel="login" class="signin" onsubmit="return false">
+      <div class="signin-card">
+        <span class="wordmark signin-mark">
+          <svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M13.5 2 4 13.2h6.2L9.8 22 20 10.4h-6.4z" /></svg>
+          Zippy
+        </span>
+        <p class="signin-role">Driver</p>
+        <div class="signin-field">
+          <label class="signin-label" for="email">Email</label>
           <input id="email" class="form-control" value="driver-metrocab-1@zippy.internal" />
         </div>
-        <div class="mb-3">
-          <label class="form-label small text-secondary" for="password">Password</label>
+        <div class="signin-field">
+          <label class="signin-label" for="password">Password</label>
           <input id="password" type="password" class="form-control" value="password-dev-only" />
         </div>
-        <button data-action="login" class="btn btn-primary btn-lg w-100">Sign in</button>
+        <button data-action="login" class="btn btn-primary signin-submit">Sign in</button>
       </div>
     </form>
 
     <div data-panel="workspace" hidden>
+      <!-- ================= COMING BACK TO AN OPEN JOB ================= -->
+      <!-- Only ever on screen when a driver signs in with more than one job
+           still open; one is restored without asking. See panels/driverResume.js. -->
+      <section data-panel="resume" class="mb-3" hidden>
+        <h2 class="h4 mb-2">Which car do you mean?</h2>
+        <p class="text-secondary">You have more than one open request.</p>
+        <div class="d-grid gap-2" data-field="resume-list"></div>
+        <button class="btn btn-outline-secondary btn-lg w-100 mt-2" data-action="new-report">
+          A different car has broken down
+        </button>
+      </section>
+
       <!-- ================= THE REQUEST FLOW ================= -->
       <div data-panel="request">
         <!-- HOW MUCH IS LEFT. Four screens with no sense of progress is what

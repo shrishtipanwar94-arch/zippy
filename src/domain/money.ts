@@ -45,5 +45,13 @@ export function formatRupees(paise: Paise): string {
   // first had to be shown as a negative.
   const sign = paise < 0 ? '-' : '';
   const rupees = Math.abs(paise) / 100;
-  return `${sign}₹${rupees.toLocaleString('en-IN', { maximumFractionDigits: 2 })}`;
+  // NO TRAILING ".00" ON A WHOLE RUPEE. "₹402.00" asks a reader to check two
+  // decimal places that are always zero — almost every price in this catalogue
+  // is whole rupees — and on the driver's phone the digits are the biggest
+  // thing on the card. Paise are still shown when there actually are any.
+  const fractionDigits = Number.isInteger(rupees) ? 0 : 2;
+  return `${sign}₹${rupees.toLocaleString('en-IN', {
+    minimumFractionDigits: fractionDigits,
+    maximumFractionDigits: 2,
+  })}`;
 }

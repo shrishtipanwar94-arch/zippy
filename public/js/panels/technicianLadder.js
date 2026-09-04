@@ -93,7 +93,7 @@ function jobMarkup(job, state) {
 
         <hr />
         <p class="small mb-1">Found something different?</p>
-        <label class="sr-only" for="diagnosis-complaint">New diagnosis</label>
+        <label class="sr-only" for="diagnosis-complaint">What you found</label>
         <select id="diagnosis-complaint" class="form-select mb-2" data-field="diagnosis-complaint" ${offline ? 'disabled' : ''}>
           <option value="WONT_START">Will not start</option>
           <option value="FLAT_TYRE">Flat tyre</option>
@@ -102,14 +102,14 @@ function jobMarkup(job, state) {
           <option value="NOISE_OR_SMELL">Noise or smell</option>
           <option value="STUCK_OR_DAMAGED">Stuck or damaged</option>
         </select>
-        <button class="btn btn-outline-warning btn-lg w-100 mb-2" data-diagnose="${escapeText(job.jobId)}" ${offline ? 'disabled' : ''}>
-          File a new diagnosis
+        <button class="btn btn-outline-secondary btn-lg w-100 mb-2 tech-action" data-diagnose="${escapeText(job.jobId)}" ${offline ? 'disabled' : ''}>
+          Tell us what you found
         </button>
         <!-- Online only, like the diagnosis: pricing reads the job's pinned
              price list and its current diagnosis, neither of which the phone
              holds, and a queued estimate would be priced against a fault the
              driver has already been quoted for. -->
-        <button class="btn btn-outline-info btn-lg w-100" data-estimate="${escapeText(job.jobId)}" ${offline ? 'disabled' : ''}>
+        <button class="btn btn-outline-secondary btn-lg w-100 tech-action" data-estimate="${escapeText(job.jobId)}" ${offline ? 'disabled' : ''}>
           Send the driver a cost
         </button>
         ${
@@ -181,7 +181,11 @@ function sourcingSentence(sourcing) {
   if (sourcing.status === 'DEPOT_RUN') {
     return 'You do not have this part on board — collect it from the depot on the way.';
   }
-  return sourcing.detail ?? `Parts sourcing: ${sourcing.status}`;
+  // IN_VAN is a database value, and it was reaching the screen whole. The
+  // technician does not need the enum; they need to know whether to go and get
+  // something before they start.
+  if (sourcing.status === 'IN_VAN') return 'The part is in your van.';
+  return sourcing.detail ?? 'We are working out where the part comes from.';
 }
 
 // WHAT THE DRIVER IS LOOKING AT. A technician standing next to somebody
@@ -204,9 +208,13 @@ function estimateMarkup(job) {
           )
           .join('')}
       </ul>
-      <p class="mb-0 d-flex justify-content-between">
-        <strong>Driver pays</strong>
-        <strong>${escapeText(rupees(estimate.payablePaise))}</strong>
+      <p class="mb-0 estimate-total">
+        ${
+          estimate.payablePaise === 0
+            ? '<strong>The driver pays nothing.</strong>'
+            : `<strong>The driver pays</strong>
+               <strong class="money">${escapeText(rupees(estimate.payablePaise))}</strong>`
+        }
       </p>
     </div>`;
 }
@@ -232,7 +240,7 @@ function nextActionMarkup(job, state) {
 function ladderButtonMarkup(job) {
   if (!job.nextStep) return '<p class="mb-0">Nothing left to do on this job.</p>';
   return `
-    <button class="btn btn-primary btn-lg w-100" data-step="${escapeText(job.nextStep)}" data-job-id="${escapeText(job.jobId)}">
+    <button class="btn btn-primary btn-lg w-100 tech-primary" data-step="${escapeText(job.nextStep)}" data-job-id="${escapeText(job.jobId)}">
       ${escapeText(BUTTON_LABEL[job.nextStep] ?? job.nextStep)}
     </button>`;
 }
@@ -253,14 +261,14 @@ function completionMarkup(job, state) {
     ${answer === 'FITTING' ? partsPickerMarkup(job, state) : ''}
     <div class="capture-card">
       <label class="form-label mb-1" for="completion-code">
-        Ask the driver for the code on their screen
+        Ask the driver for their 6-digit code.
       </label>
       <p class="small text-secondary mb-2">
-        ${completionConsequence(job)} Only do this once the work is done.
+        Type it here when the work is finished. ${completionConsequence(job)}
       </p>
       <input id="completion-code" class="form-control form-control-lg mb-2"
              inputmode="numeric" autocomplete="off" placeholder="000 000" />
-      <button class="btn btn-success btn-lg w-100" data-step="COMPLETE" data-job-id="${escapeText(job.jobId)}">
+      <button class="btn btn-primary btn-lg w-100 tech-primary" data-step="COMPLETE" data-job-id="${escapeText(job.jobId)}">
         ${escapeText(BUTTON_LABEL.COMPLETE)}
       </button>
     </div>`;
@@ -297,7 +305,7 @@ function partsPromptMarkup(job, state) {
         This keeps the van's count right for whoever is dispatched next.
       </p>
       <div class="d-grid gap-2">
-        <button class="btn btn-outline-primary btn-lg" data-parts-answer="FITTING"
+        <button class="btn btn-outline-secondary btn-lg tech-action" data-parts-answer="FITTING"
                 data-job-id="${escapeText(job.jobId)}">
           Yes — let me record it
         </button>
@@ -348,14 +356,15 @@ function partsPickerMarkup(job, state) {
     </div>`;
 }
 
+// THE PAYMENT CONSEQUENCE SURVIVES THE REWRITE, and that is deliberate: this
+// sentence exists because the box once took money without saying so. It is
+// shorter now and says the same thing.
 function completionConsequence(job) {
   if (job.estimate && job.estimate.payablePaise === 0) {
-    return `Entering it finishes the job. <strong>Nothing is charged to the driver</strong> — this
-      work is covered by their contract.`;
+    return `<strong>The driver pays nothing</strong> — their company pays.`;
   }
-  const amount = job.estimate ? rupees(job.estimate.payablePaise) : 'the approved amount';
-  return `Entering it finishes the job <strong>and takes payment</strong> —
-    ${escapeText(amount)} from the driver’s card.`;
+  const amount = job.estimate ? rupees(job.estimate.payablePaise) : 'the agreed amount';
+  return `This <strong>takes payment</strong> — ${escapeText(amount)} from the driver.`;
 }
 
 // WHAT THE QUEUE IS HOLDING, and what came back. Both on screen: a tap that

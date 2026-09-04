@@ -156,6 +156,12 @@ export function getDriverView(jobId) {
   return request('GET', `/jobs/${jobId}/driver-view`);
 }
 
+// WHAT THIS DRIVER STILL HAS OPEN. Asked once at sign-in so a reload does not
+// strand somebody mid-incident — see the restore in pages/driver.js.
+export function getOpenJobs() {
+  return request('GET', '/driver/open-jobs');
+}
+
 // --- the callout fee, through Razorpay's test-mode checkout (Phase 22b) -----
 
 // Opens the order, or finds the one this job already has. Safe to call as often

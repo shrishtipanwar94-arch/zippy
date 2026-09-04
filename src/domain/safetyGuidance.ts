@@ -34,7 +34,7 @@ export type SafetyGuidance = {
 };
 
 const NOTE =
-  'This is general advice. You can see your situation and we cannot — use your own judgement about what is safe where you are.';
+  'You know your situation best. Stay safe.';
 
 const GUIDANCE: Record<SafetyLevel, SafetyGuidance> = {
   NORMAL: {

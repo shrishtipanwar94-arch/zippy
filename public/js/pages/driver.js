@@ -20,6 +20,7 @@ import {
   setDriverView,
   setError,
   setNextQuestion,
+  setOpenJobs,
   setRequestField,
   setSession,
   setCheckout,
@@ -30,6 +31,7 @@ import { connect, subscribeToJob } from '../socket.js';
 import { render as renderSession } from '../panels/session.js';
 import { render as renderRequest, readSafetyAnswers } from '../panels/driverRequest.js';
 import { render as renderIntake } from '../panels/intake.js';
+import { render as renderResume } from '../panels/driverResume.js';
 import { render as renderStatus } from '../panels/driverStatus.js';
 import { render as renderCheckout, loadCheckout, openCheckout } from '../panels/checkout.js';
 import { loadChat, registerChatPanels, wireChatActions } from '../chatActions.js';
@@ -37,6 +39,7 @@ import { loadChat, registerChatPanels, wireChatActions } from '../chatActions.js
 registerPanel(renderSession);
 registerPanel(renderRequest);
 registerPanel(renderIntake);
+registerPanel(renderResume);
 registerPanel(renderStatus);
 registerPanel(renderCheckout);
 registerChatPanels();
@@ -92,9 +95,60 @@ document.querySelector('[data-action="login"]').addEventListener('click', async 
     });
     connect();
     await loadVehicles();
+    await restoreOpenJob();
   } catch (error) {
     setError(error.message);
   }
+  render();
+});
+
+// COMING BACK TO A JOB ALREADY IN PROGRESS.
+//
+// The active job used to live only in memory, set at the moment this page
+// created one. Locking the phone, losing the tab, or a browser reclaiming
+// memory in the background therefore dropped a driver with a technician
+// already on the way back onto "What has happened?" — and the natural thing to
+// do from there is report the breakdown a second time.
+//
+// Its own try/catch, like the vehicle picker above: if this call fails the
+// driver still lands on a working intake flow, which is worse than restoring
+// but far better than a page that will not load.
+async function restoreOpenJob() {
+  try {
+    const { jobs } = await api.getOpenJobs();
+    if (jobs.length === 0) return;
+
+    // One open job is the overwhelmingly common case and needs no question
+    // asked — go straight back to it.
+    if (jobs.length === 1) {
+      setActiveJob(jobs[0].jobId);
+      await refreshDriverView();
+      return;
+    }
+
+    // More than one, so the driver chooses. A fleet driver with two cars off
+    // the road is rare but real, and guessing for them would be worse than
+    // asking.
+    setOpenJobs(jobs);
+  } catch (error) {
+    console.warn('could not restore an open job', error);
+  }
+}
+
+// Choosing from that list. Delegated, because the buttons are rendered by a
+// panel and do not exist when this handler is attached.
+document.querySelector('[data-panel="resume"]').addEventListener('click', async (clicked) => {
+  const button = clicked.target.closest('[data-resume-job]');
+  if (!button) return;
+  setActiveJob(button.dataset.resumeJob);
+  setOpenJobs([]);
+  await refreshDriverView();
+  render();
+});
+
+// "Actually, a different car has broken down." The list is not a trap.
+document.querySelector('[data-action="new-report"]').addEventListener('click', () => {
+  setOpenJobs([]);
   render();
 });
 

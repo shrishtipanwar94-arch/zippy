@@ -22,6 +22,7 @@ import {
   isReadOperation,
   isTenantScopedModel,
   operationTakesWhereFilter,
+  technicianReadingOwnJob,
   tenantFilterValue,
 } from '../auth/tenantScope.js';
 import { prismaBase } from './prismaBase.js';
@@ -77,6 +78,15 @@ export const tenantScopeExtension = Prisma.defineExtension({
         }
 
         const context = getAuthContext();
+
+        // A TECHNICIAN reading a Job is scoped by ASSIGNMENT rather than by
+        // tenant — see technicianReadingOwnJob for why, and why it is reads
+        // only. jobOwnershipExtension does the narrowing, and does it harder
+        // than this filter would.
+        if (technicianReadingOwnJob(model, operation, context)) {
+          return query(args);
+        }
+
         const tenantId = tenantFilterValue(context);
         const typedArgs = (args ?? {}) as QueryArgs;
 

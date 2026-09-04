@@ -7,10 +7,14 @@
 // second place for SCREAMING_CASE to leak onto this screen. If a sentence
 // needs changing, it changes there.
 //
-// The arrival line is a CLOCK TIME, never a countdown. The server sends both
-// the instant and the formatted time; this shows the formatted one and does
-// not tick. A countdown that stalls at "2 minutes" while a technician sits in
-// traffic reads as a broken promise; a clock time that moves reads as news.
+// THE ARRIVAL LINE IS A DURATION, WORDED BY THE SERVER, AND IT DOES NOT TICK.
+//
+// "About 12 minutes" rather than "arriving 00:44": reading a 24-hour clock and
+// subtracting the current time is a skill, and this screen is read by someone
+// standing at the side of a road. The string is computed once per response in
+// src/domain/driverNarrative.ts and changes only when a new estimate is
+// recorded — nothing here counts down, which is the failure mode the brief
+// rules out.
 
 function setText(root, field, text) {
   const node = root.querySelector(`[data-field="${field}"]`);
@@ -37,8 +41,8 @@ export function render(state) {
     // presenting a degraded number as a precise one.
     const text = view.arrival
       ? view.arrival.rough
-        ? `Roughly ${view.arrival.clock}`
-        : `Arriving ${view.arrival.clock}`
+        ? `${view.arrival.inWords}, roughly`
+        : view.arrival.inWords
       : '';
     if (arrival.textContent !== text) arrival.textContent = text;
     arrival.hidden = !view.arrival;

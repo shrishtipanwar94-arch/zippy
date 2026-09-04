@@ -21,6 +21,7 @@ import { Router } from 'express';
 import { z } from 'zod';
 import { prisma } from '../infra/db.js';
 import { prismaBase } from '../infra/prismaBase.js';
+import { visibleJobId } from './visibleJob.js';
 import { authenticate, requirePermission } from './middleware/authenticate.js';
 import { symptomPayloadSchema } from '../domain/symptoms.js';
 import { safetyReportSchema } from '../domain/safety.js';
@@ -201,11 +202,6 @@ intakeRouter.post('/jobs/intake', authenticate, requirePermission('create', 'job
 
 // Resolves a job through the scoped client. Returns null when the caller may
 // not see it, which the routes below turn into a 404.
-async function visibleJobId(id: unknown): Promise<string | null> {
-  if (typeof id !== 'string' || id.length === 0) return null;
-  const job = await prisma.job.findFirst({ where: { id }, select: { id: true } });
-  return job?.id ?? null;
-}
 
 intakeRouter.get('/jobs/:id/next-question', authenticate, requirePermission('read', 'job'), async (req, res) => {
   const jobId = await visibleJobId(req.params.id);
