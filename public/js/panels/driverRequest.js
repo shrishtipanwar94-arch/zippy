@@ -15,6 +15,8 @@
 // keeps its own value across a re-render and mirroring six of them on every
 // keystroke would be more code for no gain.
 
+import { describeAccuracy } from '../geolocation.js';
+
 const STEPS = ['describe', 'symptoms', 'safety', 'location'];
 
 // The complaint buttons carry enum values in data attributes; a driver never
@@ -78,6 +80,12 @@ export function render(state) {
   // in its own right (src/domain/safety.ts), and guessing on the driver's
   // behalf is exactly what that rule exists to prevent.
   if (send) send.disabled = !state.request.location.roadPosition || state.request.locating;
+
+  // WHAT THE LOCATION BUTTON DID. It used to report nothing at all: a driver
+  // pressed it and the page looked identical whether the fix succeeded, failed,
+  // or hung. Now it says which, and when the fix is poor it says so plainly so
+  // the landmark box below stops being optional in the driver's mind.
+  renderLocateStatus(state);
 }
 
 // WHAT THE ASSISTANT READ, in a sentence, above the buttons that change it.
@@ -152,4 +160,34 @@ export function readSafetyAnswers() {
     driverAlone: checked('driverAlone'),
     vulnerablePassengers: checked('vulnerablePassengers'),
   };
+}
+
+
+// The one line under the "use my current location" button. Three states —
+// looking, found (with how good it was), and nothing yet.
+function renderLocateStatus(state) {
+  const node = document.querySelector('[data-field="locate-status"]');
+  if (!node) return;
+
+  const { locating, location } = state.request;
+
+  if (locating) {
+    node.hidden = false;
+    node.classList.remove('is-rough');
+    node.textContent = 'Finding where you are…';
+    return;
+  }
+
+  if (typeof location.lat !== 'number' || typeof location.lng !== 'number') {
+    // Cleared as well as hidden. A hidden node holding "Finding where you are…"
+    // is a sentence waiting to reappear at the wrong moment.
+    node.hidden = true;
+    node.textContent = '';
+    return;
+  }
+
+  const accuracy = describeAccuracy(location.accuracyMetres);
+  node.hidden = false;
+  node.textContent = accuracy.text;
+  node.classList.toggle('is-rough', accuracy.rough);
 }

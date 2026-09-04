@@ -111,6 +111,15 @@ const postSchema = z
     coordinates: z
       .object({ lat: z.number().min(-90).max(90), lng: z.number().min(-180).max(180) })
       .optional(),
+    // HOW GOOD THE FIX WAS. `location_events.accuracy_metres` has existed since
+    // Phase 6 and nothing ever wrote it, so a fix good to eight metres and one
+    // good to nine hundred reached an operator looking identical. It changes
+    // what anyone can do with the position, so it travels with it.
+    accuracyMetres: z.number().min(0).max(100000).optional(),
+    // Which way the vehicle was pointing. On a divided carriageway this decides
+    // which side a van has to approach from — a unit on the wrong side is 20km
+    // away by road while 200m away in a straight line.
+    headingDegrees: z.number().int().min(0).max(359).optional(),
     photoUrl: z.string().max(MAX_PHOTO_BYTES).optional(),
   })
   .strict();
@@ -151,6 +160,8 @@ chatRouter.post(
       body: body.body,
       kind: body.kind,
       coordinates: body.coordinates,
+      accuracyMetres: body.accuracyMetres,
+      headingDegrees: body.headingDegrees,
       classifications: classified?.classifications,
       photo: body.photoUrl
         ? { url: body.photoUrl, sizeBytes: Buffer.byteLength(body.photoUrl, 'utf8') }

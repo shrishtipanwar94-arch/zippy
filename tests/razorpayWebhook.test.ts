@@ -405,6 +405,7 @@ async function paymentAwaitingCustomer(name: string): Promise<{ jobId: string; p
       lat: 12.9352,
       lng: 77.6245,
       headingDegrees: null,
+      accuracyMetres: null,
       nearestExit: null,
       kmMarker: null,
       landmark: null,

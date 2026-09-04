@@ -24,6 +24,7 @@ import {
   setPromotions,
 } from './state.js';
 import * as api from './api.js';
+import { describeAccuracy, explainFailure, readPosition } from './geolocation.js';
 import { render as renderChat } from './panels/chat.js';
 import { render as renderPromotions } from './panels/promotions.js';
 
@@ -99,35 +100,117 @@ function wireSend() {
   });
 }
 
+// SHARING A POSITION IS A CONVERSATION, NOT A TAP.
+//
+// WHAT WAS WRONG. The old handler called getCurrentPosition with no options and
+// posted two numbers. Three separate failures came out of that:
+//
+//   1. NO TIMEOUT. A dismissed permission prompt calls neither callback, so the
+//      button did nothing, forever, with no way to tell that from a slow fix.
+//   2. NO FEEDBACK. Nothing said "finding you", nothing confirmed it had been
+//      sent, so the only sensible thing a driver could do was press it again.
+//   3. TWO NUMBERS AND NOTHING ELSE. The phone knows how good the fix is, and
+//      LocationEvent has had an `accuracy_metres` column since Phase 6 that
+//      nothing ever wrote. A fix good to eight metres and one good to nine
+//      hundred arrived looking identical, and a technician sent to the second
+//      one has no idea they are looking for a car somewhere in a square
+//      kilometre.
+//
+// SO THE FLOW IS: find → show how good it is → let them add the landmark that
+// is frequently worth more than the coordinates → send on confirmation. The
+// landmark matters most exactly when the fix is worst, which is why the panel
+// asks for it in the same breath as admitting the accuracy.
+//
+// Held in module state rather than app state: this is a half-finished
+// interaction inside one panel, it is discarded on cancel, and nothing else on
+// the page renders from it.
+let pendingPosition = null;
+
+function shareNodes() {
+  return {
+    panel: document.querySelector('[data-panel="share-location"]'),
+    status: document.querySelector('[data-field="share-status"]'),
+    detail: document.querySelector('[data-field="share-detail"]'),
+    landmark: document.querySelector('#share-landmark'),
+  };
+}
+
+function showShare({ status, rough = false, detail = false }) {
+  const nodes = shareNodes();
+  if (!nodes.panel) return;
+  nodes.panel.hidden = false;
+  if (nodes.status) {
+    nodes.status.textContent = status;
+    nodes.status.classList.toggle('is-rough', rough);
+  }
+  if (nodes.detail) nodes.detail.hidden = !detail;
+}
+
+function hideShare() {
+  const nodes = shareNodes();
+  pendingPosition = null;
+  if (nodes.panel) nodes.panel.hidden = true;
+  if (nodes.landmark) nodes.landmark.value = '';
+}
+
 function wireLocationShare() {
   const button = document.querySelector('[data-action="send-location"]');
   if (!button) return;
 
-  button.addEventListener('click', () => {
-    if (!navigator.geolocation) {
-      setError('This browser cannot share your location.');
-      render();
+  button.addEventListener('click', async () => {
+    // Said before the browser prompt appears, so the prompt is explained rather
+    // than arriving out of nowhere.
+    showShare({ status: 'Finding where you are…' });
+
+    const result = await readPosition();
+    if (!result.ok) {
+      // Specific to what actually failed. "We could not get your location" is
+      // true of every reason and useful for none of them.
+      showShare({ status: explainFailure(result.reason), rough: true });
       return;
     }
-    navigator.geolocation.getCurrentPosition(
-      async (position) => {
-        // A REPORT, NOT A MOVE. The coordinates are recorded as something the
-        // driver said; whether the JOB moves to them is a promotion an
-        // operator confirms. Sending a location cannot silently redirect a van.
-        await post({
-          body: 'I have shared my exact location.',
-          kind: 'LOCATION',
-          coordinates: {
-            lat: Number(position.coords.latitude.toFixed(5)),
-            lng: Number(position.coords.longitude.toFixed(5)),
-          },
-        });
-      },
-      () => {
-        setError('We could not read your location. You can describe where you are instead.');
-        render();
-      },
-    );
+
+    pendingPosition = result.position;
+    const accuracy = describeAccuracy(result.position.accuracyMetres);
+    showShare({ status: accuracy.text, rough: accuracy.rough, detail: true });
+
+    // Pre-filled from what they already told us at intake, so the common case
+    // is confirming rather than typing.
+    const nodes = shareNodes();
+    const known = getState().driverView?.landmark;
+    if (nodes.landmark && known && !nodes.landmark.value) nodes.landmark.value = known;
+  });
+
+  document.querySelector('[data-action="cancel-location"]')?.addEventListener('click', hideShare);
+
+  document.querySelector('[data-action="confirm-location"]')?.addEventListener('click', async () => {
+    if (!pendingPosition) return;
+    const nodes = shareNodes();
+    const landmark = nodes.landmark?.value.trim() ?? '';
+    const position = pendingPosition;
+
+    showShare({ status: 'Sending…' });
+
+    // A REPORT, NOT A MOVE. The coordinates are recorded as something the
+    // driver said; whether the JOB moves to them is a promotion an operator
+    // confirms. Sending a location cannot silently redirect a van.
+    const sent = await post({
+      // The landmark goes in the body because that is the part a human reads in
+      // the thread; the numbers go in the structured fields because that is the
+      // part the system acts on.
+      body: landmark
+        ? `I have shared where I am. Look for: ${landmark}`
+        : 'I have shared where I am.',
+      kind: 'LOCATION',
+      coordinates: { lat: position.lat, lng: position.lng },
+      accuracyMetres: position.accuracyMetres ?? undefined,
+      headingDegrees: position.headingDegrees ?? undefined,
+    });
+
+    // The panel stays open on a failure, with the fix still held, so a driver
+    // can press again without hunting for their location a second time.
+    if (sent) hideShare();
+    else showShare({ status: 'That did not send. Try again.', rough: true, detail: true });
   });
 }
 
@@ -183,18 +266,25 @@ function wireConfirmations() {
   });
 }
 
+// Returns whether it landed. It used to swallow the failure entirely, which was
+// fine while every caller was fire-and-forget — but the location share has to
+// keep its confirmation panel open when the send fails, and it cannot know to
+// do that from a function that always looks like it worked.
 async function post(payload) {
   const jobId = getState().activeJobId;
-  if (!jobId) return;
+  if (!jobId) return false;
+  let sent = false;
   try {
     await api.sendMessage(jobId, payload);
     setError(null);
+    sent = true;
     // The message and any cards it raised come back over the socket. Refetching
     // here would race that and briefly show the thread twice.
   } catch (error) {
     setError(error.message);
   }
   render();
+  return sent;
 }
 
 function readAsDataUrl(file) {

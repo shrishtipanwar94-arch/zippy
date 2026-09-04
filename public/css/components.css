@@ -490,3 +490,28 @@
   background: var(--surface-2);
   height: 100%;
 }
+
+/* --------------------------------------------------- SHARING A POSITION
+ * The panel between "find me" and "send it". It exists because a location share
+ * used to be a tap with no feedback and no way to know whether the fix was good
+ * to ten metres or a kilometre.
+ */
+
+.share-location {
+  border: 1px solid var(--line);
+  border-radius: var(--radius-card);
+  background: var(--surface-2);
+  padding: var(--space-4);
+}
+
+.share-status {
+  font-size: var(--size-3);
+  color: var(--text-muted);
+}
+
+/* A POOR FIX SAYS SO. Warn amber, never red: a rough position is still worth
+ * sending, and colouring it as a failure would tell a driver to give up on the
+ * one thing that would help. It is a prompt for a landmark, not an error. */
+.share-status.is-rough {
+  color: var(--warn);
+}

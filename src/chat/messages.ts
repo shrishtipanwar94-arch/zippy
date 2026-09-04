@@ -31,6 +31,10 @@ export type PostMessageInput = {
   // "send my exact location" tap. PHOTO carries one image.
   kind: 'TEXT' | 'LOCATION' | 'PHOTO';
   coordinates?: { lat: number; lng: number };
+  // How good the phone said the fix was, and which way the vehicle was
+  // pointing. Both optional: a driver who typed their position has neither.
+  accuracyMetres?: number;
+  headingDegrees?: number;
   photo?: { url: string; sizeBytes: number };
   // Classifications the caller already computed, because the model that helps
   // produce them must not be called from inside this transaction. Omitted, the
@@ -92,6 +96,9 @@ export async function postMessage(
           jobId: input.jobId,
           lat: input.coordinates.lat,
           lng: input.coordinates.lng,
+          // The two fields that make this more than a pin. See src/api/chat.ts.
+          accuracyMetres: input.accuracyMetres ?? null,
+          headingDegrees: input.headingDegrees ?? null,
           source: 'CHAT',
           eventTime: at,
         },
@@ -119,7 +126,9 @@ export async function postMessage(
 // rule table. Both end up as the same kind of proposal, which is what keeps the
 // confirmation path single.
 function classificationsFor(input: PostMessageInput): Classification[] {
-  if (input.coordinates) return [locationShareClassification(input.coordinates)];
+  if (input.coordinates) {
+    return [locationShareClassification(input.coordinates, input.accuracyMetres)];
+  }
   if (input.kind === 'PHOTO') return [];
   // Already classified by the caller, which is how the Phase 16 model gets a
   // word in without a network call happening inside this transaction. The rule

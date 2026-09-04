@@ -231,6 +231,7 @@ describe('the intake prior — a fleet vehicle starts from a sharper belief', ()
       lat: 12.9352,
       lng: 77.6245,
       headingDegrees: null,
+      accuracyMetres: null,
       nearestExit: null,
       kmMarker: null,
       landmark: null,

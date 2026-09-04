@@ -223,6 +223,8 @@ export async function createIntakeJob(db: PrismaClient, request: IntakeRequest):
         lat: columns.lat,
         lng: columns.lng,
         headingDegrees: columns.headingDegrees,
+        // How much to trust the two numbers above. See domain/location.ts.
+        accuracyMetres: request.location.accuracyMetres,
         source: 'INTAKE',
         eventTime: request.at,
       },

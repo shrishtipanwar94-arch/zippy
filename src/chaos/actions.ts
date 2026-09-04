@@ -160,6 +160,7 @@ export async function injectJobs(db: PrismaClient, count: number): Promise<Chaos
         lng: 77.62 + index * 0.002,
         roadPosition: 'SHOULDER',
         headingDegrees: null,
+        accuracyMetres: null,
         nearestExit: null,
         kmMarker: null,
         landmark: null,

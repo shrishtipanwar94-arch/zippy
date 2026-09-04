@@ -34,6 +34,17 @@ export const locationSchema = z.object({
   // Compass bearing the vehicle was travelling in, 0 = north. Null when the
   // driver's phone gave no heading and they could not say.
   headingDegrees: z.number().int().min(0).max(359).nullable().default(null),
+  // HOW GOOD THE FIX WAS, in metres, as the phone reported it. Optional because
+  // a driver who typed their coordinates has no accuracy to report, and a
+  // dispatcher taking the position down a phone line has none either.
+  //
+  // It is kept because it changes what anyone can do with the position: eight
+  // metres puts a van at the right car, nine hundred puts it in the right
+  // neighbourhood, and until now the two arrived looking identical. It is
+  // recorded on the LocationEvent rather than on the job, because it describes
+  // one REPORT rather than the job's current location — a later, better fix
+  // should not inherit the confidence of an earlier, worse one.
+  accuracyMetres: z.number().min(0).max(100000).nullable().default(null),
   nearestExit: z.string().max(120).nullable().default(null),
   kmMarker: z.string().max(40).nullable().default(null),
   landmark: z.string().max(200).nullable().default(null),

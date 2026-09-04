@@ -27,6 +27,7 @@ import {
   setVehicles,
 } from '../state.js';
 import * as api from '../api.js';
+import { explainFailure, readPosition } from '../geolocation.js';
 import { connect, subscribeToJob } from '../socket.js';
 import { render as renderSession } from '../panels/session.js';
 import { render as renderRequest, readSafetyAnswers } from '../panels/driverRequest.js';
@@ -276,33 +277,45 @@ document.querySelector('[data-field="positions"]').addEventListener('click', (cl
   render();
 });
 
-document.querySelector('[data-action="locate"]').addEventListener('click', () => {
-  if (!navigator.geolocation) {
-    setError('This browser cannot share your location. Please type it in.');
+// FINDING THE DRIVER, WITHOUT EVER TRAPPING THEM.
+//
+// This handler used to call getCurrentPosition with no options and swallow the
+// failure on the grounds that "the typed coordinates are still there". Two
+// things were wrong with that. A dismissed permission prompt calls NEITHER
+// callback, so `locating` was never cleared and the "Send for help" button —
+// which it disables — stayed disabled forever. And a silent failure on a button
+// press reads as broken software, so a driver presses it again, and again.
+//
+// Now it always settles, always clears, and always says something.
+document.querySelector('[data-action="locate"]').addEventListener('click', async () => {
+  setRequestField({ locating: true });
+  setError(null);
+  render();
+
+  const result = await readPosition();
+
+  if (!result.ok) {
+    setRequestField({ locating: false });
+    // Said out loud, and specific to what actually failed — "we could not get
+    // your location" is true of every reason and useful for none.
+    setError(explainFailure(result.reason));
     render();
     return;
   }
-  setRequestField({ locating: true });
-  render();
 
-  navigator.geolocation.getCurrentPosition(
-    (position) => {
-      const location = {
-        ...getState().request.location,
-        lat: Number(position.coords.latitude.toFixed(5)),
-        lng: Number(position.coords.longitude.toFixed(5)),
-      };
-      setRequestField({ location, locating: false });
-      setError(null);
-      render();
-    },
-    () => {
-      // A refused or failed lookup is not an error worth alarming anybody
-      // with — the typed coordinates are still there and still work.
-      setRequestField({ locating: false });
-      render();
-    },
-  );
+  // EVERYTHING THE PHONE KNOWS, not just the two numbers. Accuracy decides
+  // whether a landmark is still needed, and on a divided carriageway the
+  // heading decides which side a van has to approach from.
+  const location = {
+    ...getState().request.location,
+    lat: result.position.lat,
+    lng: result.position.lng,
+    accuracyMetres: result.position.accuracyMetres,
+    headingDegrees: result.position.headingDegrees,
+  };
+  setRequestField({ location, locating: false });
+  setError(null);
+  render();
 });
 
 // Both Back buttons, one listener. The step order lives in one array so there
@@ -339,6 +352,11 @@ document.querySelector('[data-action="report"]').addEventListener('click', async
       location: {
         lat: Number(value('#lat')),
         lng: Number(value('#lng')),
+        // From the phone, when the phone gave them. A typed position has
+        // neither, and null is the honest answer rather than a made-up
+        // confidence — see public/js/geolocation.js.
+        accuracyMetres: request.location.accuracyMetres,
+        headingDegrees: request.location.headingDegrees,
         roadPosition: request.location.roadPosition,
         landmark: value('#landmark') || null,
       },

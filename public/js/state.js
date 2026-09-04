@@ -99,7 +99,17 @@ const state = {
     vehicleId: '',
     complaint: null,
     safety: {},
-    location: { lat: null, lng: null, roadPosition: null, landmark: '' },
+    // `accuracyMetres` and `headingDegrees` come from the phone alongside the
+    // coordinates — how good the fix was, and which way the vehicle was
+    // pointing. Both null when the driver typed their position instead.
+    location: {
+      lat: null,
+      lng: null,
+      accuracyMetres: null,
+      headingDegrees: null,
+      roadPosition: null,
+      landmark: '',
+    },
     locating: false,
 
     // WHAT THE ASSISTANT READ (Phase 16). All of it is a PROPOSAL: the driver

@@ -226,9 +226,14 @@
           <h2 class="h4 mb-2">Where are you?</h2>
           <p class="text-secondary">The more precise this is, the sooner someone reaches you.</p>
 
-          <button class="btn btn-outline-primary btn-lg w-100 mb-3" data-action="locate">
-            📍 Use my current location
+          <button class="icon-action w-100 mb-2" data-action="locate">
+            <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 21s7-6.1 7-11a7 7 0 1 0-14 0c0 4.9 7 11 7 11z" /><circle cx="12" cy="10" r="2.5" /></svg>
+            Use my current location
           </button>
+          <!-- HOW GOOD THE FIX WAS. Pressing this used to change nothing on
+               screen whether it worked, failed or hung — see js/geolocation.js
+               for why it could hang forever and take the Send button with it. -->
+          <p class="share-status mb-3" data-field="locate-status" hidden></p>
 
           <p class="mb-2">Which best describes where the car is standing?</p>
           <div class="d-grid gap-2" data-field="positions">
@@ -443,15 +448,46 @@
               />
               <button class="btn btn-primary" data-action="send-message">Send</button>
             </div>
-            <div class="d-flex gap-2 mt-2">
-              <button class="btn btn-outline-secondary btn-sm" data-action="send-location">
-                📍 Send my exact location
+            <div class="d-flex gap-2 mt-2 flex-wrap">
+              <button class="icon-action" data-action="send-location">
+                <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 21s7-6.1 7-11a7 7 0 1 0-14 0c0 4.9 7 11 7 11z" /><circle cx="12" cy="10" r="2.5" /></svg>
+                Share where I am
               </button>
-              <label class="btn btn-outline-secondary btn-sm mb-0">
-                📷 Send a photo
+              <label class="icon-action mb-0">
+                <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 8h3.5L8 5.8h8L17.5 8H21v11H3z" /><circle cx="12" cy="13" r="3.5" /></svg>
+                Send a photo
                 <input id="chat-photo" type="file" accept="image/*" hidden />
               </label>
             </div>
+
+            <!-- SHARING A POSITION IS A CONVERSATION, NOT A TAP.
+                 The button used to fire two numbers at the server with no
+                 feedback: no "finding you", no idea whether the fix was good to
+                 ten metres or a kilometre, and nothing sent that a technician
+                 could actually navigate by. This panel is what the driver
+                 confirms before anything is sent — how good the fix is, and the
+                 landmark that is often worth more than the coordinates. -->
+            <section class="share-location mt-3" data-panel="share-location" hidden>
+              <p class="share-status mb-2" data-field="share-status"></p>
+              <div data-field="share-detail" hidden>
+                <label class="signin-label" for="share-landmark">
+                  What can the technician look for?
+                </label>
+                <input
+                  id="share-landmark"
+                  class="form-control mb-2"
+                  placeholder="Blue gate, petrol pump, shop name"
+                />
+                <div class="d-flex gap-2">
+                  <button class="btn btn-primary flex-grow-1" data-action="confirm-location">
+                    Send this
+                  </button>
+                  <button class="btn btn-outline-secondary" data-action="cancel-location">
+                    Cancel
+                  </button>
+                </div>
+              </div>
+            </section>
           </div>
         </div>
 

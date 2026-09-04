@@ -253,7 +253,7 @@ describe('a job pins its prices at creation', () => {
       tenantId: TENANT,
       symptoms: { primaryComplaint: 'FLAT_TYRE', engineCranks: null, warningLights: [], unusualSound: null, vehicleMoves: null },
       safety: { trafficSpeedKph: null, blockingLiveLane: false, smokeOrBurningSmell: false, fuelSmell: false, overheating: false, driverAlone: false, vulnerablePassengers: false },
-      location: { lat: 12.9352, lng: 77.6245, headingDegrees: null, nearestExit: null, kmMarker: null, landmark: null, roadPosition: 'PARKING', parkingLevel: null },
+      location: { lat: 12.9352, lng: 77.6245, headingDegrees: null, accuracyMetres: null, nearestExit: null, kmMarker: null, landmark: null, roadPosition: 'PARKING', parkingLevel: null },
       actor: null,
       at: IN_NOW,
     });
@@ -331,7 +331,7 @@ describe('a job pins its prices at creation', () => {
       tenantId: null,
       symptoms: { primaryComplaint: 'FLAT_TYRE', engineCranks: null, warningLights: [], unusualSound: null, vehicleMoves: null },
       safety: { trafficSpeedKph: null, blockingLiveLane: false, smokeOrBurningSmell: false, fuelSmell: false, overheating: false, driverAlone: false, vulnerablePassengers: false },
-      location: { lat: 12.9352, lng: 77.6245, headingDegrees: null, nearestExit: null, kmMarker: null, landmark: null, roadPosition: 'PARKING', parkingLevel: null },
+      location: { lat: 12.9352, lng: 77.6245, headingDegrees: null, accuracyMetres: null, nearestExit: null, kmMarker: null, landmark: null, roadPosition: 'PARKING', parkingLevel: null },
       actor: null,
       // Before any list this fixture defines begins.
       at: new Date('2019-03-01T00:00:00.000Z'),

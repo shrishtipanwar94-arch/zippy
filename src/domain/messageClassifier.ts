@@ -154,13 +154,26 @@ function defaultPayloadFor(kind: PromotionKind, body: string): PromotionPayload 
 // the driver pressed a button — but it produces the same kind of proposal and
 // goes through the same confirmation, because moving a job's dispatch location
 // is exactly the change that must never happen without a human.
-export function locationShareClassification(coordinates: {
-  lat: number;
-  lng: number;
-}): Classification {
+// THE ACCURACY TRAVELS INTO THE PROPOSAL, and that is the point of carrying it
+// at all. An operator confirming a LOCATION_CORRECTION is deciding whether to
+// move a job to a new position; "the driver says they are here, to within eight
+// metres" and "…to within nine hundred metres" are different decisions, and
+// before this they arrived as the same one.
+export function locationShareClassification(
+  coordinates: { lat: number; lng: number },
+  accuracyMetres?: number,
+): Classification {
   return {
     kind: 'LOCATION_CORRECTION',
-    matched: ['shared exact location'],
-    proposedPayload: { lat: coordinates.lat, lng: coordinates.lng },
+    matched: [
+      accuracyMetres === undefined
+        ? 'shared exact location'
+        : `shared location, accurate to about ${Math.round(accuracyMetres)}m`,
+    ],
+    proposedPayload: {
+      lat: coordinates.lat,
+      lng: coordinates.lng,
+      ...(accuracyMetres === undefined ? {} : { accuracyMetres: Math.round(accuracyMetres) }),
+    },
   };
 }

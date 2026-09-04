@@ -149,6 +149,7 @@ export function generateLocation(
     lat: origin.lat + jitter(),
     lng: origin.lng + jitter(),
     headingDegrees: random.nextInt(360),
+    accuracyMetres: null,
     nearestExit: onHighway ? `Exit ${8 + random.nextInt(30)}` : null,
     kmMarker: onHighway ? `KM ${12 + random.nextInt(80)}` : null,
     landmark: onHighway ? null : `Near landmark ${1 + random.nextInt(40)}`,

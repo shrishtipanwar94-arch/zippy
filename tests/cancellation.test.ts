@@ -237,7 +237,7 @@ async function createJobFor(tenantId: string, vehicleSuffix: string) {
     tenantId,
     symptoms: { primaryComplaint: 'FLAT_TYRE', engineCranks: null, warningLights: [], unusualSound: null, vehicleMoves: null },
     safety: { trafficSpeedKph: null, blockingLiveLane: false, smokeOrBurningSmell: false, fuelSmell: false, overheating: false, driverAlone: false, vulnerablePassengers: false },
-    location: { lat: 12.9352, lng: 77.6245, headingDegrees: null, nearestExit: null, kmMarker: null, landmark: null, roadPosition: 'PARKING', parkingLevel: null },
+    location: { lat: 12.9352, lng: 77.6245, headingDegrees: null, accuracyMetres: null, nearestExit: null, kmMarker: null, landmark: null, roadPosition: 'PARKING', parkingLevel: null },
     actor: null,
     at: CREATED_AT,
   });
