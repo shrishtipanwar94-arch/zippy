@@ -16,12 +16,15 @@ import type { PrismaClient } from '@prisma/client';
 import { redis } from '../infra/redis.js';
 import { isChaosOn } from '../chaos/switches.js';
 import type { ComponentReading } from '../domain/healthLadder.js';
+import { POSITION_STALE_AFTER_MS } from '../commit/unitPosition.js';
 
 // How stale the newest position in the fleet may be before the map is lying.
 // Units report on movement rather than on a timer, so this is generous: it is
 // "nothing at all has reported in a quarter of an hour", not "this one unit is
 // quiet".
-const GPS_STALE_AFTER_MS = 15 * 60 * 1000;
+// A job the board has finished with — the same set src/api/console.ts and
+// src/api/driver.ts count out, for the same reason.
+const FINISHED_JOB_STATUSES = ['RESOLVED', 'CANCELLED', 'UNSERVICEABLE'] as const;
 
 // How long the last extraction attempt stays evidence about now.
 const AI_ATTEMPT_IS_RECENT_MS = 15 * 60 * 1000;
@@ -98,27 +101,56 @@ async function probeAi(db: PrismaClient, now: Date): Promise<ComponentReading> {
   return { component: 'AI_EXTRACTION', state: 'NORMAL', detail: null };
 }
 
+// WHICH VANS ARE SUPPOSED TO BE REPORTING?
+//
+// This probe used to take the NEWEST `last_location_at` in the whole fleet, and
+// that was wrong in both directions at once. Too lenient, because one van that
+// reported a minute ago held the whole fleet at NORMAL while twenty-three
+// others sat hours stale. Too harsh, because most of those twenty-three had
+// nothing to report — a van parked at a depot between jobs is not a broken GPS
+// feed, it is a van parked at a depot.
+//
+// The population that matters is UNITS CURRENTLY ON A JOB. Those are the
+// positions a driver's map draws and the only ones anybody is waiting on, and
+// they are exactly the units the position feed writes for
+// (src/commit/unitPosition.ts — a fix rides along with each ladder tap). A
+// fleet with no live jobs has nothing to report and is NORMAL: reporting
+// DEGRADED because nobody is working is how a banner becomes furniture.
+//
+// The threshold is imported rather than redeclared, so one driver's map and the
+// fleet-wide banner cannot disagree about what "stale" means.
 async function probeGps(db: PrismaClient, now: Date): Promise<ComponentReading> {
-  const newest = await db.unit.findFirst({
-    where: { lastLocationAt: { not: null } },
-    orderBy: { lastLocationAt: 'desc' },
-    select: { lastLocationAt: true },
+  const onJob = await db.unit.findMany({
+    where: {
+      assignedJobs: { some: { status: { notIn: [...FINISHED_JOB_STATUSES] } } },
+    },
+    select: { code: true, lastLocationAt: true },
   });
 
-  const at = newest?.lastLocationAt;
-  if (!at) {
-    return { component: 'GPS', state: 'DEGRADED', detail: 'no unit has ever reported a position' };
+  if (onJob.length === 0) {
+    return { component: 'GPS', state: 'NORMAL', detail: null };
   }
 
-  const ageMs = now.getTime() - at.getTime();
-  if (ageMs > GPS_STALE_AFTER_MS) {
-    return {
-      component: 'GPS',
-      state: 'DEGRADED',
-      detail: `newest fleet position is ${Math.round(ageMs / 60000)} minutes old`,
-    };
+  // The OLDEST fix among them, not the newest. A van that stopped reporting an
+  // hour ago is the problem; the one that reported a second ago is not evidence
+  // that it isn't.
+  const stale = onJob.filter((unit) => {
+    if (!unit.lastLocationAt) return true;
+    return now.getTime() - unit.lastLocationAt.getTime() > POSITION_STALE_AFTER_MS;
+  });
+
+  if (stale.length === 0) {
+    return { component: 'GPS', state: 'NORMAL', detail: null };
   }
-  return { component: 'GPS', state: 'NORMAL', detail: null };
+
+  return {
+    component: 'GPS',
+    state: 'DEGRADED',
+    detail:
+      stale.length === onJob.length
+        ? `no crew on a job has reported a position in the last ${Math.round(POSITION_STALE_AFTER_MS / 60000)} minutes`
+        : `${stale.length} of ${onJob.length} crews on a job have not reported a position recently`,
+  };
 }
 
 // Two ways live updates stop working: somebody switched them off, or the Redis

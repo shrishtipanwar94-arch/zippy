@@ -42,12 +42,21 @@ import { render as renderVanStock } from '../panels/vanStock.js';
 import { render as renderUpdates } from '../panels/technicianUpdates.js';
 import { render as renderRelease, dismissRelease } from '../panels/technicianRelease.js';
 import { render as renderEarnings } from '../panels/technicianEarnings.js';
+import { render as renderTechnicianMap } from '../panels/technicianMap.js';
+import { render as renderToday } from '../panels/technicianToday.js';
+import { render as renderToast } from '../panels/toast.js';
 import { loadChat, registerChatPanels, wireChatActions } from '../chatActions.js';
 
 registerPanel(renderSession);
 registerPanel(renderOutbox);
 registerPanel(renderOffers);
 registerPanel(renderLadder);
+// AFTER the ladder: the ladder renders the empty map container and tells
+// morphdom to leave its subtree alone; this fills it.
+registerPanel(renderTechnicianMap);
+registerPanel(renderToday);
+// Last: it confirms what the panels above have just finished showing.
+registerPanel(renderToast);
 registerPanel(renderVanStock);
 registerPanel(renderUpdates);
 registerPanel(renderRelease);

@@ -183,7 +183,10 @@ const state = {
 
   // The technician's board: open offers, the job in hand, and any job a re-plan
   // has released them from (Phase 13, surfaced in Phase 22b).
-  work: { offers: [], jobs: [], releases: [] },
+  // `loaded` distinguishes "we have not asked yet" from "you have no job in
+  // hand", which are opposite news and looked identical while both rendered as
+  // an empty panel. It is what the ladder's skeleton keys off.
+  work: { offers: [], jobs: [], releases: [], loaded: false },
 
   // What the technician is owed. Read on demand rather than on every board
   // poll: it is a running account that outlives every job on the screen.
@@ -470,7 +473,7 @@ export function setVehicles(vehicles) {
 }
 
 export function setWork(work) {
-  state.work = { releases: [], ...work };
+  state.work = { releases: [], ...work, loaded: true };
 }
 
 export function setEarnings(earnings) {

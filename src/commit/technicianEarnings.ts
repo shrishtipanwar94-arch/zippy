@@ -35,6 +35,12 @@ const ENTRY_LIMIT = 20;
 export type EarningsStatement = {
   balancePaise: number;
   minimumPaise: number;
+  // What today has been worth so far, and over how many jobs. The balance
+  // answers "what will I be paid" and can legitimately be negative; this
+  // answers "was today any good", which is the question somebody sitting in a
+  // van between jobs actually has.
+  todayPaise: number;
+  jobsToday: number;
   // PAY | HOLD_BELOW_MINIMUM | CARRY_DEBT, straight from the domain rule.
   standing: string;
   // One sentence a person can act on, rather than a status word.
@@ -48,7 +54,7 @@ export async function earningsStatementFor(
   technicianId: string,
 ): Promise<EarningsStatement> {
   const minimumPaise = config.PAYOUT_MINIMUM_PAISE;
-  const [balancePaise, entries, pendingPayouts] = await Promise.all([
+  const [balancePaise, entries, pendingPayouts, today] = await Promise.all([
     technicianBalance(db, technicianId),
     recentEntries(db, technicianId),
     db.payout.findMany({
@@ -57,6 +63,7 @@ export async function earningsStatementFor(
       take: 5,
       select: { amountPaise: true, status: true, batch: { select: { reference: true } } },
     }),
+    earnedToday(db, technicianId, new Date()),
   ]);
 
   const decision = payoutDecision(balancePaise, minimumPaise);
@@ -64,6 +71,13 @@ export async function earningsStatementFor(
   return {
     balancePaise,
     minimumPaise,
+    // TODAY, ON THE FRONT OF THE PHONE. The balance is a running position and
+    // answers a different question — "what will I be paid" — which is why it can
+    // legitimately be negative. What a technician actually wants at a glance
+    // between jobs is what today has been worth so far, and that figure was
+    // reachable only by opening a disclosure and reading a list.
+    todayPaise: today.amountPaise,
+    jobsToday: today.jobs,
     standing: decision.outcome,
     explanation: explain(decision.outcome, balancePaise, minimumPaise),
     entries,
@@ -100,6 +114,49 @@ function rupees(paise: number): string {
 // The entries behind the number, so a technician can see WHICH job moved it.
 // Read straight off the append-only log — there is no balance column and there
 // must not be one.
+// WHAT TODAY HAS BEEN WORTH. Credits only: a commission deducted from a cash
+// job is a real ledger movement but it is not something the technician EARNED
+// today, and netting it here would make a good day look like a bad one.
+//
+// The day boundary is IST, the same fixed offset the rest of the product
+// reasons about local time with (src/domain/driverNarrative.ts) — a technician
+// finishing at 1am should see that job on the day they worked it, not on the
+// day UTC thinks it is.
+const IST_OFFSET_MINUTES = 5 * 60 + 30;
+
+function startOfIstDay(now: Date): Date {
+  const local = new Date(now.getTime() + IST_OFFSET_MINUTES * 60 * 1000);
+  local.setUTCHours(0, 0, 0, 0);
+  return new Date(local.getTime() - IST_OFFSET_MINUTES * 60 * 1000);
+}
+
+async function earnedToday(
+  db: PrismaClient,
+  technicianId: string,
+  now: Date,
+): Promise<{ amountPaise: number; jobs: number }> {
+  const account = await db.ledgerAccount.findUnique({
+    where: { code: technicianAccountCode(technicianId) },
+    select: { id: true },
+  });
+  if (!account) return { amountPaise: 0, jobs: 0 };
+
+  const entries = await db.ledgerEntry.findMany({
+    where: {
+      accountId: account.id,
+      eventTime: { gte: startOfIstDay(now) },
+      amountPaise: { gt: 0 },
+    },
+    select: { amountPaise: true, jobId: true },
+  });
+
+  const jobs = new Set(entries.map((entry) => entry.jobId).filter((id) => id !== null));
+  return {
+    amountPaise: entries.reduce((total, entry) => total + entry.amountPaise, 0),
+    jobs: jobs.size,
+  };
+}
+
 async function recentEntries(db: PrismaClient, technicianId: string) {
   const account = await db.ledgerAccount.findUnique({
     where: { code: technicianAccountCode(technicianId) },

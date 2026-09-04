@@ -515,3 +515,29 @@
 .share-status.is-rough {
   color: var(--warn);
 }
+
+/* -------------------------------------------------- TODAY'S EARNINGS
+ * A receipt block on the surface rather than behind a disclosure. Bordered, not
+ * shadowed: the shadow on this screen belongs to the job card, which is what a
+ * technician came here for.
+ */
+
+.today-card {
+  border: 1px solid var(--line);
+  border-radius: var(--radius-card);
+  padding: var(--space-4);
+}
+
+.today-card .section-head {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+/* The maps hand-off. Same shape as the call button beside it — this and Call
+ * are the two things a technician reaches for most, and neither is amber
+ * because the one amber control on this screen is whatever the job needs next.
+ */
+.icon-action.is-navigate {
+  border-color: var(--text-muted);
+}

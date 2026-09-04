@@ -66,13 +66,35 @@ export function render(state) {
   const job = state.work.jobs.find((candidate) => candidate.jobId === state.activeJobId)
     ?? state.work.jobs[0];
 
+  // THREE STATES, NOT TWO. "Loading" and "you have no job" look identical if
+  // both render as an empty panel, and they are opposite news — one resolves in
+  // a second, the other means go and wait somewhere. The skeleton has the shape
+  // of the card that is coming, so the layout does not jump when it arrives.
+  const body = state.work.loaded
+    ? job
+      ? jobMarkup(job, state)
+      : emptyMarkup('No job in hand right now.')
+    : skeletonMarkup();
+
   const markup = `
     <div data-panel="ladder" class="mb-4" aria-live="polite">
-      ${job ? jobMarkup(job, state) : emptyMarkup('No job in hand right now.')}
+      ${body}
     </div>`;
 
   // eslint-disable-next-line no-undef
-  morphdom(panel, markup);
+  morphdom(panel, markup, {
+    // LEAFLET OWNS THE INSIDE OF THE MAP CONTAINER, and morphdom does not know
+    // that. This card is rebuilt from a template string on every tick, so
+    // without this the map's tiles, panes and markers would be diffed against
+    // an empty div and thrown away several times a minute — the exact churn the
+    // patch-in-place rule exists to prevent, reintroduced one level up.
+    //
+    // Returning false leaves the element and its subtree completely alone.
+    onBeforeElUpdated(fromEl, toEl) {
+      if (fromEl.dataset?.field === 'technician-map') return false;
+      return !fromEl.isEqualNode(toEl);
+    },
+  });
 }
 
 // AN EMPTY PANEL SHOULD LOOK EMPTY, NOT BROKEN. A bare line of grey text reads
@@ -80,6 +102,20 @@ export function render(state) {
 // nothing in it. `.empty` is the shared component — see components.css.
 function emptyMarkup(sentence) {
   return `<div class="empty">${icon('inbox')}<p class="mb-0">${escapeText(sentence)}</p></div>`;
+}
+
+// The shape of a job card, greyed. Not a spinner: a spinner says "something is
+// happening", a skeleton says "a card is coming and here is roughly how big".
+function skeletonMarkup() {
+  return `
+    <div class="card job-card" aria-hidden="true">
+      <div class="card-body">
+        <div class="skeleton skeleton-line" style="height:20px;width:70%"></div>
+        <div class="skeleton skeleton-line is-short"></div>
+        <div class="skeleton skeleton-line" style="height:44px;margin-top:16px"></div>
+        <div class="skeleton skeleton-line" style="height:96px"></div>
+      </div>
+    </div>`;
 }
 
 function jobMarkup(job, state) {
@@ -97,6 +133,7 @@ function jobMarkup(job, state) {
         <p class="mb-3"><span class="pill is-quiet">${escapeText(STATUS_LABEL[job.status] ?? job.status)}</span></p>
 
         ${driverMarkup(job)}
+        ${trackingMarkup(job)}
 
         ${contextMarkup(job)}
         ${estimateMarkup(job)}
@@ -208,8 +245,47 @@ function driverMarkup(job) {
                   aria-label="Call ${escapeText(job.driver.name)}">${icon('phone')}</a>`
             : ''
         }
+        ${navigateMarkup(job)}
       </span>
     </div>`;
+}
+
+// GETTING THERE — the most-used action in this app, and until now it did not
+// exist. A technician had a landmark, a zone name and two numbers they could
+// not tap.
+//
+// THE HAND-OFF URL IS THE UNIVERSAL ONE. `google.com/maps/dir/?api=1&
+// destination=lat,lng` is the documented cross-platform form: Android opens the
+// Google Maps app, iOS opens the Google Maps app if it is installed and the web
+// map if it is not, and a desktop browser opens the web map. A `geo:` URI would
+// be more idiomatic on Android and does nothing at all on iOS; an
+// `http://maps.apple.com` link is the mirror of that problem. One link that
+// degrades sensibly beats two links behind a platform sniff.
+//
+// `target="_blank"` with `rel="noopener"` so the technician does not lose the
+// job card — on a phone the maps app takes over anyway, but on the desktop
+// build used for demos this is the difference between a new tab and losing the
+// board.
+function navigateMarkup(job) {
+  if (typeof job.lat !== 'number' || typeof job.lng !== 'number') return '';
+  const destination = `${job.lat},${job.lng}`;
+  return `<a class="icon-action is-navigate"
+             href="https://www.google.com/maps/dir/?api=1&destination=${encodeURIComponent(destination)}"
+             target="_blank" rel="noopener"
+             aria-label="Navigate to the vehicle">${icon('navigate')}</a>`;
+}
+
+// HOW FAR AWAY AM I — the same picture the driver is looking at, from the other
+// side. Rendered by a sibling panel (panels/technicianMap.js) because Leaflet
+// needs a stable container and this card is rebuilt through morphdom on every
+// tick; a map inside it would be destroyed and recreated constantly, which is
+// the exact thing the patch-in-place rule exists to prevent.
+function trackingMarkup(job) {
+  if (!job.tracking) return '';
+  return `
+    <section class="track mb-3" data-panel="technician-map">
+      <div class="track-map" data-field="technician-map"></div>
+    </section>`;
 }
 
 // The driver is told "Ravi has the skills but needs a part". This is Ravi's
@@ -277,12 +353,18 @@ function nextActionMarkup(job, state) {
   return ladderButtonMarkup(job);
 }
 
+// THE ONE THING TO PRESS, WHERE A THUMB REACHES. Wrapped in `.actionbar`, which
+// pins it to the bottom of the viewport while the card above it scrolls — a
+// phone is held at the bottom and this control was sitting wherever the card
+// happened to end.
 function ladderButtonMarkup(job) {
-  if (!job.nextStep) return '<p class="mb-0">Nothing left to do on this job.</p>';
+  if (!job.nextStep) return emptyMarkup('Nothing left to do on this job.');
   return `
-    <button class="btn btn-primary btn-lg w-100 tech-primary" data-step="${escapeText(job.nextStep)}" data-job-id="${escapeText(job.jobId)}">
-      ${escapeText(BUTTON_LABEL[job.nextStep] ?? job.nextStep)}
-    </button>`;
+    <div class="actionbar">
+      <button class="btn btn-primary tech-primary" data-step="${escapeText(job.nextStep)}" data-job-id="${escapeText(job.jobId)}">
+        ${escapeText(BUTTON_LABEL[job.nextStep] ?? job.nextStep)}
+      </button>
+    </div>`;
 }
 
 // THE LAST RUNG IS NOT A BUTTON ON ITS OWN — it is the driver's code, and

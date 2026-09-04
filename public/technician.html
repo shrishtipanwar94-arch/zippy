@@ -10,6 +10,10 @@
       rel="stylesheet"
     />
     <link href="/css/tokens.css" rel="stylesheet" />
+    <link
+      href="https://cdn.jsdelivr.net/npm/leaflet@1.9.4/dist/leaflet.css"
+      rel="stylesheet"
+    />
     <link href="/css/components.css" rel="stylesheet" />
     <link href="/css/field.css" rel="stylesheet" />
     <link href="/css/technician.css" rel="stylesheet" />
@@ -107,10 +111,18 @@
            under somebody who is not looking at the screen. -->
       <div data-panel="ladder" class="mb-4" aria-live="polite"></div>
 
+      <!-- ============ WHAT TODAY HAS BEEN WORTH ============ -->
+      <!-- ON THE SURFACE, NOT BEHIND A TAP. The full statement below answers
+           "what will I be paid", which is a running position and can be
+           negative; this answers "was today any good", which is the question
+           somebody sitting in a van between jobs actually has. It needed a tap
+           and a read down a list to find, so in practice it was never found. -->
+      <div data-panel="today" class="mb-4" hidden></div>
+
       <!-- ============ WHAT I AM OWED (Phase 15c / 22b) ============ -->
-      <!-- Collapsed by default: it is not what somebody standing next to a
-           broken car came to this screen for, and it matters enormously once a
-           shift ends. There was no view of this at all before Phase 22b. -->
+      <!-- Collapsed by default: the running balance is not what somebody
+           standing next to a broken car came to this screen for, and it matters
+           enormously once a shift ends. -->
       <details class="mb-4">
         <summary class="h6">What I am owed</summary>
         <div data-panel="earnings" class="mt-2"></div>
@@ -153,5 +165,6 @@
     <script src="https://cdn.jsdelivr.net/npm/morphdom@2.7.4/dist/morphdom-umd.min.js"></script>
     <script src="/socket.io/socket.io.js"></script>
     <script type="module" src="/js/pages/technician.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/leaflet@1.9.4/dist/leaflet.js"></script>
   </body>
 </html>

@@ -121,7 +121,7 @@ async function openJobs(db: PrismaClient, technicianId: string) {
 type OpenJob = Awaited<ReturnType<typeof openJobs>>[number];
 
 async function withContext(db: PrismaClient, job: OpenJob) {
-  const [estimate, option, destination, events] = await Promise.all([
+  const [estimate, option, destination, events, unit] = await Promise.all([
     latestEstimate(db, job.id),
     // The sourcing and destination decisions recorded for the crew this job was
     // actually given. Written by persistSolverRun; nothing is decided here.
@@ -139,6 +139,15 @@ async function withContext(db: PrismaClient, job: OpenJob) {
       take: 40,
       select: { eventType: true, at: true },
     }),
+    // THE TECHNICIAN'S OWN LAST POSITION, so their card can show the same map
+    // the driver is looking at. Written by their own status taps — see
+    // src/commit/unitPosition.ts.
+    job.assignedUnitId
+      ? db.unit.findUnique({
+          where: { id: job.assignedUnitId },
+          select: { lat: true, lng: true, lastLocationAt: true },
+        })
+      : null,
   ]);
 
   return {
@@ -150,6 +159,18 @@ async function withContext(db: PrismaClient, job: OpenJob) {
     landmark: job.landmark,
     lat: job.lat,
     lng: job.lng,
+    // The pair of points the job card's map draws: where the car is, and where
+    // this crew last reported being. Same shape the driver's view sends, so the
+    // two surfaces render through one component.
+    tracking:
+      typeof job.lat === 'number' && typeof job.lng === 'number'
+        ? {
+            you: unit && typeof unit.lat === 'number' && typeof unit.lng === 'number'
+              ? { lat: unit.lat, lng: unit.lng }
+              : null,
+            job: { lat: job.lat, lng: job.lng },
+          }
+        : null,
     vehicle: describeVehicle(job.vehicle),
     // First name only, the same rule the driver's screen follows in the other
     // direction: enough to greet somebody by, not a personnel record.

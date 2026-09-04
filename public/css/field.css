@@ -133,12 +133,19 @@ body.technician {
   background: var(--surface-raised);
 }
 
-/* The glyph is decoration, so it is hidden from assistive technology and the
- * label always carries the meaning on its own. */
-.choice-icon {
-  font-size: 1.5rem;
-  line-height: 1;
+/* The picture is decoration — it is hidden from assistive technology and the
+ * label always carries the meaning on its own. It is an inline SVG rather than
+ * an emoji because an emoji is a font glyph: Apple's drawing on one phone,
+ * Google's on another, and a hollow box on a cheap Android with a partial font.
+ * This product is read on that phone. */
+.choice .icon {
+  color: var(--text-muted);
   flex: none;
+}
+
+.choice.is-chosen .icon,
+.choice:hover .icon {
+  color: var(--brand);
 }
 
 /* A checkbox row that is a whole tappable card rather than a 1rem square —

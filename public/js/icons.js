@@ -33,6 +33,8 @@ const PATHS = {
   battery: '<path d="M3 9h18v9H3z" /><path d="M7 9V6.5h3V9M14 9V6.5h3V9M7 13.5h3M15.5 12v3M14 13.5h3" />',
   // A rupee note.
   rupee: '<path d="M2.5 6h19v12h-19z" /><path d="M9 9.5h6M9 12h6M13.5 9.5c1.6 0 2.4 1 2.4 2.2 0 1.3-1 2.3-2.6 2.3H9l4 3.2" />',
+  // A navigation arrow. The hand-off to the device's maps app.
+  navigate: '<path d="M21 3 3 10.5l8 2.6 2.6 8z" />',
   // A map pin.
   pin: '<path d="M12 21s7-6.1 7-11a7 7 0 1 0-14 0c0 4.9 7 11 7 11z" /><circle cx="12" cy="10" r="2.5" />',
   // A camera.
