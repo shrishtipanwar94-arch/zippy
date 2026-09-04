@@ -260,6 +260,58 @@ const STATUS_LABELS: Record<JobStatus, string> = {
 // The Record above is still exhaustive over JobStatus, so adding a status to
 // the schema without wording it here is a compile error — the fallback only
 // covers a value the database produced that TypeScript never saw.
+// THE FIVE STAGES, AS THE DRIVER SEES THEM.
+//
+// The technician has had a segmented rung bar since Phase 22b; the driver had
+// nothing telling them whether "we are finding someone" was the second step of
+// five or the fourth. That is most of what somebody waiting wants to know.
+//
+// WORDED AND FLAGGED HERE, not in the browser. The whole reason this file
+// exists is that the driver's vocabulary is testable — tests/driverSurface.ts
+// scans the response for SCREAMING_CASE — so shipping a status key to the phone
+// and translating it there would move the one thing that is checked into the
+// one place that is not.
+//
+// A status this table has never heard of returns an empty list, and the phone
+// shows no stepper at all: a stepper with nothing highlighted tells a driver
+// less than no stepper.
+const DRIVER_STAGES: { key: string; label: string }[] = [
+  { key: 'reported', label: 'You told us what happened' },
+  { key: 'finding', label: 'We are finding someone equipped for it' },
+  { key: 'coming', label: 'They are on the way' },
+  { key: 'working', label: 'They are with your vehicle' },
+  { key: 'done', label: 'Finished' },
+];
+
+// Statuses that mean "something is being re-arranged" map to `finding`,
+// because that is what is happening from the driver's side of it.
+const STAGE_FOR_STATUS: Record<string, string> = {
+  DRAFT: 'reported',
+  INTAKE: 'reported',
+  PLANNED: 'finding',
+  OFFERED: 'finding',
+  AWAITING_DESTINATION: 'finding',
+  COMMITTED: 'coming',
+  EN_ROUTE: 'coming',
+  TOWING: 'coming',
+  ON_SITE: 'working',
+  DIAGNOSING: 'working',
+  WORKING: 'working',
+  AWAITING_APPROVAL: 'working',
+  RESOLVED: 'done',
+};
+
+export function stagesFor(status: string): { label: string; state: string }[] {
+  const stage = STAGE_FOR_STATUS[status];
+  if (!stage) return [];
+
+  const current = DRIVER_STAGES.findIndex((entry) => entry.key === stage);
+  return DRIVER_STAGES.map((entry, index) => ({
+    label: entry.label,
+    state: index < current ? 'done' : index === current ? 'current' : 'todo',
+  }));
+}
+
 export function labelForJobStatus(status: string): string {
   return STATUS_LABELS[status as JobStatus] ?? status;
 }

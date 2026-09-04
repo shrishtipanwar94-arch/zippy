@@ -110,6 +110,10 @@ async function openJobs(db: PrismaClient, technicianId: string) {
       assignedUnitId: true,
       zone: { select: { name: true } },
       vehicle: { select: { registration: true, profile: { select: { make: true, model: true } } } },
+      // WHO TO RING, from the technician's side. The other half of the call
+      // affordance the driver has — a technician who cannot find a car in a
+      // basement car park has exactly one useful action, and it is not chat.
+      driver: { select: { user: { select: { name: true, phone: true } } } },
     },
   });
 }
@@ -147,6 +151,12 @@ async function withContext(db: PrismaClient, job: OpenJob) {
     lat: job.lat,
     lng: job.lng,
     vehicle: describeVehicle(job.vehicle),
+    // First name only, the same rule the driver's screen follows in the other
+    // direction: enough to greet somebody by, not a personnel record.
+    driver: {
+      name: job.driver.user.name?.split(' ')[0] ?? 'the driver',
+      phone: job.driver.user.phone,
+    },
     estimate,
     partSourcing: readSourcing(option?.partSourcing),
     destination,

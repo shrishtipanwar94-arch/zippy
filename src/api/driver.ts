@@ -29,6 +29,7 @@ import {
   formatIstClock,
   labelForJobStatus,
   labelForUnit,
+  stagesFor,
   whatWeThinkItIs,
 } from '../domain/driverNarrative.js';
 import { driverUpdatesFor } from '../domain/driverUpdates.js';
@@ -38,6 +39,7 @@ import { guidanceFor } from '../domain/safetyGuidance.js';
 // differently.
 import { formatRupees } from '../domain/money.js';
 import { approvedTotalFor } from '../commit/estimates.js';
+import { describePositionAge } from '../commit/unitPosition.js';
 import { contendingFaults } from '../domain/capabilitySet.js';
 import { isFaultCode } from '../domain/faults.js';
 import type { FaultCode, FaultDistribution } from '../domain/faults.js';
@@ -139,6 +141,10 @@ driverRouter.get(
         safetyLevel: true,
         createdAt: true,
         assignedUnitId: true,
+        // Where the driver is. The map needs both ends of the journey, and this
+        // end is the one the driver themselves gave us at intake.
+        lat: true,
+        lng: true,
       },
     });
     if (!job) {
@@ -159,6 +165,7 @@ driverRouter.get(
       replanning,
       approvedTotalPaise,
       sourcing,
+      unit,
     ] = await Promise.all([
       assignedHelper(job.id),
       prismaBase.faultHypothesis.findFirst({
@@ -206,6 +213,14 @@ driverRouter.get(
             select: { partSourcing: true },
           })
         : Promise.resolve(null),
+      // The crew's last recorded position, for the map. Written by their own
+      // status taps — see src/commit/unitPosition.ts.
+      job.assignedUnitId
+        ? prismaBase.unit.findUnique({
+            where: { id: job.assignedUnitId },
+            select: { lat: true, lng: true, lastLocationAt: true },
+          })
+        : Promise.resolve(null),
     ]);
 
     const arrivingAt = eta ? new Date(eta.computedAt.getTime() + eta.etaSeconds * 1000) : null;
@@ -231,6 +246,10 @@ driverRouter.get(
       arrival: STILL_ARRIVING.has(job.status)
         ? arrivalView(arrivingAt, eta?.degraded ?? false)
         : null,
+      tracking: trackingView(job, unit, new Date()),
+      // Already worded and already flagged — the phone renders this list and
+      // owns no stage vocabulary of its own.
+      stages: stagesFor(job.status),
       helper,
       guidance: guidanceFor(job.safetyLevel),
       estimate: withDeclineOption(estimateView(estimate), approvedTotalPaise),
@@ -246,11 +265,11 @@ driverRouter.get(
 // employee code is nobody's business but the dispatcher's.
 async function assignedHelper(
   jobId: string,
-): Promise<{ name: string; vehicle: string | null } | null> {
+): Promise<{ name: string; vehicle: string | null; phone: string | null } | null> {
   const job = await prismaBase.job.findUnique({
     where: { id: jobId },
     select: {
-      assignedTechnician: { select: { user: { select: { name: true } } } },
+      assignedTechnician: { select: { user: { select: { name: true, phone: true } } } },
       assignedUnit: { select: { kind: true } },
     },
   });
@@ -264,6 +283,11 @@ async function assignedHelper(
     // identifier — the driverSurface test caught it leaking onto this screen,
     // which is exactly what that scan is for.
     vehicle: unitKind ? labelForUnit(unitKind) : null,
+    // SO THE DRIVER CAN RING THEM. A `tel:` link and a real number, which is
+    // deliberate headroom rather than a finished answer — see docs/UI.md: a
+    // production build masks both parties through a relay so neither keeps the
+    // other's number after the job.
+    phone: job?.assignedTechnician?.user.phone ?? null,
   };
 }
 
@@ -274,6 +298,43 @@ function contendersFrom(distribution: unknown): FaultCode[] {
     return contendingFaults(distribution as FaultDistribution);
   }
   return [];
+}
+
+// THE MAP'S DATA, AND ITS HONESTY.
+//
+// Two points and a sentence about how much to trust the second one. The
+// driver's own position comes from intake; the crew's comes from their last
+// status tap, which means it is minutes old rather than seconds old and the
+// screen has to say so.
+//
+// NULL RATHER THAN A GUESS. No assigned crew, no recorded position, or no
+// coordinates for the breakdown itself — any of those and there is no map. An
+// empty space is honest; a dot in the middle of the city is not.
+function trackingView(
+  job: { lat: number | null; lng: number | null; status: string },
+  unit: { lat: number | null; lng: number | null; lastLocationAt: Date | null } | null,
+  now: Date,
+): {
+  you: { lat: number; lng: number };
+  helper: { lat: number; lng: number } | null;
+  note: string | null;
+  stale: boolean;
+} | null {
+  if (typeof job.lat !== 'number' || typeof job.lng !== 'number') return null;
+
+  const you = { lat: job.lat, lng: job.lng };
+
+  // Once the crew is on site the map has stopped answering a question. Their
+  // dot and the driver's are the same place, and "last seen 3 minutes ago"
+  // beside somebody standing next to you is noise.
+  if (!STILL_ARRIVING.has(job.status)) return { you, helper: null, note: null, stale: false };
+
+  if (!unit || typeof unit.lat !== 'number' || typeof unit.lng !== 'number') {
+    return { you, helper: null, note: 'We do not have their position yet.', stale: true };
+  }
+
+  const age = describePositionAge(unit.lastLocationAt, now);
+  return { you, helper: { lat: unit.lat, lng: unit.lng }, note: age.text, stale: age.stale };
 }
 
 function arrivalView(

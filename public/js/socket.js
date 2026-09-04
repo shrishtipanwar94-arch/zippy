@@ -96,6 +96,19 @@ export function connect() {
     if (pushChatMessage(message)) render();
   });
 
+  // WHERE THE VAN IS. Job room only, and the room choice matters more here than
+  // anywhere else on this socket: this is a person's live whereabouts while
+  // they are at work, and the only party with a claim on it is the driver
+  // waiting for them. See realtime/publish.ts.
+  //
+  // It calls the same hook a job event does rather than patching state
+  // directly. The driver's panel is worded by the server, so "a position
+  // arrived" means "re-read the driver view" — the alternative is this file
+  // holding a second copy of the staleness rule.
+  socket.on('unit:position', (position) => {
+    notifyJobEvent(position.jobId);
+  });
+
   // A flagged message arriving for whoever must confirm it. NOTHING HAS
   // CHANGED on the job when this lands — that is the whole design, and the
   // card this renders is the human in the middle.

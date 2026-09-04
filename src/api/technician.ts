@@ -23,6 +23,7 @@
 import { Router } from 'express';
 import { z } from 'zod';
 import { prismaBase } from '../infra/prismaBase.js';
+import { recordUnitPositionQuietly } from '../commit/unitPosition.js';
 import { authenticate, requirePermission } from './middleware/authenticate.js';
 import { recordTechnicianDecision } from '../commit/saga.js';
 import { applyTechnicianAction } from '../commit/technicianActions.js';
@@ -150,6 +151,15 @@ const actionSchema = z
     // hear about it.
     eventTime: z.iso.datetime(),
     completionCode: z.string().min(1).max(20).optional(),
+    // WHERE THE PHONE WAS WHEN IT WAS TAPPED. Optional, and the action is
+    // applied identically without it: a technician who has denied location
+    // permission, or is in a basement with no fix, must still be able to say
+    // they have arrived. See src/commit/unitPosition.ts for why the ladder is
+    // the position feed rather than a background tracker.
+    position: z
+      .object({ lat: z.number(), lng: z.number() })
+      .strict()
+      .optional(),
   })
   .strict();
 
@@ -179,6 +189,18 @@ technicianRouter.post(
       eventTime: new Date(body.eventTime),
       completionCode: body.completionCode,
     });
+
+    // THE POSITION RIDES ALONG WITH THE TAP. Recorded after the action rather
+    // than inside it, and quietly: a dot on the driver's map is never worth
+    // failing a status change for.
+    if (result.outcome === 'APPLIED' && body.position) {
+      await recordUnitPositionQuietly(prismaBase, {
+        jobId,
+        technicianId,
+        position: body.position,
+        at: new Date(body.eventTime),
+      });
+    }
 
     // Setting off is the second moment an ETA becomes worth recomputing — the
     // unit is now actually moving, and the number the driver is looking at was

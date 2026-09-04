@@ -16,6 +16,8 @@
 // recorded — nothing here counts down, which is the failure mode the brief
 // rules out.
 
+import { iconNode } from '../icons.js';
+
 function setText(root, field, text) {
   const node = root.querySelector(`[data-field="${field}"]`);
   if (!node) return null;
@@ -67,16 +69,54 @@ export function render(state) {
 // introduces themselves with, and the employee code is the dispatcher's business.
 function renderHelper(panel, helper) {
   const row = panel.querySelector('[data-field="helper-row"]');
-  const name = panel.querySelector('[data-field="helper"]');
   if (row) row.hidden = !helper;
-  if (!helper || !name) return;
+  if (!helper) return;
 
-  const text = [helper.name, helper.vehicle].filter(Boolean).join(' · ');
-  if (name.textContent !== text) name.textContent = text;
+  const name = panel.querySelector('[data-field="helper-name"]');
+  if (name && name.textContent !== helper.name) name.textContent = helper.name;
+
+  const note = panel.querySelector('[data-field="helper-note"]');
+  const vehicle = helper.vehicle ?? '';
+  if (note && note.textContent !== vehicle) note.textContent = vehicle;
 
   const initial = panel.querySelector('[data-field="helper-initial"]');
   const letter = helper.name ? helper.name.trim().charAt(0).toUpperCase() : '?';
   if (initial && initial.textContent !== letter) initial.textContent = letter;
+
+  renderContactActions(panel, helper);
+}
+
+// CALLING IS THE POINT, AND IT IS A BUTTON.
+//
+// A stranded driver who can see a van three streets away and cannot ask the
+// person in it a question has been given a map and denied the thing the map is
+// making them want. For this audience a phone call is very often the FIRST
+// choice rather than the fallback — typing into a chat box is a literacy task
+// and a call is not — so it is an icon-led control at hitting size, above the
+// message thread rather than beside it.
+//
+// `tel:` IS DELIBERATE HEADROOM, NOT THE FINISHED ANSWER. It hands the
+// technician's real number to the driver, and after the job that number stays
+// on a stranger's phone. A production build masks both parties through a relay
+// so neither keeps the other's — recorded in docs/UI.md rather than built here.
+//
+// Rebuilt rather than patched, and safely so: this row changes only when the
+// assignment changes, which is not something that happens on a socket tick.
+function renderContactActions(panel, helper) {
+  const actions = panel.querySelector('[data-field="helper-actions"]');
+  if (!actions) return;
+
+  actions.replaceChildren();
+  if (!helper.phone) return;
+
+  const call = document.createElement('a');
+  call.className = 'icon-action is-call';
+  call.href = `tel:${helper.phone}`;
+  // The label is spoken but not shown: the icon is the affordance and the
+  // button is deliberately narrow enough to sit beside the name.
+  call.setAttribute('aria-label', `Call ${helper.name}`);
+  call.append(iconNode('phone'));
+  actions.append(call);
 }
 
 // ONE COALESCED UPDATE, never a feed. A re-plan fires six events in ninety

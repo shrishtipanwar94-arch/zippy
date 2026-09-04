@@ -126,6 +126,17 @@ function technicianName(index: number): string {
   return TECHNICIAN_NAMES[index] ?? `Technician ${index + 1}`;
 }
 
+// A REACHABLE NUMBER, so the call button on the driver's screen has something
+// to dial. The 5550xxx block inside +91 98 is not allocated to a real
+// subscriber, which is the point: this is seed data and it must not ring
+// somebody's actual phone if a demo taps it.
+//
+// A real deployment would not put this number in front of a driver at all — see
+// docs/UI.md on masking both parties through a relay.
+function technicianPhone(index: number): string {
+  return `+9198555${String(10000 + index).padStart(5, '0')}`;
+}
+
 export async function seedTechnicians(prisma: PrismaClient): Promise<void> {
   for (let i = 0; i < TECHNICIAN_COUNT; i++) {
     const number = String(i + 1).padStart(2, '0');
@@ -136,13 +147,14 @@ export async function seedTechnicians(prisma: PrismaClient): Promise<void> {
 
     await prisma.user.upsert({
       where: { email },
-      update: { name: technicianName(i), passwordHash: DEV_PASSWORD_HASH },
+      update: { name: technicianName(i), phone: technicianPhone(i), passwordHash: DEV_PASSWORD_HASH },
       create: {
         id: userId,
         email,
         passwordHash: DEV_PASSWORD_HASH,
         role: 'TECHNICIAN',
         name: technicianName(i),
+        phone: technicianPhone(i),
       },
     });
 

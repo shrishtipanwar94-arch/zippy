@@ -10,6 +10,11 @@
       rel="stylesheet"
     />
     <link href="/css/tokens.css" rel="stylesheet" />
+    <link
+      href="https://cdn.jsdelivr.net/npm/leaflet@1.9.4/dist/leaflet.css"
+      rel="stylesheet"
+    />
+    <link href="/css/components.css" rel="stylesheet" />
     <link href="/css/field.css" rel="stylesheet" />
     <link href="/css/driver.css" rel="stylesheet" />
   </head>
@@ -304,13 +309,37 @@
           <p class="headline" data-field="headline"></p>
           <p class="mb-2 text-secondary" data-field="detail"></p>
           <p class="arrival mb-0" data-field="arrival" hidden></p>
-          <!-- WHO IS COMING, as a person. The initial is decorative; the name
-               beside it is the message. -->
-          <div class="helper-row" data-field="helper-row" hidden>
-            <span class="helper-avatar" data-field="helper-initial" aria-hidden="true"></span>
-            <span data-field="helper"></span>
+          <!-- WHO IS COMING, as a person, with the two ways to reach them
+               inline. `.person` is the shared component — the technician's
+               screen shows the driver in the identical shape. -->
+          <div class="person" data-field="helper-row" hidden>
+            <span class="person-avatar" data-field="helper-initial" aria-hidden="true"></span>
+            <span class="person-body">
+              <span class="person-name" data-field="helper-name"></span>
+              <span class="person-note" data-field="helper-note"></span>
+            </span>
+            <span class="person-actions" data-field="helper-actions"></span>
           </div>
         </div>
+
+        <!-- WHERE THEY ARE. Deliberately below the name and the time: the
+             driver's question is "who is coming and when", and this is
+             reassurance underneath the answer rather than the answer itself.
+             The staleness note is part of the same component because it is part
+             of the same claim — see components.css. -->
+        <section class="track mb-3" data-panel="driver-map" hidden>
+          <div class="track-map" data-field="driver-map"></div>
+          <p class="track-note mb-0" data-field="track-note" hidden></p>
+        </section>
+
+        <!-- WHAT STAGE THIS IS AT. The technician has had a segmented bar since
+             Phase 22b; the driver had nothing telling them whether "finding
+             someone" was the second of five steps or the fourth. Same five
+             stages, in the driver's words. -->
+        <section class="mb-3" data-panel="driver-stepper" hidden>
+          <p class="section-head">Progress</p>
+          <ol class="stepper-v" data-field="stepper-list"></ol>
+        </section>
 
         <div class="card guidance-card mb-3">
           <div class="card-body">
@@ -434,5 +463,6 @@
     <script src="https://cdn.jsdelivr.net/npm/morphdom@2.7.4/dist/morphdom-umd.min.js"></script>
     <script src="/socket.io/socket.io.js"></script>
     <script type="module" src="/js/pages/driver.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/leaflet@1.9.4/dist/leaflet.js"></script>
   </body>
 </html>

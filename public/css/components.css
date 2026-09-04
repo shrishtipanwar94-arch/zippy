@@ -1,0 +1,492 @@
+/* THE COMPONENT LAYER. Every shape a panel is allowed to make.
+ *
+ * Before this file the vocabulary was four words — card, badge, button, table
+ * row — and every panel invented the rest for itself. That is why the same idea
+ * looked different in three places: the driver's money rows and the
+ * technician's money rows are the same numbers about the same job and they were
+ * built twice, by two authors, with two sets of margins.
+ *
+ * THE RULE: no panel writes its own card markup after this. If something needs
+ * a shape that is not here, it is added here first and then used. A component
+ * that exists once can be fixed once.
+ *
+ * Everything below composes tokens.css and defines no colour, size or spacing
+ * of its own.
+ *
+ * THE LIST:
+ *   .person        who someone is, and how to reach them
+ *   .track         map, ETA and staleness, as one object
+ *   .stepper-v     the driver's vertical labelled stage list
+ *   .actionbar     the sticky thumb-height primary action on a phone
+ *   .receipt       money rows, rule, total — identical on both field surfaces
+ *   .empty         icon, one sentence, optional action
+ *   .toast         a confirmation that an action landed
+ *   .skeleton      placeholder while first data loads
+ *   .pill          one status pill, every colour from tokens
+ *   .section-head  small-caps label with optional right-aligned meta
+ */
+
+/* ---------------------------------------------------------------- PERSON CARD
+ * Used for the technician on the driver's screen and the driver on the
+ * technician's. The same component both ways round, because it is the same
+ * question both ways round: who is this, and how do I reach them.
+ */
+
+.person {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+}
+
+.person-avatar {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 48px;
+  height: 48px;
+  flex: none;
+  border-radius: 50%;
+  background: var(--brand);
+  color: var(--on-brand);
+  font-weight: var(--weight-strong);
+  font-size: var(--size-2);
+}
+
+.person-body {
+  min-width: 0;
+  flex: 1;
+}
+
+.person-name {
+  display: block;
+  font-size: var(--size-2);
+  font-weight: var(--weight-strong);
+}
+
+.person-note {
+  display: block;
+  font-size: var(--size-4);
+  color: var(--text-muted);
+}
+
+/* Inline actions. Icon-led and large enough to hit: for this audience the call
+ * button may well be the most important control on the screen, and a text link
+ * is the wrong shape for something you press in a hurry. */
+.person-actions {
+  display: flex;
+  gap: var(--space-2);
+  flex: none;
+}
+
+.icon-action {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-2);
+  min-height: 48px;
+  padding: 0 var(--space-4);
+  border-radius: var(--radius-control);
+  border: 1px solid var(--line);
+  background: var(--surface-2);
+  color: var(--text);
+  font-size: var(--size-3);
+  font-weight: var(--weight-strong);
+  text-decoration: none;
+  cursor: pointer;
+}
+
+.icon-action:hover,
+.icon-action:focus-visible {
+  border-color: var(--brand);
+  color: var(--brand);
+}
+
+/* THE CALL BUTTON IS THE LOUD ONE. Not amber — amber is reserved for the single
+ * primary action, and on the driver's screen that is whatever the job needs
+ * next. This is a filled neutral so it reads as a control rather than a link,
+ * without competing with the one thing that must be pressed. */
+.icon-action.is-call {
+  background: var(--surface-2);
+  border-color: var(--text-muted);
+}
+
+.icon-action .icon {
+  width: 22px;
+  height: 22px;
+}
+
+/* -------------------------------------------------------------- LIVE TRACKING
+ * Map, ETA line and staleness note as ONE object, because they are one claim:
+ * "this is where they are, and this is how much to believe it". Splitting them
+ * is how a map ends up drawing a confident dot next to a number computed twenty
+ * minutes ago.
+ *
+ * SECONDARY BY CONSTRUCTION. The driver's question is answered by the name and
+ * the duration above; this is reassurance underneath, so it is short and it
+ * never takes the top of the screen.
+ */
+
+.track {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.track-map {
+  height: 180px;
+  border-radius: var(--radius-card);
+  overflow: hidden;
+  border: 1px solid var(--line);
+  background: var(--surface-2);
+}
+
+.track-note {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  font-size: var(--size-4);
+  color: var(--text-muted);
+}
+
+/* A STALE FIX SAYS SO, IN THE DRIVER'S LANGUAGE. The dot stays on the map —
+ * removing it would answer "where are they" with silence — but the sentence
+ * beside it stops calling it a current position. */
+.track-note.is-stale {
+  color: var(--warn);
+}
+
+/* ------------------------------------------------------- THE DRIVER'S STEPPER
+ * The technician has a segmented bar and the driver had nothing: no way to tell
+ * whether "we are finding someone" is the second of five stages or the fourth.
+ * Same five stages, in the driver's words rather than the ladder's.
+ *
+ * Vertical, because the labels are sentences rather than single words and a
+ * horizontal bar on a 390px screen cannot carry them.
+ */
+
+.stepper-v {
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.stepper-v li {
+  display: grid;
+  grid-template-columns: 20px 1fr;
+  gap: var(--space-3);
+  align-items: start;
+  padding-bottom: var(--space-3);
+  font-size: var(--size-4);
+  color: var(--text-faint);
+}
+
+.stepper-v li:last-child {
+  padding-bottom: 0;
+}
+
+/* The dot, and the line joining it to the next one. Drawn with a border on a
+ * pseudo-element rather than an SVG so it scales with the text. */
+.stepper-v .dot {
+  position: relative;
+  width: 12px;
+  height: 12px;
+  margin-top: 3px;
+  border-radius: 50%;
+  border: 2px solid var(--line);
+  justify-self: center;
+}
+
+.stepper-v li:not(:last-child) .dot::after {
+  content: '';
+  position: absolute;
+  left: 50%;
+  top: 12px;
+  transform: translateX(-50%);
+  width: 2px;
+  height: calc(100% + var(--space-3));
+  background: var(--line);
+}
+
+.stepper-v li.is-done {
+  color: var(--text-muted);
+}
+
+.stepper-v li.is-done .dot {
+  background: var(--ok);
+  border-color: var(--ok);
+}
+
+.stepper-v li.is-done:not(:last-child) .dot::after {
+  background: var(--ok);
+}
+
+/* WHERE YOU ARE NOW, and it is the only line at full strength. */
+.stepper-v li.is-current {
+  color: var(--text);
+  font-size: var(--size-3);
+  font-weight: var(--weight-strong);
+}
+
+.stepper-v li.is-current .dot {
+  background: var(--brand);
+  border-color: var(--brand);
+  box-shadow: 0 0 0 4px var(--brand-soft);
+}
+
+/* ------------------------------------------------------------- THE ACTION BAR
+ * One primary action, thumb height, pinned low. A phone is held at the bottom
+ * and the most important control was sitting at the top of a scrolling page.
+ */
+
+.actionbar {
+  position: sticky;
+  bottom: 0;
+  z-index: 5;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  padding: var(--space-3) 0 var(--space-4);
+  background: linear-gradient(to bottom, transparent, var(--ground) 35%);
+}
+
+.actionbar .btn {
+  min-height: 56px;
+  font-size: var(--size-2);
+  font-weight: var(--weight-strong);
+}
+
+/* ------------------------------------------------------------------ RECEIPT
+ * Money rows, a rule, a total. IDENTICAL on the driver and the technician, so
+ * the same numbers about the same job look the same to both of them — they are
+ * frequently standing next to each other looking at both screens.
+ *
+ * Tabular numerals and mono for every figure: a column of rupees is read by
+ * comparing digits down its length.
+ */
+
+.receipt {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.receipt-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: var(--space-3);
+  font-size: var(--size-3);
+}
+
+.receipt-row .amount {
+  font-family: var(--mono);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.receipt-row.is-muted {
+  color: var(--text-muted);
+  font-size: var(--size-4);
+}
+
+.receipt-rule {
+  height: 1px;
+  background: var(--line);
+  margin: var(--space-1) 0;
+}
+
+/* THE TOTAL IS THE BIGGEST THING IN THE BLOCK. People who read English slowly
+ * still read a rupee figure reliably, so the number carries the meaning and the
+ * words around it stay small. */
+.receipt-total {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: var(--space-3);
+  font-size: var(--size-3);
+  font-weight: var(--weight-strong);
+}
+
+.receipt-total .amount {
+  font-family: var(--mono);
+  font-variant-numeric: tabular-nums;
+  font-size: var(--size-1);
+}
+
+/* -------------------------------------------------------------- EMPTY STATE
+ * Icon, one sentence, optional action. These were bare text, which reads as a
+ * panel that failed to load rather than a panel with nothing in it.
+ */
+
+.empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-5) var(--space-4);
+  text-align: center;
+  color: var(--text-muted);
+  font-size: var(--size-4);
+}
+
+.empty .icon {
+  color: var(--text-faint);
+}
+
+/* ------------------------------------------------------------------- TOAST
+ * "That worked." Matters most for a tap the offline queue swallowed: the
+ * technician pressed something, the screen did not change, and without this
+ * nothing at all tells them it landed.
+ */
+
+.toast {
+  position: fixed;
+  left: 50%;
+  bottom: var(--space-5);
+  transform: translateX(-50%);
+  z-index: 20;
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  max-width: calc(100% - var(--space-6));
+  padding: var(--space-3) var(--space-4);
+  border-radius: var(--radius-control);
+  background: var(--surface-2);
+  border: 1px solid var(--line);
+  box-shadow: var(--shadow-answer);
+  font-size: var(--size-3);
+}
+
+.toast .icon {
+  color: var(--ok);
+}
+
+.toast.is-queued .icon {
+  color: var(--warn);
+}
+
+/* ---------------------------------------------------------------- SKELETON
+ * A placeholder with the shape of the thing that is coming, rather than a blank
+ * panel. The pulse is the ONE animation in this product and it honours reduced
+ * motion through the global rule in tokens.css.
+ */
+
+.skeleton {
+  border-radius: var(--radius-badge);
+  background: var(--surface-2);
+  animation: skeleton-pulse 1.4s ease-in-out infinite;
+}
+
+.skeleton-line {
+  height: 12px;
+  margin-bottom: var(--space-2);
+}
+
+.skeleton-line.is-short {
+  width: 45%;
+}
+
+@keyframes skeleton-pulse {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.45;
+  }
+}
+
+/* ------------------------------------------------------------- STATUS PILL
+ * ONE pill component. Every colour comes from tokens, and every pill carries
+ * its WORD as well as its colour — that has been true of the queue's risk
+ * badges since docs/UI.md and is now true everywhere.
+ */
+
+.pill {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  padding: 2px var(--space-2);
+  border-radius: var(--radius-badge);
+  border: 1px solid currentColor;
+  font-size: var(--size-4);
+  font-weight: var(--weight-strong);
+  white-space: nowrap;
+}
+
+.pill.is-ok {
+  color: var(--ok);
+  background: var(--ok-soft);
+}
+
+.pill.is-warn {
+  color: var(--warn);
+  background: var(--warn-soft);
+}
+
+.pill.is-danger {
+  color: var(--danger);
+  background: var(--danger-soft);
+}
+
+.pill.is-quiet {
+  color: var(--text-muted);
+  background: transparent;
+}
+
+/* -------------------------------------------------------- SECTION HEADER
+ * A small-caps label with optional right-aligned meta. The shape every card
+ * header on the console already had, available to panels that are not cards.
+ */
+
+.section-head {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-3);
+  font-size: var(--size-4);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--text-muted);
+  margin-bottom: var(--space-2);
+}
+
+.section-head .meta {
+  margin-left: auto;
+  text-transform: none;
+  letter-spacing: 0;
+}
+
+/* ------------------------------------------------------------ MAP MARKERS
+ * Two dots on the driver's map, drawn as divIcons so they are CSS rather than
+ * image assets and inherit the palette like everything else.
+ *
+ * THE DRIVER IS THE STEADY ONE and the crew is the one that moves, so the
+ * driver's dot is quiet and the crew's is the brand colour with a ring — the
+ * eye should go to the thing that is travelling.
+ */
+
+.map-dot {
+  border-radius: 50%;
+  box-sizing: border-box;
+}
+
+.driver-dot {
+  background: var(--text);
+  border: 3px solid var(--ground);
+}
+
+.helper-dot {
+  background: var(--brand);
+  border: 3px solid var(--ground);
+  box-shadow: 0 0 0 4px var(--brand-soft);
+}
+
+/* Leaflet paints its own light ground behind the tiles. On a dark page that
+ * flashes white before the first tile lands. */
+.track-map .leaflet-container {
+  background: var(--surface-2);
+  height: 100%;
+}

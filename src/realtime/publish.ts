@@ -157,6 +157,31 @@ export async function publishChatMessage(message: ChatMessage): Promise<void> {
   await emitToJobRoom(message.jobId, 'chat:message', message);
 }
 
+export type UnitPositionMessage = {
+  jobId: string;
+  unitId: string;
+  lat: number;
+  lng: number;
+  at: string;
+};
+
+// WHERE THE VAN IS, TO THE JOB ROOM ONLY — and the room choice is the same
+// argument a chat message makes, for a stronger reason.
+//
+// A zone room is every dispatcher watching a geography; a tenant room is a
+// fleet manager. Neither needs a per-fix stream, and a technician's live
+// position is the most personal thing this system moves: it is a person's
+// whereabouts, minute by minute, while they are at work. The one party with a
+// genuine claim on it is the driver waiting for them, and the job room is
+// exactly that party plus the dispatchers who have deliberately opened the job.
+//
+// So this does NOT go through `roomsForJobEvent`. A dispatcher who wants to see
+// vans on a map has the fleet view for it; a fleet manager has no business
+// watching an individual technician move.
+export async function publishUnitPosition(message: UnitPositionMessage): Promise<void> {
+  await emitToJobRoom(message.jobId, 'unit:position', message);
+}
+
 // A flagged promotion, pushed so the person who must confirm it sees the card
 // without polling. Which of them may act on it is the policy table's decision
 // (domain/promotionPolicy.ts), enforced on the confirm route rather than by who

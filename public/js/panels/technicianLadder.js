@@ -37,6 +37,8 @@ const BUTTON_LABEL = {
   PARTS: 'Parts fitted',
 };
 
+import { icon } from '../icons.js';
+
 const STATUS_LABEL = {
   COMMITTED: 'Assigned to you',
   EN_ROUTE: 'On the way',
@@ -66,11 +68,18 @@ export function render(state) {
 
   const markup = `
     <div data-panel="ladder" class="mb-4" aria-live="polite">
-      ${job ? jobMarkup(job, state) : '<p class="text-secondary">No job in hand.</p>'}
+      ${job ? jobMarkup(job, state) : emptyMarkup('No job in hand right now.')}
     </div>`;
 
   // eslint-disable-next-line no-undef
   morphdom(panel, markup);
+}
+
+// AN EMPTY PANEL SHOULD LOOK EMPTY, NOT BROKEN. A bare line of grey text reads
+// as a panel that failed to load; an icon and a sentence read as a panel with
+// nothing in it. `.empty` is the shared component — see components.css.
+function emptyMarkup(sentence) {
+  return `<div class="empty">${icon('inbox')}<p class="mb-0">${escapeText(sentence)}</p></div>`;
 }
 
 function jobMarkup(job, state) {
@@ -85,7 +94,9 @@ function jobMarkup(job, state) {
         </p>
 
         ${rungTrackMarkup(job.status)}
-        <p class="mb-3"><span class="badge text-bg-secondary">${escapeText(STATUS_LABEL[job.status] ?? job.status)}</span></p>
+        <p class="mb-3"><span class="pill is-quiet">${escapeText(STATUS_LABEL[job.status] ?? job.status)}</span></p>
+
+        ${driverMarkup(job)}
 
         ${contextMarkup(job)}
         ${estimateMarkup(job)}
@@ -114,7 +125,7 @@ function jobMarkup(job, state) {
         </button>
         ${
           offline
-            ? '<p class="small mt-2 mb-0">A new diagnosis re-plans the job, so it needs a live connection. Reconnect first.</p>'
+            ? '<p class="small mt-2 mb-0">Telling us what you found may change who is sent, so it needs a signal. Try again when you are back online.</p>'
             : ''
         }
       </div>
@@ -160,7 +171,7 @@ function contextMarkup(job) {
       : '';
     const authorised = job.destination.authorisedBrands.length > 0
       ? `Authorised for ${escapeText(job.destination.authorisedBrands.join(', '))}.`
-      : 'No brand authorisation recorded for this workshop.';
+      : 'We have no record that this workshop is approved for this make.';
     blocks.push(`
       <div class="context-card mb-3">
         <div class="context-title">Taking it to</div>
@@ -170,6 +181,35 @@ function contextMarkup(job) {
   }
 
   return blocks.join('');
+}
+
+// WHO THE DRIVER IS, AND HOW TO RING THEM. The same `.person` component the
+// driver's screen uses for the technician, pointed the other way — it is the
+// same question from the other side of the windscreen.
+//
+// A technician who cannot find a car in a basement car park, or who is two
+// streets away and needs to know which gate, has exactly one useful action and
+// it is not a chat thread. `tel:` for now; a relay that masks both numbers is
+// noted in docs/UI.md as headroom rather than built here.
+function driverMarkup(job) {
+  if (!job.driver) return '';
+  const letter = escapeText((job.driver.name || '?').trim().charAt(0).toUpperCase());
+  return `
+    <div class="person mb-3">
+      <span class="person-avatar" aria-hidden="true">${letter}</span>
+      <span class="person-body">
+        <span class="person-name">${escapeText(job.driver.name)}</span>
+        <span class="person-note">Waiting with the vehicle</span>
+      </span>
+      <span class="person-actions">
+        ${
+          job.driver.phone
+            ? `<a class="icon-action is-call" href="tel:${escapeText(job.driver.phone)}"
+                  aria-label="Call ${escapeText(job.driver.name)}">${icon('phone')}</a>`
+            : ''
+        }
+      </span>
+    </div>`;
 }
 
 // The driver is told "Ravi has the skills but needs a part". This is Ravi's

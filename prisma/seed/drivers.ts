@@ -39,12 +39,12 @@ type DriverSeed = {
 };
 
 const DRIVERS: DriverSeed[] = [
-  { id: 'metrocab-1', name: 'MetroCab Driver 1', tenantId: 'tenant-metrocab', profileId: 'vp-innova', registration: 'KA01AB1001', colour: 'White', homeZoneIndex: 0 },
-  { id: 'metrocab-2', name: 'MetroCab Driver 2', tenantId: 'tenant-metrocab', profileId: 'vp-nexon-ev', registration: 'KA01AB1002', colour: 'Blue', homeZoneIndex: 1 },
-  { id: 'city-1', name: 'CityLogistics Driver 1', tenantId: 'tenant-citylogistics', profileId: 'vp-xuv500', registration: 'KA02CD2001', colour: 'Silver', homeZoneIndex: 2 },
-  { id: 'quick-1', name: 'QuickMove Driver 1', tenantId: 'tenant-quickmove', profileId: 'vp-tiago', registration: 'KA03EF3001', colour: 'Red', homeZoneIndex: 3 },
-  { id: 'walkin-1', name: 'Walk-in Driver 1', tenantId: 'tenant-walkin', profileId: 'vp-swift', registration: 'KA04GH4001', colour: 'Grey', homeZoneIndex: 4 },
-  { id: 'walkin-2', name: 'Walk-in Driver 2', tenantId: 'tenant-walkin', profileId: 'vp-i20', registration: 'KA05IJ5001', colour: 'Black', homeZoneIndex: 5 },
+  { id: 'metrocab-1', name: 'Lakshmi Rao', tenantId: 'tenant-metrocab', profileId: 'vp-innova', registration: 'KA01AB1001', colour: 'White', homeZoneIndex: 0 },
+  { id: 'metrocab-2', name: 'Sandeep Kulkarni', tenantId: 'tenant-metrocab', profileId: 'vp-nexon-ev', registration: 'KA01AB1002', colour: 'Blue', homeZoneIndex: 1 },
+  { id: 'city-1', name: 'Fatima Begum', tenantId: 'tenant-citylogistics', profileId: 'vp-xuv500', registration: 'KA02CD2001', colour: 'Silver', homeZoneIndex: 2 },
+  { id: 'quick-1', name: 'Joseph Mathew', tenantId: 'tenant-quickmove', profileId: 'vp-tiago', registration: 'KA03EF3001', colour: 'Red', homeZoneIndex: 3 },
+  { id: 'walkin-1', name: 'Priya Nair', tenantId: 'tenant-walkin', profileId: 'vp-swift', registration: 'KA04GH4001', colour: 'Grey', homeZoneIndex: 4 },
+  { id: 'walkin-2', name: 'Abhishek Jain', tenantId: 'tenant-walkin', profileId: 'vp-i20', registration: 'KA05IJ5001', colour: 'Black', homeZoneIndex: 5 },
 ];
 
 const ZONE_CODES = ['kor', 'ind', 'whf', 'jay', 'heb', 'elc'];
@@ -68,15 +68,18 @@ export async function seedDrivers(prisma: PrismaClient): Promise<void> {
     });
   }
 
-  for (const driver of DRIVERS) {
+  for (const [index, driver] of DRIVERS.entries()) {
     const email = `driver-${driver.id}@zippy.internal`;
+    // The technician's call button needs something to dial. Unallocated test
+    // range, for the reason spelled out in seed/technicians.ts.
+    const phone = `+9198556${String(10000 + index).padStart(5, '0')}`;
     const userId = `user-driver-${driver.id}`;
     const driverId = `driver-${driver.id}`;
 
     await prisma.user.upsert({
       where: { email },
-      update: { name: driver.name, passwordHash: DEV_PASSWORD_HASH },
-      create: { id: userId, email, passwordHash: DEV_PASSWORD_HASH, role: 'DRIVER', name: driver.name },
+      update: { name: driver.name, phone, passwordHash: DEV_PASSWORD_HASH },
+      create: { id: userId, email, phone, passwordHash: DEV_PASSWORD_HASH, role: 'DRIVER', name: driver.name },
     });
 
     await prisma.driver.upsert({
