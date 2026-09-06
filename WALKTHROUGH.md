@@ -60,6 +60,7 @@ not have to type anything else before Step 1.
 | database | reset, reseeded, Redis flushed |
 | fleet history | `scripts/demo-prep-beat9.ts` — three RESOLVED battery jobs on `KA01AB1001` |
 | board | 21 pending jobs — 4 routine, 10 elevated, 7 high risk — all raised in the last half hour, plus 3 resolved for the fleet history |
+| action queue | empty when handed over; it grows an `ESCALATE_SLA_WINDOW_CLOSED` card per job as the board ages — see the note in Step 6 |
 | simulator | not running; no orphaned process |
 | web | `npm run dev` — http://localhost:3000 |
 | worker | `npm run dev:worker` |
@@ -251,6 +252,16 @@ Press **Yes**.
 - Dispatcher: a new card appears in the **ACTION QUEUE** on the left —
   `Recommended · REASSIGN_AFTER_TRIGGER`, reason *"confirmed from a message:
   safety change"*, showing the crew it would move the job **from** and **to**.
+
+> **The action queue will not be empty, and that is not a fault.** The board was
+> generated half an hour before it was handed to you and it keeps ageing, so a
+> sweep raises one `ESCALATE_SLA_WINDOW_CLOSED` card per job whose SLA window
+> has closed — five of them within an hour, more if you leave it overnight.
+> Those are the commercial follow-up on a late job and they do not block
+> dispatch. **Yours is the only card that says `REASSIGN_AFTER_TRIGGER`**, and
+> it is the only one naming a crew under **from** and **to**. If the list is
+> long, that is what to look for. Regenerating the board (Section 0b) empties
+> the queue again.
 
 ---
 
