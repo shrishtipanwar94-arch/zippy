@@ -15,14 +15,81 @@
  * the person pressing it is wearing gloves in the rain.
  */
 
+/* THE COLUMN, AND WHY IT IS NOT 390px WIDE ON A LAPTOP.
+ *
+ * These two pages are designed for a phone and were being READ on a 1500px
+ * window, where a 34rem column left a band of dark ground down both sides —
+ * which reads as a mobile page somebody forgot to finish rather than a
+ * deliberate one. The column now grows in the three steps tokens.css names:
+ *
+ *   below 640   the viewport, less the page padding. Unchanged.
+ *   640         40rem. A comfortable maximum for one column of large type.
+ *   1024        60rem, and the live job splits into two columns — see the
+ *               `[data-panel="driver-status"]` and `[data-panel="ladder"]`
+ *               blocks in driver.css and technician.css for what goes where.
+ *   1440        66rem. The same two columns, both a little wider.
+ *
+ * The width above 1024 is only useful because something uses it. A wider
+ * single column would be worse than the narrow one: 900px of 17px type is a
+ * line length nobody can track back from.
+ *
+ * THE PAGE PADDING IS OWNED HERE, not by Bootstrap's `p-3` utility, because it
+ * has to take the phone's safe-area insets into account and a utility class
+ * cannot. `max()` rather than addition: 16px is already enough clearance on a
+ * phone with no notch, and adding the two would double the margin on the one
+ * that has. */
 body.driver,
 body.technician {
+  --page-pad-x: max(var(--space-4), env(safe-area-inset-left), env(safe-area-inset-right));
+
   font-size: 1.0625rem;
   line-height: 1.55;
-  max-width: 34rem;
+  max-width: none;
   margin: 0 auto;
-  /* Room for the sticky bar at the top and a thumb at the bottom. */
-  padding-bottom: 3rem;
+  /* Room for the sticky bar at the top and a thumb — and the home indicator —
+   * at the bottom. */
+  padding: var(--space-4) var(--page-pad-x) calc(var(--space-7) + env(safe-area-inset-bottom));
+}
+
+@media (min-width: 640px) {
+  body.driver,
+  body.technician {
+    max-width: 40rem;
+  }
+}
+
+@media (min-width: 1024px) {
+  body.driver,
+  body.technician {
+    max-width: 60rem;
+  }
+}
+
+@media (min-width: 1440px) {
+  body.driver,
+  body.technician {
+    max-width: 66rem;
+  }
+}
+
+/* EVERY CONTROL ON A FIELD SURFACE CLEARS 48px, and this rule is what makes
+ * that true rather than aspirational. The components written for these pages
+ * always did — `.choice`, `.card-check`, `.icon-action`, `.tech-action` each
+ * state their own height — but the controls nobody styled inherited
+ * Bootstrap's default button and input, which are about 38px tall. That is how
+ * the chat Send button and the message box on both field surfaces ended up
+ * under the floor this product set itself.
+ *
+ * `.btn-sm` is deliberately caught by this too: a small button is a console
+ * idea, and the one that reached this page ("Fitted one", on the completion
+ * card) is pressed with a thumb like everything else here. */
+body.driver .btn,
+body.driver .form-control,
+body.driver .form-select,
+body.technician .btn,
+body.technician .form-control,
+body.technician .form-select {
+  min-height: 48px;
 }
 
 /* ---------------------------------------------------------------------------
@@ -39,8 +106,14 @@ body.technician {
   display: flex;
   align-items: center;
   gap: 0.75rem;
-  padding: 0.75rem 1rem;
-  margin: 0 -1rem 1rem;
+  /* Bleeds to both edges of the page and then re-adds the page padding, so the
+   * blur runs edge to edge while the wordmark stays in the same column as
+   * everything below it. The top padding absorbs a notch: with
+   * `viewport-fit=cover` set on these two pages the layout viewport now runs
+   * under it, which is what lets the sticky bar at the other end of the page
+   * clear the home indicator. */
+  padding: max(0.75rem, env(safe-area-inset-top)) var(--page-pad-x) 0.75rem;
+  margin: 0 calc(-1 * var(--page-pad-x)) 1rem;
   background: rgb(15 23 42 / 0.92);
   backdrop-filter: blur(8px);
   border-bottom: 1px solid var(--border);

@@ -107,3 +107,73 @@
   font-size: 1.5rem;
   font-weight: 650;
 }
+
+/* ---------------------------------------------------------------------------
+ * THE LIVE PANEL ON A LAPTOP (1024 and up).
+ *
+ * Below 1024 this is one column and stays one column — that is the phone this
+ * screen is designed for, and nothing here changes it.
+ *
+ * Above 1024 there is width going spare, and the useful thing to do with it is
+ * to stop the map pushing the answer off the top of the screen. A driver's two
+ * questions are WHO is coming and WHEN; both are in the hero, and on a phone
+ * the map goes underneath because there is nowhere else for it. On a laptop it
+ * goes beside, and then the headline, the arrival time, the person card and
+ * the progress list are all on screen at once without scrolling.
+ *
+ * WHAT GOES RIGHT is `.driver-aside`: where they are, and how far through this
+ * is — the two blocks that are reassurance rather than answer. WHAT STAYS LEFT
+ * is the hero and everything that asks the driver to do something: approve a
+ * cost, read a code, answer a flagged message, pay, send a message.
+ *
+ * THE ASIDE IS PLACED EXPLICITLY AND EVERYTHING ELSE IS NOT, which is the
+ * whole trick. An item with a definite row and column is placed before the
+ * auto-placement pass runs, so the left-hand stack never has to step over it
+ * and never leaves a hole beside it. Mixing definite-column items into the
+ * auto pass is what produces a gap under the hero.
+ */
+@media (min-width: 1024px) {
+  /* The second column exists only while there is something to put in it. Both
+   * blocks in the aside are hidden until the server has something to say, and
+   * a reserved-but-empty 20rem column is the same fault this pass is fixing,
+   * one level down. Only the container needs the guard: `grid-column` on the
+   * child of something that is not a grid is simply ignored. */
+  [data-panel='driver-status']:has(.driver-aside > :not([hidden])) {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) 20rem;
+    column-gap: var(--space-4);
+    align-items: start;
+  }
+
+  /* THREE CHILDREN, THREE PLACEMENTS, AND THE ASIDE SPANS BOTH ROWS. A grid
+   * row is as tall as its tallest cell, so an aside pinned to row 1 stretches
+   * row 1 to its own height and leaves a hole beside the hero. Spanning both
+   * rows instead means its height is measured against the hero AND everything
+   * under it, which is always the taller of the two. */
+  [data-panel='driver-status'] > .status-hero {
+    grid-column: 1;
+    grid-row: 1;
+  }
+
+  [data-panel='driver-status'] > .driver-rest {
+    grid-column: 1;
+    grid-row: 2;
+  }
+
+  [data-panel='driver-status'] > .driver-aside {
+    grid-column: 2;
+    grid-row: 1 / span 2;
+  }
+
+  /* Taller than the 180px it gets on a phone: beside the hero rather than
+   * under it, it can grow without pushing anything down. */
+  .driver-aside .track-map {
+    height: 15rem;
+  }
+}
+
+@media (min-width: 1440px) {
+  [data-panel='driver-status']:has(.driver-aside > :not([hidden])) {
+    grid-template-columns: minmax(0, 1fr) 24rem;
+  }
+}

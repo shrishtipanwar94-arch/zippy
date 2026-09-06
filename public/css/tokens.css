@@ -113,6 +113,34 @@
    * panel never picks its own size. */
   --icon: 24px;
   --icon-stroke: 1.75;
+
+  /* ----------------------------------------------------------- BREAKPOINTS
+   * THREE, AND NOTHING BETWEEN THEM. Every media query in this project uses
+   * one of these three numbers, so a layout change is a change to one of three
+   * documented states rather than to whichever number the panel author had in
+   * mind that afternoon.
+   *
+   *   640px   a phone becomes a small tablet. Below this everything stacks.
+   *   1024px  a laptop. The first width where a second column earns its place.
+   *   1440px  a desktop. The dispatcher's three columns fit here and nowhere
+   *           smaller.
+   *
+   * THE CUSTOM PROPERTIES BELOW CANNOT BE USED IN THE MEDIA QUERIES
+   * THEMSELVES, and that is a browser rule rather than an oversight: a media
+   * query is evaluated before the cascade runs, so `@media (min-width:
+   * var(--bp-md))` never matches anything. The three numbers are therefore
+   * written out literally at every `@media`, and this block is the one place
+   * that says what they mean — if one moves, grep for the literal. They are
+   * declared as properties anyway because a panel sometimes needs the same
+   * number in a `max-width`, where a variable does work.
+   *
+   * A `max-width` query is written one hundredth below its breakpoint —
+   * 639.98px, 1023.98px, 1439.98px — so a fractional viewport width (which a
+   * browser at 110% zoom genuinely produces) can never fall into the gap
+   * between the two rules and match neither. */
+  --bp-sm: 640px;
+  --bp-md: 1024px;
+  --bp-lg: 1440px;
 }
 
 /* -------------------------------------------------------------- THE TYPE SCALE

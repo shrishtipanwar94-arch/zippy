@@ -83,9 +83,15 @@ src/realtime/server.ts      handshake JWT, rooms, suppressLiveUpdates for chaos
 evaluation/runner.ts        the discrete-event loop; a hidden trueFault drives re-dispatch
 evaluation/ai/              108 labelled descriptions, a keyword control, six metrics
 scripts/simulate-200-offers.js   the Phase 22 check: 200 fabricated destination offers
+scripts/demo-open-shifts.ts the demo workaround for realistic shift bands: everybody on
+                            duty for twelve hours, so a board is dispatchable at any hour
 prisma/                     85 tables, append-only triggers, version columns; the seed
 tests/concurrency/          REAL Postgres via testcontainers — holds, offers, mutation
 public/js/                  one state object; panels render(state); per-role page wiring
+public/css/tokens.css       colour, type, space, and THE THREE BREAKPOINTS — 640/1024/1440
+public/css/components.css   every shape a panel may make; nothing role-specific
+public/css/field.css        driver + technician: the column widths, the 48px floor
+public/css/console-regions.css  where the dispatcher's four regions sit at each width
 ```
 
 ## 2. Reading order

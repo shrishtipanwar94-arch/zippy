@@ -130,17 +130,25 @@ function skeletonMarkup() {
 // the stripe is about). PARTS is a hairline block beneath it. The primary
 // action is in the sticky bar, where it cannot scroll away. Re-diagnosing is a
 // section of its own, outside the card, because it is a different task.
+//
+// THE MAP IS A SIBLING OF THE CARD, NOT INSIDE IT, and that is a layout
+// decision rather than a tidying one. Above 1024 the map and the one thing to
+// press move into a column of their own beside the card (technician.css), and
+// a grid can only place its own children. On a phone nothing moves: the map
+// still renders immediately under the identity block, which is where it was.
 function jobMarkup(job, state) {
   return `
     ${jobCardMarkup(job)}
+    ${trackingMarkup(job)}
     ${contextMarkup(job)}
     ${estimateMarkup(job)}
     ${nextActionMarkup(job, state)}
     ${diagnosisMarkup(job, state)}`;
 }
 
-// WHO AND WHERE. Identity, progress, the person and the map — the things a
-// technician glances at to confirm they are at the right job.
+// WHO AND WHERE. Identity, progress and the person — the things a technician
+// glances at to confirm they are at the right job. The map that used to close
+// this card is now the sibling immediately below it; see jobMarkup.
 function jobCardMarkup(job) {
   return `
     <div class="card job-card mb-3" data-job-id="${escapeText(job.jobId)}">
@@ -153,7 +161,6 @@ function jobCardMarkup(job) {
         ${rungTrackMarkup(job.status)}
 
         ${driverMarkup(job)}
-        ${trackingMarkup(job)}
       </div>
     </div>`;
 }
@@ -319,7 +326,7 @@ function navigateMarkup(job) {
 function trackingMarkup(job) {
   if (!job.tracking) return '';
   return `
-    <section class="track mb-3" data-panel="technician-map">
+    <section class="track mb-3 job-map" data-panel="technician-map">
       <div class="track-map" data-field="technician-map"></div>
     </section>`;
 }
@@ -375,11 +382,17 @@ function estimateMarkup(job) {
 // of Phase 15c stage 2: a job waiting on a driver's decision has NO next rung —
 // `nextStepFor` returns null for AWAITING_APPROVAL — so the card says who it is
 // waiting on rather than offering a button the server would refuse.
+//
+// WHATEVER IT TURNS OUT TO BE, IT CARRIES `job-action`. Above 1024 the one
+// thing to press moves into the right-hand column beside the job card
+// (technician.css), and the grid needs a single stable handle for it — the
+// element is a warning alert, a completion card or the sticky bar depending on
+// where the job is, and a rule per case would be three rules to keep in step.
 function nextActionMarkup(job, state) {
   if (job.status === 'AWAITING_APPROVAL') {
     const amount = job.estimate ? ` of ${rupees(job.estimate.payablePaise)}` : '';
     return `
-      <div class="alert alert-warning mb-0">
+      <div class="alert alert-warning mb-0 job-action">
         <strong>Paused — waiting on the driver.</strong>
         <div>They are deciding on the cost${escapeText(amount)}. Nothing you can do moves this
         forward; the card changes as soon as they answer.</div>
@@ -393,10 +406,18 @@ function nextActionMarkup(job, state) {
 // pins it to the bottom of the viewport while the card above it scrolls — a
 // phone is held at the bottom and this control was sitting wherever the card
 // happened to end.
+//
+// THE BAR CARRIES `job-action` ITSELF AND IS NEVER WRAPPED IN ONE. A
+// `position: sticky` element can only move within its own parent's box, so
+// putting this in a div its own height would give it nowhere to stick and the
+// button would scroll away — which is the whole thing the bar exists to
+// prevent.
 function ladderButtonMarkup(job) {
-  if (!job.nextStep) return emptyMarkup('Nothing left to do on this job.');
+  if (!job.nextStep) {
+    return `<div class="job-action">${emptyMarkup('Nothing left to do on this job.')}</div>`;
+  }
   return `
-    <div class="actionbar">
+    <div class="actionbar job-action">
       <button class="btn btn-primary tech-primary" data-step="${escapeText(job.nextStep)}" data-job-id="${escapeText(job.jobId)}">
         ${escapeText(BUTTON_LABEL[job.nextStep] ?? job.nextStep)}
       </button>
@@ -413,22 +434,24 @@ function completionMarkup(job, state) {
   // is answered. See partsPromptMarkup for why this is a gate rather than a
   // reminder.
   const answer = state.completionParts[job.jobId];
-  if (!answer) return partsPromptMarkup(job, state);
+  if (!answer) return `<div class="job-action">${partsPromptMarkup(job, state)}</div>`;
 
   return `
-    ${answer === 'FITTING' ? partsPickerMarkup(job, state) : ''}
-    <div class="capture-card">
-      <label class="form-label mb-1" for="completion-code">
-        Ask the driver for their 6-digit code.
-      </label>
-      <p class="small text-secondary mb-2">
-        Type it here when the work is finished. ${completionConsequence(job)}
-      </p>
-      <input id="completion-code" class="form-control form-control-lg mb-2"
-             inputmode="numeric" autocomplete="off" placeholder="000 000" />
-      <button class="btn btn-primary btn-lg w-100 tech-primary" data-step="COMPLETE" data-job-id="${escapeText(job.jobId)}">
-        ${escapeText(BUTTON_LABEL.COMPLETE)}
-      </button>
+    <div class="job-action">
+      ${answer === 'FITTING' ? partsPickerMarkup(job, state) : ''}
+      <div class="capture-card">
+        <label class="form-label mb-1" for="completion-code">
+          Ask the driver for their 6-digit code.
+        </label>
+        <p class="small text-secondary mb-2">
+          Type it here when the work is finished. ${completionConsequence(job)}
+        </p>
+        <input id="completion-code" class="form-control form-control-lg mb-2"
+               inputmode="numeric" autocomplete="off" placeholder="000 000" />
+        <button class="btn btn-primary btn-lg w-100 tech-primary" data-step="COMPLETE" data-job-id="${escapeText(job.jobId)}">
+          ${escapeText(BUTTON_LABEL.COMPLETE)}
+        </button>
+      </div>
     </div>`;
 }
 

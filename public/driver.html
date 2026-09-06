@@ -2,7 +2,7 @@
 <html lang="en" data-bs-theme="dark">
   <head>
     <meta charset="utf-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
     <meta name="theme-color" content="#0f172a" />
     <title>Zippy — Help with your vehicle</title>
     <link
@@ -36,7 +36,9 @@
     intake API takes them — but what the driver reads is the label, and the
     value is never displayed.
   -->
-  <body class="p-3 driver">
+  <!-- NO `p-3`: the page padding is field.css's, because it has to widen for a
+       phone's safe-area insets and a utility class cannot. -->
+  <body class="driver">
     <header class="app-bar">
       <span class="wordmark"><svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M13.5 2 4 13.2h6.2L9.8 22 20 10.4h-6.4z" /></svg>Zippy</span>
       <!-- A DOT, NOT A BADGE. "connected" is not news; losing the connection
@@ -327,25 +329,45 @@
           </div>
         </div>
 
-        <!-- WHERE THEY ARE. Deliberately below the name and the time: the
-             driver's question is "who is coming and when", and this is
-             reassurance underneath the answer rather than the answer itself.
-             The staleness note is part of the same component because it is part
-             of the same claim — see components.css. -->
-        <section class="track mb-3" data-panel="driver-map" hidden>
-          <div class="track-map" data-field="driver-map"></div>
-          <p class="track-note mb-0" data-field="track-note" hidden></p>
-        </section>
+        <!-- WHERE THEY ARE, AND HOW FAR THROUGH THIS IS.
+             Both are reassurance rather than answer: the driver's question is
+             "who is coming and when" and the hero above has already answered
+             it. So they sit under it on a phone — and above 1024 they move
+             together into a column of their own beside the hero (driver.css),
+             which is the whole reason they share a wrapper. Two separate grid
+             children would each need an explicit row, and a row assignment is
+             wrong the moment one of them is hidden, which both of these are
+             routinely. Below 1024 the wrapper is a plain block and the order
+             on the page is exactly what it always was. -->
+        <div class="driver-aside">
+          <!-- The staleness note is part of this component because it is part
+               of the same claim: this is where they are, and this is how much
+               to believe it. See components.css. -->
+          <section class="track mb-3" data-panel="driver-map" hidden>
+            <div class="track-map" data-field="driver-map"></div>
+            <p class="track-note mb-0" data-field="track-note" hidden></p>
+          </section>
 
-        <!-- WHAT STAGE THIS IS AT. The technician has had a segmented bar since
-             Phase 22b; the driver had nothing telling them whether "finding
-             someone" was the second of five steps or the fourth. Same five
-             stages, in the driver's words. -->
-        <section class="mb-3" data-panel="driver-stepper" hidden>
-          <p class="section-head">Progress</p>
-          <ol class="stepper-v" data-field="stepper-list"></ol>
-        </section>
+          <!-- WHAT STAGE THIS IS AT. The technician has had a segmented bar
+               since Phase 22b; the driver had nothing telling them whether
+               "finding someone" was the second of five steps or the fourth.
+               Same five stages, in the driver's words. -->
+          <section class="mb-3" data-panel="driver-stepper" hidden>
+            <p class="section-head">Progress</p>
+            <ol class="stepper-v" data-field="stepper-list"></ol>
+          </section>
+        </div>
 
+        <!-- EVERYTHING ELSE, IN ONE CONTAINER.
+             Not decoration: above 1024 this panel is two columns, and a grid
+             row is as tall as its tallest cell. With the hero, the guidance
+             card and the estimate as separate rows in the left column, row one
+             was as tall as the whole aside beside it — 450px of map and
+             progress list against a 190px hero — and the left column opened
+             with a 260px hole under the headline. Three children (hero, aside,
+             the rest) means the aside spans both rows and nothing is stretched
+             to match it. Below 1024 this is a plain block. -->
+        <div class="driver-rest">
         <div class="card guidance-card mb-3">
           <div class="card-body">
             <h2 class="h6" data-field="guidance-headline"></h2>
@@ -493,6 +515,7 @@
 
         <h2 class="h6 mt-4">What has happened so far</h2>
         <ul class="list-group" data-panel="driver-updates"></ul>
+        </div>
       </div>
     </div>
 

@@ -2,7 +2,7 @@
 <html lang="en" data-bs-theme="dark">
   <head>
     <meta charset="utf-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
     <meta name="theme-color" content="#0f172a" />
     <title>Zippy — Technician</title>
     <link
@@ -40,7 +40,9 @@
     you are being asked to do next, then the money, then the van, then the rest.
     Somebody holding a phone one-handed reads downwards and stops early.
   -->
-  <body class="p-3 technician">
+  <!-- NO `p-3`: the page padding is field.css's, because it has to widen for a
+       phone's safe-area insets and a utility class cannot. -->
+  <body class="technician">
     <header class="app-bar">
       <span class="wordmark"><svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M13.5 2 4 13.2h6.2L9.8 22 20 10.4h-6.4z" /></svg>Zippy</span>
       <span class="app-bar-role">Technician</span>

@@ -23,8 +23,11 @@
  * for the three figures in the strip. Density is correct for an operator
  * console — inconsistent density is what made it feel unfinished.
  *
- * Laptop-first. Three columns from 1200px, which is where a 13" screen lands
- * once the browser chrome is off; below that they stack rather than crush.
+ * DESKTOP-FIRST, AND IT COLLAPSES RATHER THAN REARRANGES. Three columns from
+ * 1440, two from 1024 (investigate moves below the board), one below that with
+ * the priority queue first. The three widths are tokens.css's and there are no
+ * others on this page. See the block above `.console-grid` for what each step
+ * gives up and why.
  */
 
 /* THE TYPE SCALE, PINNED. Three sizes, and this block is what makes that true
@@ -55,14 +58,48 @@
   grid-template-columns: minmax(0, 1fr);
 }
 
-@media (min-width: 1200px) {
+/* TWO COLUMNS FROM 1024, THREE FROM 1440, ONE BELOW — the three widths
+ * tokens.css names, and nothing between them.
+ *
+ * The console is desktop-first and must not break, so each step removes a
+ * column rather than rearranging the page:
+ *
+ *   below 1024   one column. Source order puts the priority queue first, which
+ *                is the right thing to see on a phone: a dispatcher checking
+ *                the board from one is checking what is waiting, not working.
+ *   1024–1440    two. Monitor and board side by side; INVESTIGATE moves below
+ *                them and spans both, because a third column at this width
+ *                would leave the board too narrow for the map and the
+ *                timeline, and the investigation is about one job you have
+ *                already clicked rather than something you scan.
+ *   1440 and up  three, as designed.
+ */
+@media (min-width: 1024px) {
   .console-grid {
-    /* The queue column carries a registration, a worded fault and a place now,
-     * and at 19rem it was ellipsing half of every subject — "the engine ov…"
-     * and "Near landmark 26 —…" are not information. The width comes out of the
+    /* The queue column carries a registration, a worded fault and a place, and
+     * at 19rem it was ellipsing half of every subject — "the engine ov…" and
+     * "Near landmark 26 —…" are not information. The width comes out of the
      * centre column, which is a map and a timeline and loses nothing by being
      * 72px narrower. */
+    grid-template-columns: 23.5rem minmax(0, 1fr);
+  }
+
+  /* UNDER THE OTHER TWO, FULL WIDTH. Not a rail: a vertical label makes sense
+   * beside a column and none at all above one, so at this width the
+   * investigation is simply a wide card that says "pick a job" until one is
+   * picked. */
+  .console-investigate {
+    grid-column: 1 / -1;
+  }
+}
+
+@media (min-width: 1440px) {
+  .console-grid {
     grid-template-columns: 23.5rem minmax(0, 1fr) 23rem;
+  }
+
+  .console-investigate {
+    grid-column: auto;
   }
 
   /* THE INVESTIGATE COLUMN, COLLAPSED. It is about one selected job, so for
@@ -72,8 +109,9 @@
    * timeline are the panels that actually wanted it) and the region stays on
    * screen, so selecting a row expands a column rather than conjuring one.
    *
-   * Only from 1200px: below that the grid is a single stack and a vertical rail
-   * in a stack is just a strange-looking card. */
+   * Only at three columns: at two the region is a full-width band under the
+   * board, and a vertical rail across the bottom of the page is just a
+   * strange-looking card. */
   .console-grid.no-selection {
     grid-template-columns: 23.5rem minmax(0, 1fr) 2.25rem;
   }
@@ -87,13 +125,40 @@
   }
 }
 
-@media (min-width: 1600px) {
-  .console-grid {
-    grid-template-columns: 26rem minmax(0, 1fr) 28rem;
+/* ---------------------------------------------------------------------------
+ * THE CONSOLE ON A PHONE (below 640).
+ *
+ * It is not meant to be good here and it is not going to be: this is a
+ * three-region control room. It is meant to be READABLE — a dispatcher checking
+ * the queue from a phone at the weekend is a real situation even though working
+ * from one is not. So: nothing overflows the page sideways, and every control
+ * is reachable.
+ */
+@media (max-width: 639.98px) {
+  /* The timeline's three filters were `.col` siblings, which do not wrap: at
+   * 390px that is three inputs about 100px wide each, and a select 100px wide
+   * shows no option text at all. One per line instead. */
+  [data-panel='timeline'] .row > .col,
+  [data-panel='timeline'] .row > .col-auto {
+    flex: 0 0 100%;
+    max-width: 100%;
   }
 
-  .console-grid.no-selection {
-    grid-template-columns: 26rem minmax(0, 1fr) 2.25rem;
+  /* THE WIDE TABLES SCROLL INSIDE THEIR OWN CARD, NOT THE PAGE. "Every job on
+   * the board" is six columns and the plan tables are three; neither will fit,
+   * and the choice is between a card with a scrollbar and a page that slides
+   * sideways under the thumb, taking the header and the queue with it. A
+   * contained scroll is the readable one. Both live in the ambient drawer,
+   * which is collapsed by default — this is for the person who opened it. */
+  .console .card-body {
+    overflow-x: auto;
+  }
+
+  /* The stat strip is three figures side by side; on a phone it wraps to a
+   * column and the gap between rows was the same 24px as the gap between
+   * figures, which read as three unrelated numbers. */
+  .stat-strip {
+    gap: var(--space-2) var(--space-5);
   }
 }
 

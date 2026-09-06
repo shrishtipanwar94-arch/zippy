@@ -248,7 +248,13 @@
   display: flex;
   flex-direction: column;
   gap: var(--space-2);
-  padding: var(--space-3) 0 var(--space-4);
+  /* THE HOME INDICATOR IS NOT PART OF THE PAGE. On an iPhone the bottom ~34px
+   * of the screen belongs to the system gesture bar, and a bar pinned to
+   * `bottom: 0` puts the one button on the screen underneath it. `max()`
+   * rather than addition, for the same reason the page padding uses it: the
+   * inset is 0 on every device without an indicator, and the ordinary
+   * `--space-4` is already the right gap there. */
+  padding: var(--space-3) 0 max(var(--space-4), env(safe-area-inset-bottom));
   background: linear-gradient(to bottom, transparent, var(--ground) 35%);
 }
 
@@ -345,7 +351,8 @@
 .toast {
   position: fixed;
   left: 50%;
-  bottom: var(--space-5);
+  /* Clear of the home indicator, like the action bar it usually appears above. */
+  bottom: max(var(--space-5), env(safe-area-inset-bottom));
   transform: translateX(-50%);
   z-index: 20;
   display: flex;
@@ -749,7 +756,34 @@
   flex: none;
 }
 
-@media (max-width: 430px) {
+/* 48px OF TARGET WITHOUT 48px OF INK.
+ *
+ * Every control on a field surface clears 48px (see field.css), and the two in
+ * the app bar are the ones that cannot do it with their own height: the duty
+ * pill is 36px and the "All surfaces" link is 23px, and stretching either to
+ * 48 makes a 72px sticky header that costs a tenth of a phone screen on every
+ * scroll of every page.
+ *
+ * So the target grows and the ink does not. The pseudo-element is a 48px band
+ * centred on the control and spanning its width, which is what WCAG 2.5.5
+ * actually asks for — it measures the TARGET, not the drawing. Nothing moves
+ * on screen and the two bands cannot overlap, because each is only as wide as
+ * its own control. */
+.app-bar .duty-toggle,
+.app-bar .link-secondary {
+  position: relative;
+}
+
+.app-bar .duty-toggle::after,
+.app-bar .link-secondary::after {
+  content: '';
+  position: absolute;
+  inset: 50% 0 auto;
+  height: 48px;
+  transform: translateY(-50%);
+}
+
+@media (max-width: 639.98px) {
   .app-bar-role {
     display: none;
   }

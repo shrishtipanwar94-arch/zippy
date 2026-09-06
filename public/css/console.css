@@ -279,3 +279,133 @@ body.console {
   line-height: 1.6;
 }
 
+
+/* ---------------------------------------------------------------------------
+ * THE FLEET MANAGER'S METRIC ROW. Five tiles, and the count per row steps down
+ * at each of tokens.css's three widths: five across on a desktop, three on a
+ * laptop, two on a tablet, one on a phone.
+ *
+ * Its own grid rather than Bootstrap's twelve columns because five does not
+ * divide into twelve — `col-xl-2` is a sixth of the row, so the five tiles sat
+ * in five sixths of the width with a sixth of dead space on the end, and the
+ * framework's breakpoints (576/768/992/1200/1400) are not this project's.
+ */
+
+.metric-grid {
+  display: grid;
+  gap: var(--space-3);
+  grid-template-columns: minmax(0, 1fr);
+}
+
+@media (min-width: 640px) {
+  .metric-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (min-width: 1024px) {
+  .metric-grid {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+}
+
+@media (min-width: 1440px) {
+  .metric-grid {
+    grid-template-columns: repeat(5, minmax(0, 1fr));
+  }
+}
+
+.metric {
+  border: 1px solid var(--line);
+  border-radius: var(--radius-card);
+  padding: var(--space-3);
+}
+
+.metric-label {
+  font-size: var(--size-4);
+  color: var(--text-muted);
+}
+
+.metric-value {
+  font-size: var(--size-1);
+  font-weight: var(--weight-strong);
+  font-variant-numeric: tabular-nums;
+  line-height: 1.2;
+}
+
+.metric-note {
+  font-size: var(--size-4);
+  color: var(--text-faint);
+}
+
+/* ---------------------------------------------------------------------------
+ * A TABLE THAT BECOMES A LIST OF CARDS ON A PHONE.
+ *
+ * The fleet manager's incident tables are five and four columns wide. At 390px
+ * a five-column table does one of two things and both are bad: it squeezes
+ * every column to a word per line, or it grows past the viewport and takes the
+ * whole page sideways with it. Neither is readable, and this surface has to be
+ * plausible on a phone — a fleet manager checking whether anything is off the
+ * road is doing it from a car park, not a desk.
+ *
+ * So below 640 each ROW becomes a card: the first cell is the heading (the
+ * registration, or the date on the per-vehicle history) and every other cell
+ * is a label and a value on one line. The label comes from `data-label` on the
+ * cell, which is why fleetDashboard.js writes one on every td — the header row
+ * itself is hidden, so without it the values would be unlabelled.
+ *
+ * This is CSS only. The markup is one table either way, which matters: a
+ * screen reader on a phone still gets a table, and there is one place that
+ * builds these rows rather than two that can disagree.
+ */
+@media (max-width: 639.98px) {
+  .stack-table thead {
+    display: none;
+  }
+
+  .stack-table,
+  .stack-table tbody,
+  .stack-table tr,
+  .stack-table td {
+    display: block;
+    width: 100%;
+  }
+
+  .stack-table tr {
+    border: 1px solid var(--line);
+    border-radius: var(--radius-card);
+    padding: var(--space-3);
+    margin-bottom: var(--space-2);
+  }
+
+  .stack-table td {
+    display: flex;
+    justify-content: space-between;
+    align-items: baseline;
+    gap: var(--space-4);
+    border: 0;
+    padding: var(--space-1) 0;
+  }
+
+  .stack-table td::before {
+    content: attr(data-label);
+    flex: none;
+    font-size: var(--size-4);
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    color: var(--text-muted);
+  }
+
+  /* The row's subject. A heading, not a label/value pair — the registration is
+   * what the card is about rather than one more field on it. */
+  .stack-table td.is-heading {
+    display: block;
+    font-size: var(--size-2);
+    font-weight: var(--weight-strong);
+    padding-bottom: var(--space-2);
+  }
+
+  .stack-table td.is-heading::before {
+    content: none;
+  }
+}

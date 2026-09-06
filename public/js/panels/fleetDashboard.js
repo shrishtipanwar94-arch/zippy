@@ -30,9 +30,13 @@ export function render(state) {
   );
 }
 
+// FIVE TILES, AND THE COUNT PER ROW STEPS DOWN WITH THE WIDTH — five across on
+// a desktop, then three, then two, then one on a phone. `.metric-grid` owns
+// that (console.css); five tiles do not divide into Bootstrap's twelve columns
+// and its breakpoints are not this project's.
 function summaryRow(dashboard) {
   const row = document.createElement('div');
-  row.className = 'row g-3 mb-3';
+  row.className = 'metric-grid mb-3';
   row.innerHTML = [
     statTile('Active incidents', String(dashboard.activeIncidents.length)),
     statTile(
@@ -59,14 +63,10 @@ function summaryRow(dashboard) {
 
 function statTile(label, value, note) {
   return `
-    <div class="col-6 col-md-4 col-xl-2">
-      <div class="card h-100">
-        <div class="card-body p-2">
-          <div class="text-muted small">${escapeHtml(label)}</div>
-          <div class="h4 mb-0">${escapeHtml(value)}</div>
-          ${note ? `<div class="text-muted small">${escapeHtml(note)}</div>` : ''}
-        </div>
-      </div>
+    <div class="metric">
+      <div class="metric-label">${escapeHtml(label)}</div>
+      <div class="metric-value">${escapeHtml(value)}</div>
+      ${note ? `<div class="metric-note">${escapeHtml(note)}</div>` : ''}
     </div>`;
 }
 
@@ -74,15 +74,19 @@ function activeIncidentsCard(dashboard) {
   const card = document.createElement('div');
   card.className = 'card mb-3';
 
+  // EVERY CELL CARRIES ITS COLUMN NAME. Below 640 the header row is hidden and
+  // each row becomes a card, with `data-label` supplying the label beside each
+  // value — see `.stack-table` in console.css. The registration is the card's
+  // heading rather than one of its fields, which is what `is-heading` marks.
   const rows = dashboard.activeIncidents
     .map(
       (incident) => `
         <tr>
-          <td class="mono">${escapeHtml(incident.registration)}</td>
-          <td>${escapeHtml(incident.status)}</td>
-          <td>${escapeHtml(incident.safetyLevel)}</td>
-          <td>${escapeHtml(incident.topFault ?? '—')}</td>
-          <td class="text-muted small">${escapeHtml(formatWhen(incident.createdAt))}</td>
+          <td class="mono is-heading" data-label="vehicle">${escapeHtml(incident.registration)}</td>
+          <td data-label="status">${escapeHtml(incident.status)}</td>
+          <td data-label="safety">${escapeHtml(incident.safetyLevel)}</td>
+          <td data-label="believed fault">${escapeHtml(incident.topFault ?? '—')}</td>
+          <td class="text-muted small" data-label="raised">${escapeHtml(formatWhen(incident.createdAt))}</td>
         </tr>`,
     )
     .join('');
@@ -93,7 +97,7 @@ function activeIncidentsCard(dashboard) {
       ${
         dashboard.activeIncidents.length === 0
           ? '<div class="text-muted small">Nothing active right now.</div>'
-          : `<table class="table table-sm mb-0">
+          : `<table class="table table-sm mb-0 stack-table">
                <thead><tr><th>vehicle</th><th>status</th><th>safety</th><th>believed fault</th><th>raised</th></tr></thead>
                <tbody>${rows}</tbody>
              </table>`
@@ -141,14 +145,17 @@ function vehicleBlock(vehicle) {
        </div>`
     : '';
 
+  // Same stacked-card treatment as the active incidents table. The card is
+  // already headed by the registration above it, so here the heading cell is
+  // the date — which is what tells one row of a vehicle's history from another.
   const rows = vehicle.incidents
     .map(
       (incident) => `
         <tr>
-          <td class="text-muted small">${escapeHtml(formatWhen(incident.createdAt))}</td>
-          <td>${escapeHtml(incident.status)}</td>
-          <td>${escapeHtml(incident.topFault ?? '—')}</td>
-          <td>${escapeHtml(SLA_OUTCOME_LABEL[incident.slaOutcome] ?? incident.slaOutcome)}</td>
+          <td class="is-heading" data-label="raised">${escapeHtml(formatWhen(incident.createdAt))}</td>
+          <td data-label="status">${escapeHtml(incident.status)}</td>
+          <td data-label="believed fault">${escapeHtml(incident.topFault ?? '—')}</td>
+          <td data-label="SLA">${escapeHtml(SLA_OUTCOME_LABEL[incident.slaOutcome] ?? incident.slaOutcome)}</td>
         </tr>`,
     )
     .join('');
@@ -161,7 +168,7 @@ function vehicleBlock(vehicle) {
         ${flagBadge}
       </div>
       ${flagLine}
-      <table class="table table-sm mb-0">
+      <table class="table table-sm mb-0 stack-table">
         <thead><tr><th>raised</th><th>status</th><th>believed fault</th><th>SLA</th></tr></thead>
         <tbody>${rows}</tbody>
       </table>

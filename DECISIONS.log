@@ -213,3 +213,191 @@ rebuild a workflow whose audience is a fifteen-second window. And: "how do you
 decide what goes where on an operator console?" — monitoring versus
 investigating, tested against which panels are actually job-scoped, which is how
 the action queue ended up on the other side from where the brief put it.
+
+---
+
+## Phase 22d — the responsive pass, and a walkthrough somebody else can drive / 2026-09-07 / (this commit)
+
+### Built
+`public/css/tokens.css` — a BREAKPOINTS block: `--bp-sm: 640px`, `--bp-md:
+1024px`, `--bp-lg: 1440px`, and the note that a media query cannot read a custom
+property, so the three numbers are written out literally and this block is what
+says what they mean.
+
+`public/css/field.css` — the field column now steps 100% → 40rem (640) → 60rem
+(1024) → 66rem (1440); page padding moved off Bootstrap's `p-3` onto a
+`--page-pad-x` that takes `env(safe-area-inset-left/right)`; a single rule
+putting every `.btn`, `.form-control` and `.form-select` on the two field
+surfaces at `min-height: 48px`.
+
+`public/css/driver.css` — `[data-panel="driver-status"]` becomes a two-column
+grid at 1024. `public/driver.html` gained two wrappers, `.driver-aside` (map +
+progress) and `.driver-rest` (everything under the hero).
+
+`public/css/technician.css` — `[data-panel="ladder"]` becomes a two-column grid
+at 1024 when there is a map to put in the second column;
+`public/js/panels/technicianLadder.js` moves the map out of the job card to a
+sibling (`.job-map`) and marks whatever the next action turns out to be
+(`.job-action`).
+
+`public/css/console-regions.css` — three columns at 1440, two at 1024 with
+`.console-investigate` spanning both, one below; a below-640 block that stacks
+the timeline filters and contains the wide tables' scroll inside their own card.
+
+`public/css/console.css` — `.metric-grid` (5 → 3 → 2 → 1 tiles) and
+`.stack-table`, which turns a table into a list of cards below 640;
+`public/js/panels/fleetDashboard.js` writes the `data-label` and `is-heading`
+attributes it reads.
+
+`public/css/components.css` — `.actionbar` clears `env(safe-area-inset-bottom)`;
+the app bar's duty toggle and "All surfaces" link get a 48px hit band from a
+pseudo-element without changing their ink.
+
+`scripts/demo-open-shifts.ts` — widens every technician's current shift to cover
+the next twelve hours.
+
+`WALKTHROUGH.md` — the self-driven run, with what to expect at every step.
+
+### Decisions
+
+**Decision** Three breakpoints, declared once in `tokens.css`, used literally.
+**Why** There were four numbers on the pages before this — 430, 1200, 1600 and
+Bootstrap's own 576/768/992/1200/1400 through `col-md-*` — and none of them
+agreed with any other. A layout that changes at five widths is a layout nobody
+can hold in their head.
+**Alternative** Adopt Bootstrap's breakpoints, since the framework is already
+loaded.
+**Why not** They are wrong for this product: 992 is their laptop step and the
+dispatcher's three columns genuinely do not fit until 1440, so following them
+would mean crushing the console to honour a number chosen for somebody else's
+grid.
+**Tradeoff** The `--bp-*` custom properties look usable in a media query and are
+not. That trap is the reason the comment above them is six lines long.
+
+**Decision** The field surfaces widen only where a second column earns it, and
+each two-column region is placed EXPLICITLY — every child assigned a row and a
+column.
+**Why** Auto-placement across two columns is what produced the first version's
+260px hole under the driver's hero: an item with a definite column and an
+automatic row shares the placement cursor with the left-hand stack, and the
+cursor never moves backwards. Placing the aside definitely takes it out of that
+pass entirely.
+**Alternative** `grid-auto-flow: row dense`.
+**Why not** It works, and it is a rule nobody reading this file could predict
+the effect of. Two explicit placements beat one clever keyword — the readability
+contract, applied to CSS.
+**Tradeoff** Two new wrapper divs in `driver.html` that exist for layout alone.
+Each carries a comment saying so.
+
+**Decision** The technician's sticky action bar stops being sticky at 1024.
+**Why** A thumb bar pinned to the bottom of a laptop window sits a long way from
+the card it belongs to, and its fade-out gradient becomes a smear across the
+middle of the page. In the right-hand column it is simply the button, under the
+map.
+**Alternative** Keep it sticky everywhere.
+**Why not** Sticky solves "a phone is held at the bottom". Nothing is held at
+the bottom of a laptop.
+**Tradeoff** Two behaviours for one component, which is the thing this pass
+otherwise avoids. It is one `position: static` inside one media query.
+
+**Decision** The two app-bar controls get a 48px TARGET from a pseudo-element
+rather than 48px of height.
+**Why** Every control on a field surface clears 48px; these two cannot do it
+with their own box, because the app bar is sticky and a 48px pill makes a 72px
+header that costs a tenth of a phone screen on every scroll of every page. WCAG
+2.5.5 measures the target, not the ink.
+**Alternative** Make them 48px tall and accept the header.
+**Why not** 72px against 844px is 8.5% of the viewport, permanently.
+**Tradeoff** An audit that measures `getBoundingClientRect().height` reports both
+as failures. Ours did; the answer is a second probe with `elementFromPoint` at
+±23px, which both pass.
+
+**Decision** The fleet tables become stacked cards below 640 in CSS, with the
+labels supplied by `data-label` attributes rather than by a second rendering
+path.
+**Why** One markup path means a screen reader still gets a table, and there is
+one place that builds a row.
+**Alternative** Render cards on a phone and a table above it, from the panel.
+**Why not** Two renderers of the same data is the shape this codebase keeps
+finding bugs in.
+**Tradeoff** Every `<td>` now carries a `data-label` that is invisible above
+640, and a column added without one renders an unlabelled value on a phone.
+
+### Concurrency
+Nothing. This phase adds no route, no write, no queue and no server code. The one
+new script (`demo-open-shifts.ts`) writes `technician_shifts` directly and is
+demo prep, not production: it is not idempotent in the useful sense — running it
+twice extends the window twice — and it is documented as such.
+
+### Weaknesses introduced
+- `body.driver` and `body.technician` widen at 1024 whether or not the wide
+  content is on screen. On the driver's REQUEST flow, before a job exists, the
+  column is 60rem of one-question-at-a-time screens; the questions themselves
+  are constrained by their own components, but the page is wider than the
+  reading it holds. Does not matter much — the request flow lasts under a
+  minute — but it is the one place the extra width is not earned.
+- `.console .card-body { overflow-x: auto }` below 640 applies to every card
+  body on the dispatcher, not only the two that need it, and `overflow-x: auto`
+  forces `overflow-y` to compute to `auto` as well — so every card is
+  technically a scroll container on a phone. Harmless today because nothing
+  there is taller than its content; it would stop being harmless if a card ever
+  wanted a sticky child.
+- The `:has()` guards on both field grids mean the layout depends on an element
+  being present and unhidden. That is correct, and it is also a second thing
+  deciding layout alongside the media query. A panel that starts rendering its
+  map into a different container would silently lose its second column.
+- The audit that produced these results is a throwaway script in a scratch
+  directory, not a test. Nothing in the repo will notice if a future change
+  reintroduces a horizontal scrollbar at 390px.
+
+### Concepts now genuinely in use
+CSS grid explicit placement, and specifically why definite-position items are
+placed before the auto-placement pass; `env()` safe-area insets and the
+`viewport-fit=cover` that makes them non-zero; touch-target size as distinct
+from rendered size; `:has()` as a layout guard.
+
+### What broke
+**The driver's live panel opened with a 260px hole under the hero.** The aside
+was pinned to `grid-row: 1`, so row one was as tall as the map and the progress
+list together — 454px against a 191px hero — and everything in the left column
+started below it. Fixed by giving the panel three children instead of many and
+letting the aside span both rows.
+
+**A driver who RESUMES a job receives no live updates at all.** Found while
+verifying the walkthrough's central claim, not by looking for it.
+`public/js/pages/driver.js` calls `subscribeToJob` only on the create path (line
+370); neither `restoreOpenJob` nor the resume picker's handler does, so a driver
+who signs in again — or simply reloads — holds a socket that connects, reports
+"Connected", and joins no job room. Measured with CDP frame logging: 0
+`job:event` frames across a whole run after resuming, 15 across the same run when
+the job was created in that window. NOT FIXED — outside this phase's scope, and
+written up in `WALKTHROUGH.md` and here so it is not lost.
+
+**Selecting a plan does not offer the job to anybody.** Also found while writing
+the walkthrough. `selectPlan` writes decision records and a `PLAN_SELECTED`
+event; the only path to a `dispatch_offer` is `executeReassignment`, which needs
+a `REASSIGN_*` action, which needs a replan trigger. So "solve, then accept the
+offer" is not a sequence the product supports — the walkthrough goes through a
+driver's safety message instead. Correct as built, and surprising enough to be
+worth writing down.
+
+**The board is time-of-day dependent.** At 23:50 IST four of thirty-one
+technicians were on shift and 22 of 24 jobs came back unassignable. The seed's
+shift bands are realistic and right for the evaluation harness, which fixes its
+own clock; they are wrong for somebody sitting down to drive the product at an
+arbitrary hour. `scripts/demo-open-shifts.ts` is the workaround, not a fix.
+
+**`clientSequence: Date.now()` overflows an INT4.** A harness bug rather than a
+product one, but it surfaced as a bare `internal_error` from
+`POST /jobs/:id/actions`, with the real cause — a Prisma `ConversionError` —
+visible only in the server log. The route could say more.
+
+### Interview angle
+"How do you decide what a wider screen is FOR?" — answerable with the driver's
+panel: the extra width went to the map and the progress list, which are
+reassurance, so that the headline, the arrival time and the person are all on
+screen at once without scrolling; and with the technician's, where the person
+card and the one thing to press ended up side by side. And: "what does a
+responsive pass have to do with accessibility?" — the 48px floor, and the
+difference between a control's ink and its target, which is the whole reason the
+duty toggle is 36px and passes anyway.

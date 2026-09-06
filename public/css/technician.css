@@ -132,10 +132,92 @@
 }
 
 /* A <details> summary is a real control: it needs a target size and a pointer,
- * which the browser default gives it in neither case. */
+ * which the browser default gives it in neither case. 48px, the same floor
+ * every other control on these two surfaces clears — it was 44px, the WCAG
+ * 2.5.5 figure, which is the floor this product deliberately sits above. It
+ * is min-height rather than a display change: making a `<summary>` a flex box
+ * removes the browser's own disclosure triangle, and the driver's "Enter
+ * coordinates manually" row needs that triangle to read as something you can
+ * open. */
 .technician summary,
 .driver summary {
   cursor: pointer;
   padding: 0.5rem 0;
-  min-height: 2.75rem;
+  min-height: 48px;
+}
+
+/* ---------------------------------------------------------------------------
+ * THE JOB IN HAND ON A LAPTOP (1024 and up).
+ *
+ * Below 1024 nothing here applies: the card, the map, the context blocks and
+ * the sticky action bar stack down a phone exactly as they always have, and
+ * that phone is still what this screen is designed for. A technician on a
+ * laptop is a technician at a desk in a depot, or the maintainer showing
+ * somebody the product — neither needs a thumb bar, and both have width going
+ * spare.
+ *
+ * TWO COLUMNS, AND THE RIGHT-HAND ONE IS "WHERE" AND "WHAT NOW":
+ *
+ *   left    the job card (vehicle, rung track, the driver and how to ring
+ *           them), then the parts detour, the workshop, the cost the driver is
+ *           deciding on, and the re-diagnosis form
+ *   right   the map, and directly beneath it the one thing to press
+ *
+ * So the person card and the action are side by side rather than a screen
+ * apart, which on a phone they never can be.
+ *
+ * BOTH RIGHT-HAND ITEMS ARE PLACED EXPLICITLY, by row as well as column. An
+ * item with a definite position is placed before auto-placement runs, so the
+ * left-hand stack flows past them without stepping over a hole — which is what
+ * a definite COLUMN and an automatic ROW produces instead.
+ *
+ * THE SECOND COLUMN ONLY EXISTS WHEN THERE IS A MAP TO PUT IN IT. A job with
+ * no fix for the vehicle renders no map at all (see trackingMarkup), and a
+ * reserved-but-empty 20rem column is the same fault this whole pass is fixing,
+ * one level down. Only the container needs the guard: `grid-column` on the
+ * child of something that is not a grid is simply ignored.
+ */
+@media (min-width: 1024px) {
+  [data-panel='ladder']:has(.job-map) {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) 20rem;
+    column-gap: var(--space-4);
+    align-items: start;
+  }
+
+  [data-panel='ladder'] > * {
+    grid-column: 1;
+  }
+
+  [data-panel='ladder'] > .job-map {
+    grid-column: 2;
+    grid-row: 1;
+  }
+
+  [data-panel='ladder'] > .job-action {
+    grid-column: 2;
+    grid-row: 2;
+  }
+
+  /* Beside the card rather than under it, so it can be as tall as the card
+   * without pushing anything down. */
+  .job-map .track-map {
+    height: 15rem;
+  }
+
+  /* THE THUMB BAR STOPS BEING A THUMB BAR. Pinned to the bottom of a laptop
+   * window it would sit far below the card it belongs to, and the gradient it
+   * fades out of would be a smear across the middle of the page. In the right
+   * column it is simply the button, under the map, where the eye already is. */
+  .actionbar {
+    position: static;
+    padding: 0;
+    background: none;
+  }
+}
+
+@media (min-width: 1440px) {
+  [data-panel='ladder']:has(.job-map) {
+    grid-template-columns: minmax(0, 1fr) 24rem;
+  }
 }
