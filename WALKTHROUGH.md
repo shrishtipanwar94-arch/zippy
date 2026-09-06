@@ -14,46 +14,73 @@ happen and where, so that when something does not happen you notice.
 
 ---
 
-## 0 — The environment is already prepared
+## 0 — Put the fleet on shift. Do this first, every time.
 
-It was set up for you and both processes are running. You should not have to
-type anything before Step 1.
+```bash
+npx tsx scripts/demo-open-shifts.ts
+```
+
+**Expect:** `widened 31 shifts; 31 technicians are on shift until <a time
+twelve hours from now>`.
+
+**Run it even though it was run when this was set up**, and run it again every
+time you come back to the walkthrough. It is not a caveat, it is step one, and
+it is not optional.
+
+Here is why. The seed gives every technician a realistic shift band — morning,
+day, evening, or one of the four night crews — so how much of the fleet is
+available depends on what time you sit down. Measured on this board at 23:50
+IST: **four of the thirty-one technicians were on shift, and 22 of 24 jobs came
+back unassignable.** Every plan is empty, the inspector has nothing to show, and
+nothing in the interface tells you the reason is the clock. After running the
+script the same board produced 333 feasible options.
+
+The bands are correct and they stay: the evaluation harness fixes its own clock
+and needs them. They are simply wrong for a person driving the product at an
+arbitrary hour, and this script is the workaround.
+
+**If the walkthrough stops working part-way through**, check this first:
+
+```bash
+docker exec zippy-postgres-1 psql -U postgres -d zippy -c   "select count(distinct technician_id) as on_shift from technician_shifts    where starts_at <= now() and ends_at >= now();"
+```
+
+Fewer than about twenty and the board is starved. Re-run the script.
+
+---
+
+## 0b — What else is already set up
+
+Everything below was done for you and both processes are running. You should
+not have to type anything else before Step 1.
 
 | what | state |
 | --- | --- |
 | Postgres, Redis, OSRM | `docker compose up -d`, all three up |
 | database | reset, reseeded, Redis flushed |
 | fleet history | `scripts/demo-prep-beat9.ts` — three RESOLVED battery jobs on `KA01AB1001` |
-| shifts | `scripts/demo-open-shifts.ts` — all 31 technicians on duty for 12 hours |
 | board | 21 pending jobs — 4 routine, 10 elevated, 7 high risk — all raised in the last half hour, plus 3 resolved for the fleet history |
 | simulator | not running; no orphaned process |
 | web | `npm run dev` — http://localhost:3000 |
 | worker | `npm run dev:worker` |
 
-**If you come back to this tomorrow**, the shift window will have closed and
-almost every job will come back `NO_TECHNICIAN_ON_SHIFT`. Re-open it:
-
-```bash
-npx tsx scripts/demo-open-shifts.ts
-```
-
-**To start the whole thing over from scratch:**
+**To start the whole thing over from scratch** — the shift step is in here too,
+in the position it has to be in: after the seed, before anything is dispatched.
 
 ```bash
 docker compose up -d
 npm run db:reset                                      # drops and reseeds
 docker exec zippy-redis-1 redis-cli FLUSHALL          # stale BullMQ queues
 npx tsx scripts/demo-prep-beat9.ts                    # fleet history
-npx tsx scripts/demo-open-shifts.ts                   # everybody on duty
-npx tsx src/sim/cli.ts --rate 45 --duration 28 --max-jobs 22 --seed 11 \
-  --start "$(node -e "console.log(new Date(Date.now()-30*60000).toISOString())")"
+npx tsx scripts/demo-open-shifts.ts                   # everybody on duty — REQUIRED
+npx tsx src/sim/cli.ts --rate 45 --duration 28 --max-jobs 22 --seed 11   --start "$(node -e "console.log(new Date(Date.now()-30*60000).toISOString())")"
 npm run dev                                           # and, separately:
 npm run dev:worker
 ```
 
-The `--start` matters. Without it the simulator dates its jobs 2026-06-01, every
-SLA window on the board has closed, and the dispatcher's action queue opens
-with twenty escalations you have to scroll past to find yours.
+The `--start` matters too. Without it the simulator dates its jobs 2026-06-01,
+every SLA window on the board has closed, and the dispatcher's action queue
+opens with twenty escalations you have to scroll past to find yours.
 
 ---
 
@@ -88,10 +115,9 @@ session, and the connection dot beside the wordmark goes green.
 
 0. **You will be asked "Which car do you mean?" first.** Every seeded driver
    has jobs on the prepared board, so the page offers to resume one. Press
-   **A different car has broken down** to get to the request flow.
-   > This matters for more than one click — see defect 5 at the bottom. Reporting
-   > a *new* breakdown is the path where the driver's window subscribes to live
-   > updates. Resuming an old one is not.
+   **A different car has broken down** to get to the request flow. (Resuming an
+   old job is worth trying once, separately — it used to leave the page frozen
+   and now does not; see the fixed list at the bottom.)
 1. The next screen is **"What has happened?"** with a free-text box. Type
    something plain — *"car won't start, no lights at all"* — and press
    **Continue**.
@@ -101,12 +127,11 @@ session, and the connection dot beside the wordmark goes green.
    *"Our assistant is unavailable right now"* box instead and the keyword
    fallback lights the same button — that is a working degraded path, not a
    failure. Either way, carry on.
-2. **"Which vehicle?"** — the dropdown lists number plates, not ids.
-   > ⚠ **Pick `KA01AB1001`.** The picker lists every vehicle on the tenant,
-   > including `KA01AB1002`, which belongs to the other Metrocab driver — and
-   > intake refuses it with *"vehicle not found"*. `KA01AB1001` is the default,
-   > so leaving it alone is correct. This is a real defect; it is on the list at
-   > the bottom already.
+2. **"Which vehicle?"** — the dropdown lists number plates, not ids, and it
+   should hold exactly one: `KA01AB1001`. It used to offer `KA01AB1002` as
+   well, which belongs to the other Metrocab driver and which intake then
+   refused. **If you see two plates here, write it down** — that is a
+   regression.
 3. Answer or skip the follow-up question, then the safety screen. **Leave every
    box unchecked** except *"I am on my own"*. You want a routine job to start
    with — you will make it urgent later, on purpose.
@@ -538,32 +563,42 @@ deliberate and it is what makes the plan cards disagree with each other.
 
 ## Known before you start
 
-These are already on the list. Do not spend time writing them down again.
+Do not spend time writing these down again.
 
-1. **The vehicle picker offers vehicles the driver cannot file against.**
-   `GET /vehicles` returns every vehicle on the tenant; intake accepts only the
-   ones the signed-in driver owns, and refuses the rest with *"vehicle not
-   found"*. Visible as `driver-metrocab-1` being offered `KA01AB1002`.
-2. **Selecting a plan does not offer the job to anybody.** It records the
-   decision. The reservation only starts from a `REASSIGN_*` action in the
-   action queue, which needs a re-plan trigger — which is why Step 6 exists and
-   why it is not simply "press Solve, then accept".
-3. **Shifts are realistic, so the board is time-of-day dependent.** At 3am four
-   of the thirty-one technicians are on duty and nearly everything is
-   infeasible. `scripts/demo-open-shifts.ts` is the workaround, not a fix.
-4. **The fleet dashboard has no live updates.** Refresh is the only way.
-5. **A driver who RESUMES a job gets no live updates at all.** The window
-   subscribes to the job's room only when it creates the job
-   (`public/js/pages/driver.js:370`). Neither `restoreOpenJob` (line 121) nor
-   the resume picker's handler (line 145) calls `subscribeToJob`, so a driver
-   who signs in again — or simply reloads the page — sits on a socket that is
-   connected, says *"Connected"*, and receives nothing. It recovers only on a
-   reload, or via the five-second polling fallback if the socket also drops.
-   Measured: 0 `job:event` frames over a whole run after resuming, against 15
-   over the same run when the job was created in that window.
-   **What this means for you:** do the run in one go, and if you reload the
-   driver window mid-run, treat everything after it as untrustworthy until you
-   reload again.
+### Still true
+
+1. **Selecting a plan does not offer the job to anybody.** It records the
+   decision and stops. The reservation only starts from a `REASSIGN_*` action
+   in the action queue, which needs a re-plan trigger — which is why Step 6
+   exists and why this is not simply "press Solve, then accept". This is a
+   wiring gap rather than a design: `src/api/solve.ts` still carries a comment
+   saying holds and the saga are "Phase 11 and Phase 12… until they exist",
+   and both shipped. The job statuses `PLANNED` and `OFFERED` are further
+   evidence — nothing on the happy path ever writes either.
+2. **Shifts are realistic, so the board is time-of-day dependent.** Section 0.
+   `scripts/demo-open-shifts.ts` is a workaround, not a fix.
+3. **The fleet dashboard has no live updates.** Refresh is the only way.
+
+### Fixed since this was written — check they stay fixed
+
+4. **A driver who resumed a job used to get no live updates.** The window
+   subscribed to the job's room only when it created the job; both restore
+   paths set the active job, refetched once, and stopped — so a driver who
+   signed in again, or simply reloaded, sat on a socket that said "Connected"
+   and received nothing while their technician drove to them. It also loaded no
+   messages. All three paths now go through one `openJob()` in
+   `public/js/pages/driver.js`. Measured after the fix: 15 `job:event` frames
+   where there had been 0, updates landing in 19–63 ms, and the message thread
+   populated on resume.
+   **To check it yourself:** mid-run, reload the driver window and press the
+   job in "Which car do you mean?". Everything after that should still update
+   live.
+5. **The vehicle picker used to offer vehicles the driver could not file
+   against.** `GET /vehicles` was scoped by tenant only while intake matched on
+   `driverId`, so a Metrocab driver was offered both Metrocab cars and one of
+   them failed. Both now read `vehicleFilingFilter` in `src/auth/permissions.ts`.
+   A driver sees one plate; a fleet manager still sees their tenant's two; a
+   dispatcher still sees all six.
 
 ---
 

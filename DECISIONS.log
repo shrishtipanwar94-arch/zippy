@@ -401,3 +401,110 @@ card and the one thing to press ended up side by side. And: "what does a
 responsive pass have to do with accessibility?" — the 48px floor, and the
 difference between a control's ink and its target, which is the whole reason the
 duty toggle is 36px and passes anyway.
+
+---
+
+## Phase 22e — two scoping bugs, and the question of what commits an assignment / 2026-09-07 / (this commit)
+
+### Built
+`src/auth/permissions.ts` — `vehicleFilingFilter(driverId)`, beside
+`jobReadOwnershipFilter` and shaped like it: a Prisma `where` fragment saying
+which vehicles a driver may report a breakdown on. Read by `GET /vehicles`
+(`src/api/vehicles.ts`) and by `POST /jobs/intake` (`src/api/intake.ts`).
+
+`public/js/pages/driver.js` — `openJob(jobId)`, the one description of what it
+means for a job to become the one this page is showing: set it active,
+subscribe to its room, refetch the view, load its messages. All three entry
+points — create, restore-the-only-open-job, pick-from-the-resume-list — now go
+through it.
+
+`tests/ownership.test.ts` — six tests: the picker offers a driver only their own
+vehicle and not a colleague's ON THE SAME TENANT, a fleet manager and a
+dispatcher are unchanged, intake still refuses what the picker no longer offers,
+and `vehicleFilingFilter` fails closed.
+
+`WALKTHROUGH.md` — running `scripts/demo-open-shifts.ts` promoted from a caveat
+to Section 0, with the measured reason and a query for diagnosing a starved
+board mid-run.
+
+### Decisions
+
+**Decision** The vehicle rule takes a DRIVER ID, not an auth context — unlike
+`jobReadOwnershipFilter` beside it.
+**Why** The two callers know the subject driver by different routes. The picker
+knows it from the token; intake knows it from the token OR from `driverId` in
+the body, because a dispatcher may file on somebody's behalf. The rule is about
+the driver, so the driver is the argument.
+**Alternative** Take the context and let the function work out the subject.
+**Why not** It would have to know about on-behalf-of filing, which is a route
+concern, and the dispatcher case would need a second parameter anyway.
+**Tradeoff** Each caller still decides WHETHER there is a subject driver — one
+branch in `GET /vehicles`, none in intake. That branch is about who is asking,
+not about what the rule is, so it is in the right place; but it does mean the
+function cannot be applied blindly.
+
+**Decision** `openJob()` rather than adding `subscribeToJob` twice.
+**Why** The bug was not a missing line, it was that three things which must
+always happen together were written out three times and two copies were
+incomplete. Adding the missing line to both copies leaves the same shape and the
+same next bug — the message thread was already missing from both, for exactly
+this reason.
+**Alternative** Two lines, as first scoped.
+**Why not** It fixes this instance and not the class.
+**Tradeoff** The create path now calls a function that also loads chat and
+subscribes, which it was already doing inline; no behaviour changed there, but
+its ordering is now decided somewhere else.
+
+### Concurrency
+Nothing. Both changes narrow a read; neither adds a write, a route or a queue.
+
+### Weaknesses introduced
+- `openJob()` is not covered by a test. The browser modules this repo does test
+  (`offlineQueue`, `toast`, `consolePanels`, `fleetDashboard`) are panels with
+  pure inputs; `driver.js` is page wiring over sockets, the API and the DOM, and
+  a test for it would be mostly mock. Verified in a real browser with CDP frame
+  logging instead, which is evidence and not a regression guard.
+- `GET /vehicles` still has no way to ask "which vehicles may driver X file
+  against" on somebody's behalf, so a dispatcher taking a call cannot be shown
+  the right list. Nothing consumes that today — the picker is the endpoint's
+  only caller — but the on-behalf-of intake path exists and has no matching
+  read.
+
+### What broke
+**A driver who resumed a job received no live updates, and no messages.**
+`setActiveJob` was called in three places; only the create path followed it with
+`subscribeToJob` and `loadChat`. So a driver who signed in again, or reloaded,
+held a socket that connected, reported "Connected", and joined no room — the
+panel was correct at fetch time and then never changed again. Measured with CDP
+frame logging: 0 `job:event` frames across a run after resuming, 15 across the
+same run when the job was created in that window; after the fix, 15 and updates
+landing in 19–63ms. The failure mode is the interesting part: nothing was
+wrong on screen, it was only old, and a page that looks live and is not is worse
+than one that admits it is offline.
+
+**The vehicle picker offered cars intake would refuse.** `GET /vehicles` was
+scoped by tenant alone while intake matched on `driverId`. The route carried a
+comment claiming the scoped client narrowed a driver to their own rows; it does
+not — `jobOwnershipExtension` covers the Job model only. A comment asserting an
+invariant that nothing enforces is the same hazard as the duplicated rule it was
+describing.
+
+### Concepts now genuinely in use
+Nothing new. Both fixes are the same old one: a rule stated twice drifts, and
+the fix is one function with two callers.
+
+### Interview angle
+"What commits an assignment in your system?" — and the honest answer is that
+there is exactly one door and it is not the one you would guess. `POST /solve`
+and the queued zone re-plan both stop at an audit record (`persistSolverRun`);
+`POST /plans/:id/select` writes `decision_records` and a `PLAN_SELECTED` event
+and stops. The only production caller of `startSaga` is `executeReassignment`,
+reached only from `POST /actions/:id/execute` for two `REASSIGN_*` action kinds,
+and the only place a job is ever assigned is `commitSaga`. That is a wiring gap
+rather than a design: `src/api/solve.ts` and `src/commit/persistSolverRun.ts`
+both still carry comments saying holds and the saga are "Phase 11 and Phase 12
+… until they exist", both of which shipped; `BUILD_PHASES.md`'s Phase 9 says "no
+reservations yet"; and the job statuses `PLANNED` and `OFFERED` are dead —
+`PLANNED` is written only by compensation and by release-on-replan, and nothing
+anywhere writes `OFFERED`. Two dead states are what an unfinished happy path
+looks like from the schema.

@@ -54,6 +54,30 @@ function value(selector) {
   return document.querySelector(selector).value.trim();
 }
 
+// OPENING A JOB ON THIS PAGE — all of what that means, in one place.
+//
+// There are three ways a job becomes the one this page is showing: the driver
+// just created it, they signed in with exactly one open and it was restored,
+// or they picked one out of the resume list. All three have to do the same
+// three things, and until now only the first one did.
+//
+// The other two set the active job and refetched the view, and stopped there.
+// So a resumed job had no socket subscription and no message thread: the page
+// showed a correct panel, said "Connected", and then never changed again while
+// the technician drove to them. A frozen page that looks live is worse than
+// one that says it is offline, because nothing on it is wrong — it is just
+// old, and there is no way for the driver to tell.
+//
+// Three lines that must always happen together are a function, not a habit.
+async function openJob(jobId) {
+  setActiveJob(jobId);
+  // The room this page's live updates come from. Without it the socket is
+  // connected and subscribed to nothing.
+  subscribeToJob(jobId);
+  await refreshDriverView();
+  await loadChat(jobId);
+}
+
 async function refreshDriverView() {
   const jobId = getState().activeJobId;
   if (!jobId) return;
@@ -126,8 +150,7 @@ async function restoreOpenJob() {
     // One open job is the overwhelmingly common case and needs no question
     // asked — go straight back to it.
     if (jobs.length === 1) {
-      setActiveJob(jobs[0].jobId);
-      await refreshDriverView();
+      await openJob(jobs[0].jobId);
       return;
     }
 
@@ -145,9 +168,8 @@ async function restoreOpenJob() {
 document.querySelector('[data-panel="resume"]').addEventListener('click', async (clicked) => {
   const button = clicked.target.closest('[data-resume-job]');
   if (!button) return;
-  setActiveJob(button.dataset.resumeJob);
   setOpenJobs([]);
-  await refreshDriverView();
+  await openJob(button.dataset.resumeJob);
   render();
 });
 
@@ -364,13 +386,10 @@ document.querySelector('[data-action="report"]').addEventListener('click', async
     });
 
     putJob({ id: created.jobId, status: 'INTAKE', safetyLevel: created.safetyLevel });
-    setActiveJob(created.jobId);
     setNextQuestion(created.next);
     setRequestField({ step: 'sent' });
-    subscribeToJob(created.jobId);
     setError(null);
-    await refreshDriverView();
-    await loadChat(created.jobId);
+    await openJob(created.jobId);
   } catch (error) {
     setError(error.message);
   }

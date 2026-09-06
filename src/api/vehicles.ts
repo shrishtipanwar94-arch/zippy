@@ -17,6 +17,7 @@ import { z } from 'zod';
 import { prisma } from '../infra/db.js';
 import { prismaBase } from '../infra/prismaBase.js';
 import { authenticate, requirePermission } from './middleware/authenticate.js';
+import { vehicleFilingFilter } from '../auth/permissions.js';
 import { registerVehicle } from '../commit/vehicleRegistration.js';
 // `MARUTI_SUZUKI` is a database value; "Maruti Suzuki" is a car. Shared with
 // the technician's board, which leaked the same string until Phase 22b.
@@ -33,16 +34,29 @@ export const vehiclesRouter = Router();
 // this, so the id travels in a value attribute and the human reads
 // "KA04GH4001 · Maruti Swift".
 //
-// SCOPED, NEVER FILTERED HERE. The `prisma` client narrows a DRIVER to their
-// own rows (permissions.jobReadOwnershipFilter and the tenant extension), so
-// this route does not decide who may see what — asking for everything and
-// receiving only your own is the whole point of that client.
+// A DRIVER SEES WHAT THEY MAY FILE AGAINST, AND NOTHING ELSE.
+//
+// The comment that used to be here claimed the scoped `prisma` client already
+// narrowed a driver to their own vehicles. It does not: the ownership
+// extension covers the Job model only, so all this route ever had was the
+// TENANT filter — and a Metrocab driver was handed both Metrocab cars in a
+// dropdown, one of which `POST /jobs/intake` then refused. The rule now comes
+// from `vehicleFilingFilter`, which intake uses too, so the list this returns
+// cannot contain a vehicle intake would turn down.
+//
+// A DISPATCHER OR FLEET MANAGER IS ASKING A DIFFERENT QUESTION and is left
+// alone. They are not filing as anybody — they are looking at a fleet's books,
+// which the tenant filter already bounds. Narrowing them by `driverId` would
+// return nothing at all, because neither has a Driver row.
 vehiclesRouter.get(
   '/vehicles',
   authenticate,
   requirePermission('read', 'vehicle'),
-  async (_req, res) => {
+  async (req, res) => {
+    const filing = req.auth?.role === 'DRIVER' ? vehicleFilingFilter(req.auth.actorId) : {};
+
     const vehicles = await prisma.vehicle.findMany({
+      where: filing,
       select: {
         id: true,
         registration: true,

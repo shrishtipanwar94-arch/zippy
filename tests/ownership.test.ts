@@ -13,6 +13,7 @@ import { prisma, prismaBase } from '../src/infra/db.js';
 import { redis } from '../src/infra/redis.js';
 import { issueAccessToken } from '../src/auth/tokens.js';
 import { hashPassword } from '../src/auth/passwords.js';
+import { NO_OWNER, vehicleFilingFilter } from '../src/auth/permissions.js';
 
 const app = createApp();
 const FIXTURE_PASSWORD = 'own-fixture-secret';
@@ -241,5 +242,79 @@ describe('the login path resolves the actor id', () => {
     expect(res.status).toBe(200);
     const ids = (res.body.jobs as { id: string }[]).map((j) => j.id).filter((id) => id.startsWith('own-'));
     expect(ids).toEqual(['own-job-a']);
+  });
+});
+
+// THE PICKER AND INTAKE HAVE TO AGREE, and this is the test that says so.
+//
+// They did not. `GET /vehicles` was scoped by TENANT alone while
+// `POST /jobs/intake` matched on `driverId`, so a driver was offered a
+// colleague's car in a dropdown and got "vehicle not found" for picking one of
+// the options we gave them. Two endpoints, one rule, written out twice.
+//
+// The fixture is what makes this provable: driver A and driver B are on the
+// SAME tenant, so a test that passes here cannot be passing on the tenant
+// filter alone.
+//
+// NOTHING IS CREATED. The refusal below is answered before intake writes
+// anything, so this file still owns every row it leaves behind — which matters
+// because `job_events` is append-only and an intake-created job could never be
+// cleaned up.
+describe('GET /vehicles — the picker offers only what intake will accept', () => {
+  function listVehicleIds(token: string) {
+    return request(app)
+      .get('/vehicles')
+      .set('Authorization', `Bearer ${token}`)
+      .then((res) => {
+        expect(res.status).toBe(200);
+        return (res.body.vehicles as { id: string }[])
+          .map((vehicle) => vehicle.id)
+          .filter((id) => id.startsWith('own-'))
+          .sort();
+      });
+  }
+
+  it('a DRIVER is offered their own vehicle and not their colleague on the same tenant', async () => {
+    expect(await listVehicleIds(driverAToken())).toEqual(['own-veh-a']);
+    expect(await listVehicleIds(driverBToken())).toEqual(['own-veh-b']);
+  });
+
+  it('a FLEET_MANAGER still sees the whole fleet, because they are not filing as anybody', async () => {
+    expect(await listVehicleIds(fmToken())).toEqual(['own-veh-a', 'own-veh-b']);
+  });
+
+  it('a DISPATCHER still sees across the tenant boundary', async () => {
+    expect(await listVehicleIds(dispatcherToken())).toEqual(['own-veh-a', 'own-veh-b']);
+  });
+
+  it('intake refuses the vehicle the picker no longer offers', async () => {
+    const response = await request(app)
+      .post('/jobs/intake')
+      .set('Authorization', `Bearer ${driverAToken()}`)
+      .send({
+        // Driver B's car. Same tenant, so this is a row driver A can see
+        // through every other lens in the product — and still may not file on.
+        vehicleId: 'own-veh-b',
+        symptoms: { primaryComplaint: 'FLAT_TYRE' },
+        location: { lat: 12.9, lng: 77.6, roadPosition: 'PARKING' },
+        safety: { driverAlone: true },
+      });
+
+    expect(response.status).toBe(404);
+    expect(response.body.error).toBe('vehicle_not_found');
+  });
+});
+
+// The rule itself, with no database in the way. A DRIVER token carrying no
+// Driver row must narrow to nothing rather than to everything — the same
+// fail-closed direction NO_TENANT and jobReadOwnershipFilter take.
+describe('vehicleFilingFilter', () => {
+  it('narrows to the driver it is given', () => {
+    expect(vehicleFilingFilter('own-drv-a')).toEqual({ driverId: 'own-drv-a' });
+  });
+
+  it('fails closed when there is no driver', () => {
+    expect(vehicleFilingFilter(null)).toEqual({ driverId: NO_OWNER });
+    expect(vehicleFilingFilter(undefined)).toEqual({ driverId: NO_OWNER });
   });
 });

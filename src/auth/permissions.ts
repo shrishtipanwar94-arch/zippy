@@ -236,3 +236,30 @@ export function jobReadOwnershipFilter(context: AuthContext | undefined): JobOwn
   }
   return {};
 }
+
+// WHICH VEHICLES A DRIVER MAY REPORT A BREAKDOWN ON.
+//
+// One rule with two readers, and they disagreed. `GET /vehicles` fills the
+// picker on the driver's request screen and was scoped by TENANT alone, so a
+// Metrocab driver was offered both Metrocab cars; `POST /jobs/intake` matches
+// on `driverId` and refuses anything else with a 404. The picker therefore
+// offered a choice that could only fail, and the driver's only clue was
+// "vehicle not found" on a car they had just picked from a list we gave them.
+//
+// Unlike the job filter above this takes a DRIVER ID rather than the auth
+// context, because the two callers know the subject driver by different
+// routes: the picker knows it from the token, and intake knows it from the
+// token OR from `driverId` in the body, because a dispatcher may file on
+// somebody's behalf. The rule is about the driver, so the driver is what it
+// takes.
+//
+// It always narrows. A caller with no subject driver must not call it — see
+// the note in src/api/vehicles.ts about why a dispatcher browsing the fleet is
+// asking a different question.
+export type VehicleFilingFilter = { driverId: string };
+
+export function vehicleFilingFilter(driverId: string | null | undefined): VehicleFilingFilter {
+  // Fails closed on a DRIVER token with no Driver row, exactly as the job
+  // filter does: an id that cannot exist returns no rows rather than all rows.
+  return { driverId: driverId ?? NO_OWNER };
+}

@@ -23,6 +23,7 @@ import { prisma } from '../infra/db.js';
 import { prismaBase } from '../infra/prismaBase.js';
 import { visibleJobId } from './visibleJob.js';
 import { authenticate, requirePermission } from './middleware/authenticate.js';
+import { vehicleFilingFilter } from '../auth/permissions.js';
 import { symptomPayloadSchema } from '../domain/symptoms.js';
 import { safetyReportSchema } from '../domain/safety.js';
 import { locationSchema } from '../domain/location.js';
@@ -172,8 +173,13 @@ intakeRouter.post('/jobs/intake', authenticate, requirePermission('create', 'job
     return;
   }
 
+  // THE SAME RULE THE PICKER USES. `vehicleFilingFilter` is the one place that
+  // says which vehicles a driver may file against; `GET /vehicles` composes it
+  // into the list it offers, so a vehicle that reaches here from that list
+  // cannot be refused. Written literally in both places once, which is how the
+  // list came to offer a car this check then rejected.
   const vehicle = await prisma.vehicle.findFirst({
-    where: { id: body.vehicleId, driverId: driver.id },
+    where: { id: body.vehicleId, ...vehicleFilingFilter(driver.id) },
     select: { id: true },
   });
   if (!vehicle) {
