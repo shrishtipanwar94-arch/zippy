@@ -139,6 +139,38 @@ const HUMANLY_CLEARABLE: RejectionCode[] = [
   'VEHICLE_TYPE_INCOMPATIBLE',
 ];
 
+// THE BREAKDOWN, IN ONE LINE — "NO_TECHNICIAN_ON_SHIFT x23, SLA_UNREACHABLE x1".
+//
+// The card above is what a dispatcher reads once they have opened a job. This
+// is what goes on the action row in the worklist, BEFORE anybody has clicked
+// anything, and the difference matters: a card nobody opens explains nothing.
+// A re-plan that found no crew used to leave no trace at all, and an evening
+// went into concluding the dispatch path was broken when it had correctly
+// worked out that every van was off shift. That sentence, on the queue, is the
+// whole fix.
+//
+// CODES RATHER THAN PROSE, deliberately, and it is the one place on an operator
+// surface where that is the right call. The reason sentence is one line further
+// down the same card; this line is for scanning, and an operator who has seen
+// NO_TECHNICIAN_ON_SHIFT x23 twice this week has learned something about their
+// roster that "the units that could do this work have no technician on shift"
+// x23 would have buried.
+//
+// Ordered by count, then by code, so the same rejections always produce the
+// same sentence — this string goes in a reason column an operator compares
+// between two jobs.
+export function describeRejectionCounts(codes: RejectionCode[]): string {
+  if (codes.length === 0) return 'no unit was even considered';
+
+  const counts = new Map<RejectionCode, number>();
+  for (const code of codes) counts.set(code, (counts.get(code) ?? 0) + 1);
+
+  return [...counts.entries()]
+    .sort((a, b) => (b[1] - a[1]) || a[0].localeCompare(b[0]))
+    .map(([code, count]) => `${code} x${count}`)
+    .join(', ');
+}
+
 export function buildEscalationCard(
   jobId: string,
   rejections: RejectedOptionView[],

@@ -29,6 +29,7 @@ export const HEALTH_COMPONENTS = [
   'WEBSOCKET',
   'SOLVER',
   'PAYMENTS',
+  'CREW_ON_SHIFT',
   'DISPATCH_CORE',
 ] as const;
 
@@ -46,6 +47,19 @@ export type LadderEntry = {
   // to CRITICAL. Only one component can do the latter, and it is the one that
   // decides where technicians go.
   worstCase: Extract<HealthState, 'DEGRADED' | 'CRITICAL'>;
+  // CAN A JOB STILL BE DISPATCHED WHILE THIS IS DEGRADED?
+  //
+  // The banner used to end every degraded sentence with "Dispatch decisions
+  // are unaffected", which was true of all five components that existed when
+  // it was written — a model, a map, a socket, a deadline and a payment rail,
+  // none of which stand between a job and a van. CREW_ON_SHIFT is the first
+  // one that does, and a banner asserting dispatch is fine while nothing can
+  // be dispatched is the same failure §15 already records twice: a fallback
+  // describing a world the operator is not in.
+  //
+  // A field rather than a special case, so the next component added has to
+  // answer the question rather than inherit an answer.
+  dispatchContinues: boolean;
 };
 
 const LADDER: Record<HealthComponent, LadderEntry> = {
@@ -53,6 +67,7 @@ const LADDER: Record<HealthComponent, LadderEntry> = {
     component: 'AI_EXTRACTION',
     label: 'Symptom assistant',
     fallback: 'Drivers answer the structured symptom picker instead. Dispatch is unaffected.',
+    dispatchContinues: true,
     worstCase: 'DEGRADED',
   },
   GPS: {
@@ -64,24 +79,52 @@ const LADDER: Record<HealthComponent, LadderEntry> = {
     // A fallback sentence promising a screen that does not exist would be a
     // silent degraded state wearing a banner.
     fallback: "Last known position is used and flagged; a dispatcher can confirm a corrected one from the driver's chat.",
+    dispatchContinues: true,
     worstCase: 'DEGRADED',
   },
   WEBSOCKET: {
     component: 'WEBSOCKET',
     label: 'Live updates',
     fallback: 'Consoles poll every few seconds instead of receiving pushes.',
+    dispatchContinues: true,
     worstCase: 'DEGRADED',
   },
   SOLVER: {
     component: 'SOLVER',
     label: 'Planner',
     fallback: 'The best plan found before the deadline is used, flagged as incomplete.',
+    dispatchContinues: true,
     worstCase: 'DEGRADED',
   },
   PAYMENTS: {
     component: 'PAYMENTS',
     label: 'Payments',
     fallback: 'Authorisations are marked pending and retried. Dispatch is never blocked.',
+    dispatchContinues: true,
+    worstCase: 'DEGRADED',
+  },
+  // NOT AN OUTAGE — A STAFFING GAP, and the ladder has never had a word for
+  // one. Every other component here reports something BROKEN; this reports the
+  // system working perfectly with nobody to work with, which produces an
+  // identically empty board and, until now, an identically silent screen.
+  //
+  // It earned its place the hard way. A walkthrough was run against a fleet
+  // where one of thirty-one technicians was on shift: every job came back
+  // NO_TECHNICIAN_ON_SHIFT, the queue looked completely normal, and an evening
+  // went into concluding that the dispatch path was broken. Nothing on any
+  // screen said the fleet was off duty. The per-job escalation card
+  // (ESCALATE_NO_FEASIBLE_PLAN) now says it per job; this says it once, at the
+  // top, before a dispatcher has clicked anything.
+  //
+  // DEGRADED, NOT CRITICAL, and the distinction is the ladder's own: CRITICAL
+  // means the system has stopped deciding. Here it is deciding correctly and
+  // there is nobody to decide about. DISPATCH_CORE stays the only component
+  // that can go critical.
+  CREW_ON_SHIFT: {
+    component: 'CREW_ON_SHIFT',
+    label: 'Crew on shift',
+    fallback: 'Jobs keep queueing and stay ranked. Nothing can be dispatched until crew come on duty — check the on-call roster.',
+    dispatchContinues: false,
     worstCase: 'DEGRADED',
   },
   DISPATCH_CORE: {
@@ -99,6 +142,7 @@ const LADDER: Record<HealthComponent, LadderEntry> = {
     // this now says the two true things: the queue does not disappear, and the
     // outage is what an operator is waiting on.
     fallback: 'The priority queue stays visible and every write is still audited. New assignments resume automatically when dispatch recovers.',
+    dispatchContinues: false,
     worstCase: 'CRITICAL',
   },
 };
@@ -158,5 +202,13 @@ export function describeMode(mode: HealthState, degraded: ComponentReading[]): s
   if (mode === 'CRITICAL') {
     return `Automatic dispatch is down (${names}). ${ladderEntry('DISPATCH_CORE').fallback}`;
   }
-  return `Running degraded: ${names}. Dispatch decisions are unaffected.`;
+  // The tail is read off the components rather than asserted. With a model or
+  // a socket down, dispatch genuinely carries on and saying so is the reassuring
+  // half of the sentence; with no crew on shift it does not, and the operator
+  // needs that in the headline rather than three lines further down.
+  const blocked = entries.filter((entry) => !entry.dispatchContinues);
+  if (blocked.length === 0) {
+    return `Running degraded: ${names}. Dispatch decisions are unaffected.`;
+  }
+  return `Running degraded: ${names}. Nothing can be dispatched until this clears.`;
 }

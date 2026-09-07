@@ -508,3 +508,147 @@ reservations yet"; and the job statuses `PLANNED` and `OFFERED` are dead —
 `PLANNED` is written only by compensation and by release-on-replan, and nothing
 anywhere writes `OFFERED`. Two dead states are what an unfinished happy path
 looks like from the schema.
+
+---
+
+## Phase 22f — making a correct decision visible / 2026-09-07 / (this commit)
+
+### Built
+`src/commit/redispatch.ts` — `escalateNoFeasiblePlan()`. The no-option branch
+was `return { outcome: 'NO_OPTION', solverRunId }` and nothing else; it now
+writes a `NO_FEASIBLE_PLAN` job event and raises an `ESCALATE_NO_FEASIBLE_PLAN`
+action carrying the rejection breakdown, guarded by `hasOpenAction` so a job
+whose triggers keep firing raises one card rather than twenty.
+
+`src/domain/escalationCard.ts` — `describeRejectionCounts()`, the one-line
+breakdown (`NO_TECHNICIAN_ON_SHIFT x23, SLA_UNREACHABLE x1`) that goes on the
+worklist row.
+
+`src/domain/actionTiers.ts` — `ESCALATE_NO_FEASIBLE_PLAN`, RECOMMEND.
+`public/js/panels/actions.js` — its label.
+
+`src/domain/geo.ts` — `SERVICE_AREA_RADIUS_KM = 80`.
+`src/intake/createJob.ts` — `resolveZoneId` enforces it.
+`src/intake/errors.ts` — `OUTSIDE_SERVICE_AREA` (422) and `driverMessageFor()`.
+`src/api/intake.ts`, `public/js/api.js` — a driver-readable `message` alongside
+the code, and the client preferring it.
+
+`src/domain/healthLadder.ts` — a `CREW_ON_SHIFT` component and a
+`dispatchContinues` field on every ladder entry.
+`src/health/probes.ts` — `probeCrewOnShift`.
+`public/js/panels/health.js` — the dev-build hint naming the shift script.
+
+`public/js/panels/plans.js` — the button reads "Record this decision", and a
+line under the cards says where dispatch actually happens.
+`src/workers/solver.ts` — the header comment corrected.
+
+`INTERVIEW.md` §15.41–43 and §16. `tests/redispatch.test.ts` and
+`tests/intake.test.ts` gain a regression test each.
+
+### Decisions
+
+**Decision** The no-crew escalation is RECOMMEND, not APPROVE.
+**Why** APPROVE renders a sign-off button wired to `POST /actions/:id/approve`,
+and approving this would resolve nothing — the decision it is about (external
+provider, approve anyway, call the driver) is taken on the escalation card
+through its own route. Execute here means "seen, I am dealing with it", which is
+what the SLA card's button already means.
+**Alternative** APPROVE, on the grounds that a job with no crew is exactly the
+sort of thing that should block.
+**Why not** It is already blocked — by there being nobody to send. Adding a
+sign-off gate would make the tier decorative.
+**Tradeoff** Two RECOMMEND kinds whose Execute does not execute anything. The
+tier is now carrying two meanings: "do this" and "acknowledge this".
+
+**Decision** The breakdown is reason CODES on an operator surface, not prose.
+**Why** `NO_TECHNICIAN_ON_SHIFT x23` is scannable and diagnostic; twenty-three
+copies of "the units that could do this work have no technician on shift" is
+not. The plain-language sentence is one line further down the same card.
+**Alternative** Words everywhere, per the console's own "no enum on screen" rule.
+**Why not** That rule exists for the DRIVER's surface. `panels/actions.js`
+already argues the opposite for the escalation card's feasibility code, and this
+is the same argument one level up.
+**Tradeoff** A code on screen is a code somebody has to have seen before.
+
+**Decision** 80km, enforced at intake rather than in routing.
+**Why** OSRM snapping an off-graph coordinate onto its extract is correct
+behaviour for a router handed a coordinate it should never have received. The
+input is where it can be rejected honestly.
+**Alternative** Have `routing.ts` refuse coordinates outside its extract's
+bounding box.
+**Why not** It would need to know the extract's geography, which it deliberately
+does not, and it would fire long after a job had been created and queued.
+**Tradeoff** 80km is generous enough that a genuinely unreachable job 70km out
+is still accepted and will simply have a long travel time. That is the correct
+direction to be wrong in.
+
+**Decision** `CREW_ON_SHIFT` is DEGRADED, never CRITICAL.
+**Why** The ladder's own definition: CRITICAL means the system has stopped
+deciding. Here it is deciding correctly and there is nobody to decide about.
+DISPATCH_CORE stays the only component that can go critical.
+**Alternative** CRITICAL, since nothing can be dispatched.
+**Why not** It would make "critical" mean two different things and would fire
+every night on a real roster.
+**Tradeoff** A fleet with nobody on shift reports at the same severity as a
+degraded symptom assistant. The `dispatchContinues` field is what stops the
+banner reading identically for both.
+
+### Concurrency
+Nothing new. The one guard that matters is `hasOpenAction` before raising the
+escalation, and it is a read-then-write with a window: two triggers landing in
+the same instant can both pass it and raise two cards. Deliberately not closed
+with a unique index — the existing thrash escalation has the identical shape and
+the failure mode is a duplicate row in a worklist, not a duplicate dispatch.
+
+### Weaknesses introduced
+- The escalation fires only on the TRIGGER path. `POST /solve` can leave twenty
+  jobs unplanned and raises nothing, because a card per unplanned job on every
+  whole-board solve would flood the queue it is meant to make readable. So the
+  board-level version of this finding is still invisible; the `CREW_ON_SHIFT`
+  banner covers the common cause and nothing covers the rest.
+- `FLEET_IS_THIN_BELOW = 0.5` is a chosen figure and is labelled as one. Zero
+  on shift is the non-arbitrary reading; "half" exists so a fleet at 1 of 24
+  reports as starved rather than merely thin.
+- The probe runs two `unit.count` queries every fifteen seconds, one with a
+  nested relation filter on shifts. Cheap at 24 units and not free at 24,000.
+- `driverMessageFor` is a one-element set. It will grow, and when it does the
+  question of which failures deserve a sentence needs answering deliberately
+  rather than by adding to a list.
+- The plans panel now explains a gap rather than closing it. Honest, and still
+  a paragraph of prose where a wired button belongs.
+
+### What broke
+**The new health component made the banner's standing claim false.** The
+degraded headline ended "Dispatch decisions are unaffected", which was true of
+all five components that existed when it was written and is exactly wrong for a
+fleet with nobody on shift. Caught by reading the live banner after wiring the
+probe, not by a test. Fixed with a `dispatchContinues` field per ladder entry so
+the tail is read off the components rather than asserted — and so the next
+component added has to answer the question.
+
+**A regression test asserted the fixture rather than the behaviour.** The first
+version expected `reasonCode` to be `NO_TECHNICIAN_ON_SHIFT`; the redispatch
+fixture's job needs a flatbed, so most of the seeded fleet is also
+`VEHICLE_TYPE_INCOMPATIBLE` and that code dominated. Rewritten to assert the
+counts and the arithmetic that relates them, which is the actual claim.
+
+**Two pre-existing flakes surfaced under full-suite parallelism, neither mine.**
+`tests/razorpayPayouts.test.ts` fails roughly one run in three — reproduced on a
+stashed tree, and it is the shared-payout-batch hazard CLAUDE.md already
+documents. `tests/realtimeAdapter.test.ts` occasionally logs an unhandled
+ioredis "Connection is closed" during teardown; both files pass alone.
+
+### Concepts now genuinely in use
+Nothing new. Three applications of one old idea: a decision the system reached
+correctly is worthless until an operator can see it, which is invariant 8 read
+as a design rule rather than as a checklist item.
+
+### Interview angle
+"Your system correctly worked out that no crew existed. What did the operator
+see?" — nothing, for four phases, and the reason is worth more than the fix: the
+escalation card had been built, was good, and was reachable only from a job
+nobody had been told to click. Every one of the eight rejection codes was
+already computed, stored and discarded at the last step. And: "how did a
+coordinate 1,700km away get a five-minute ETA?" — three layers each
+accommodating an impossible input, and the only one that behaved perfectly, the
+map, was the one that made it visible.

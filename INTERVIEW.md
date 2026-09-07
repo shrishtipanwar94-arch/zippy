@@ -1038,12 +1038,131 @@ The most valuable section. In rough order of severity:
     deterministic test gets today's date silently rather than an error. The
     same trade-off `travelTimeMatrix`'s own default already accepted,
     extended to a second non-deterministic input.
+41. **THE CONSOLE PLANS AND AUDITS; ONLY THE ACTION QUEUE COMMITS — and nobody
+    decided that.** This is the largest gap in the product and it was found by
+    walking it, not by reading it: a job was created, solved, and a plan taken,
+    and no technician was ever offered anything.
+
+    Trace both halves. `POST /solve` (`api/solve.ts`) runs the engine and calls
+    `persistSolverRun`, which writes `solver_runs`, `dispatch_options` and
+    `plan_variants` and nothing else. `POST /plans/:id/select`
+    (`console.ts:517` → `decisionRecords.ts:50`) writes one `decision_records`
+    row and one `PLAN_SELECTED`/`PLAN_OVERRIDDEN` event per assignment, in one
+    transaction, and stops — it imports neither `saga.ts` nor `offers.ts`. The
+    queued worker (`workers/solver.ts`) makes exactly the same audit-only
+    writes. Neither path holds a unit, sends an offer, or changes a job row.
+
+    There is one door into the reservation saga and it is narrow:
+    `POST /actions/:id/execute` → `executeReassignment` (`redispatch.ts:284`) →
+    `startSaga` → `proposeOffer` → `commitSaga`. It is gated at `actions.ts:91`
+    to two action kinds, both `REASSIGN_*`. `commitSaga` (`saga.ts:262`) is the
+    only place in the codebase that ever sets `assignedUnitId`. So a plan can
+    only become a dispatch by way of a re-plan trigger — a technician filing a
+    different diagnosis, or a driver's message being confirmed — and pressing
+    Solve contributes nothing to it.
+
+    **It is a wiring gap, not a design.** Nothing anywhere records a decision
+    that a dispatcher must not commit directly, and four pieces of evidence say
+    it was scheduled and missed. `api/solve.ts:10` still reads "Holds are Phase
+    11 and the reservation saga is Phase 12. *Until they exist*, choosing a
+    plan is something a dispatcher does with their eyes";
+    `persistSolverRun.ts:25` says the same thing in the same tense. Both phases
+    shipped. `BUILD_PHASES.md:929`, the Phase 9 DO NOT list, says "no
+    reservations **yet**" — Phase 12 then built the saga without ever
+    specifying what triggers it, and Phase 13 wired the single trigger that
+    phase happened to need. And the schema still carries the shape of the
+    intended path: **five `JobStatus` values are never written by any code** —
+    `OFFERED`, `UNSERVICEABLE`, `AWAITING_DESTINATION` and `TOWING` have no
+    writer at all, and `PLANNED` is written only by `saga.ts:392` (a
+    compensation putting a job back) and `redispatch.ts:474` (releasing a crew
+    on re-plan), never on the way forward. Nothing moves a job INTAKE →
+    PLANNED → OFFERED → COMMITTED, which is the ladder Phase 15's own spec
+    writes out.
+
+    All five have finished driver copy in `domain/driverNarrative.ts`. "We have
+    found a crew for this and are contacting them now" (PLANNED), "We have
+    asked a technician to come. Waiting for them to confirm" (OFFERED),
+    "Confirming a workshop that can take your car" (AWAITING_DESTINATION),
+    "Your car is on its way to the workshop" (TOWING) and "We have not been
+    able to reach you yet. A dispatcher is looking at this now" (UNSERVICEABLE)
+    are all written, reviewed, and unreachable. Dead copy is the cheapest
+    possible evidence that a path was specified and never built, and it sat
+    there through four checkpoints without anybody noticing, because reading
+    the code from the top never takes you past the point where it stops.
+
+    What is NOT wrong: every piece the missing step needs exists and is tested.
+    The saga has compensations and a recovery routine, offers expire, holds are
+    version-checked, and twelve concurrency tests run against a real Postgres.
+    The gap is one call, and the reason it has not been made is that deciding
+    whether taking a plan should reserve a crew — or should raise a RECOMMEND
+    per assignment, which is the shape the rest of the system uses — is a
+    product decision, not a refactor. Until it is made, the console's plans
+    panel says so on screen (`panels/plans.js`) and its button reads "Record
+    this decision" rather than "Select this plan".
+
+42. **A real coordinate 1,742km away was accepted, filed into a Bengaluru zone,
+    and routed against a Bengaluru road graph — by three layers each doing
+    something defensible.** A driver in Delhi pressed "use my current location".
+    Their browser returned a genuine fix, `accuracy_metres 149`, at
+    28.696/77.207.
+
+    `resolveZoneId` (`intake/createJob.ts`) asked `nearestZone` which zone was
+    closest and took the answer. `nearestZone` is a nearest-neighbour function
+    and had no opinion about distance, correctly — it was the caller treating
+    "closest" as "contains" that was wrong. So the job was filed into
+    `zone-heb`, 1,742km from the vehicle, and queued looking exactly like
+    something a van could be sent to.
+
+    Then OSRM snapped the off-graph coordinate onto the nearest node in its
+    Bengaluru extract and returned a five-minute drive. The routing layer had no
+    way to say "that is not on my map", so the travel estimate was not merely
+    wrong, it was *plausible* — which is why only one of twenty-four options was
+    rejected on SLA rather than all of them. Finally the console's live map,
+    which fits its view to its markers, framed a 1,762km bounding box and
+    centred on farmland in Maharashtra: the one component that behaved
+    perfectly, and the only one that made the problem visible.
+
+    Nothing had ever tested the assumption because every previous coordinate in
+    the product's life came from `src/sim`, which only generates Bengaluru. The
+    fix is a bound at the input (`SERVICE_AREA_RADIUS_KM`, 80km, with a driver-
+    readable refusal); teaching the router to distrust its own answers would be
+    the wrong layer. The lesson is the interesting part: three components each
+    accommodated an impossible input rather than rejecting it, and the failure
+    only became legible at the fourth, which was drawing a picture.
+
+43. **A re-solve that found nobody used to leave no trace anywhere.**
+    `handleTrigger`'s no-option branch returned `{ outcome: 'NO_OPTION' }` and
+    wrote no action, no job event and no log line. The escalation card Phase 17
+    specifies — reason, feasibility code, closest option, alternative,
+    recommendation, three decisions — already existed and was already good, and
+    was reachable only by clicking a job that nothing invited anybody to click.
+    So the system correctly established that every van in the fleet was off
+    shift and the finding went nowhere: an evening was spent concluding the
+    dispatch path was broken. That is invariant 8 failing on the one path where
+    the system has the most to say. Now fixed — `ESCALATE_NO_FEASIBLE_PLAN`
+    carries the rejection breakdown (`NO_TECHNICIAN_ON_SHIFT x23,
+    SLA_UNREACHABLE x1`) onto the worklist and a `NO_FEASIBLE_PLAN` event onto
+    the timeline — but the shape of the bug is worth keeping: **a correct
+    decision that nobody can see is indistinguishable from a broken one**, and
+    every one of the eight rejection codes was already being computed, stored
+    and thrown away at the last step.
 
 ## 16. How I Would Improve It
 
-In the order I would actually do it: wire the triggers that already have event
-sources as Phases 15/15b/15c build them, and raise `UNIT_BREAKDOWN`'s missing
-owner as a plan gap; make `safetyLevel` mutable with an audit trail, because
+**First, above everything below: decide what a dispatcher pressing Solve is
+allowed to do** (§15.41). The reservation saga has one caller and it is the
+re-plan path, so the console can plan a whole board and dispatch none of it.
+The two honest options are that taking a plan raises a RECOMMEND per
+assignment — which is the shape every other decision in this system already
+has — or that it reserves directly and the action queue keeps only the re-plan
+case. Either closes five dead job statuses with it. It is one call in
+`decisionRecords.ts` and a product decision I have not made rather than an
+engineering one I have not done, which is exactly why it survived four
+checkpoints.
+
+Then, in the order I would actually do it: wire the triggers that already have
+event sources as Phases 15/15b/15c build them, and raise `UNIT_BREAKDOWN`'s
+missing owner as a plan gap; make `safetyLevel` mutable with an audit trail, because
 invariant 4 currently rests on a stale value; a solver-level fallback when a
 job's only rejections are SLA ones; idempotency keys on the two external
 mutations; a travel-time cache; and an owner column for saga recovery instead

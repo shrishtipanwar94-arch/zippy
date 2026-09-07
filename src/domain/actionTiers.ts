@@ -37,6 +37,7 @@ export const ACTION_KINDS = [
   'REASSIGN_AFTER_TRIGGER',
   'RELEASE_TECHNICIAN_NO_LONGER_NEEDED',
   'ESCALATE_SLA_WINDOW_CLOSED',
+  'ESCALATE_NO_FEASIBLE_PLAN',
 
   // APPROVE — commercial, or an admission that something has already failed.
   'ESCALATE_THRASHING_JOB',
@@ -67,6 +68,20 @@ const TIERS: Record<ActionKind, ActionTier> = {
   // the customer — which is a real decision a human owns but which nobody
   // needs to make before a van moves.
   ESCALATE_SLA_WINDOW_CLOSED: 'RECOMMEND',
+  // A re-solve that found NOTHING — every option refused, so this job has no
+  // crew and will not get one by waiting. It is the trigger for the human
+  // escalation card (src/domain/escalationCard.ts), which is where the actual
+  // decision is taken; this row exists to put the job on the worklist and to
+  // carry the rejection breakdown where somebody can read it without clicking.
+  //
+  // RECOMMEND, NOT APPROVE, and for a different reason from the SLA one above.
+  // APPROVE renders a sign-off button wired to POST /actions/:id/approve, and
+  // approving this would do nothing at all — the decision this card is about
+  // (external provider, approve anyway, call the driver) is taken on the
+  // escalation card through its own route. A button that resolves nothing is
+  // worse than no button. Execute here means "I have seen it and I am dealing
+  // with it", which is exactly what the SLA card's button already means.
+  ESCALATE_NO_FEASIBLE_PLAN: 'RECOMMEND',
 
   ESCALATE_THRASHING_JOB: 'APPROVE',
   CANCEL_JOB: 'APPROVE',

@@ -1,9 +1,23 @@
-// THE SOLVER QUEUE — now doing real work.
+// THE SOLVER QUEUE — a zone-wide re-plan, debounced.
 //
-// A zone-wide re-plan, debounced. `enqueueSolve(zoneId)` is what every trigger
-// calls (src/domain/replanTriggers.ts lists them), and the debounce is what
-// stops a burst of triggers becoming a burst of solves — ten technicians
-// going offline in the same minute is one re-plan, not ten.
+// WHO ACTUALLY CALLS IT, corrected. This header used to say "`enqueueSolve`
+// is what every trigger calls", and that has never been true of the shipped
+// code: `handleTrigger` (src/commit/redispatch.ts) re-solves ONE job
+// synchronously, in the request, and never touches this queue. The only
+// production callers of `enqueueSolve` are the two one-shot chaos controls in
+// src/chaos/actions.ts — take a technician offline, break a unit — so with the
+// chaos panel absent, as it is in a production build, this worker does not run
+// at all.
+//
+// That is worth stating plainly rather than quietly deleting, because it means
+// the debounce below is defended by a test and exercised by almost nothing, and
+// because a comment asserting the opposite of the code sent somebody looking
+// for a queued path that was never there. Whether a zone-wide re-plan SHOULD
+// run on a trigger is a live question — see INTERVIEW.md on what commits an
+// assignment — and this comment is not the place to answer it.
+//
+// The debounce is what stops a burst of triggers becoming a burst of solves —
+// ten technicians going offline in the same minute is one re-plan, not ten.
 //
 // THE DEBOUNCE IS THE WHOLE POINT OF THIS FILE. A solve is expensive: it
 // generates candidates for every pending job in a zone against every unit,

@@ -325,6 +325,98 @@ describe('thrash control', () => {
   });
 });
 
+// A RE-SOLVE THAT FINDS NOBODY HAS TO LEAVE A TRACE.
+//
+// This branch returned `{ outcome: 'NO_OPTION' }` and wrote nothing at all —
+// no action, no job event, not even a log line. A walkthrough was lost to it:
+// the solver correctly established that every van in the fleet was off shift,
+// and the finding went nowhere, so the conclusion drawn from an empty board
+// was that dispatch was broken.
+//
+// The fleet is starved by ending every shift in this file's own zone, which is
+// the same thing the chaos control does and the same thing that had actually
+// happened. Scoped to `${PREFIX}-` rows throughout: `zippy_test` is shared and
+// a test that ended everybody's shift would take the rest of the suite with it.
+describe('a re-solve that finds nobody', () => {
+  it('raises a visible escalation carrying the rejection breakdown', async () => {
+    await resetUnits();
+    const jobId = await freshJob();
+
+    // Nobody on shift, so every option comes back NO_TECHNICIAN_ON_SHIFT.
+    await prismaBase.technicianShift.updateMany({
+      where: { technician: { currentUnit: { is: { zoneId: `${PREFIX}-zone` } } } },
+      data: { endsAt: new Date(Date.now() - 60_000) },
+    });
+
+    const outcome = await handleTrigger(prismaBase, {
+      jobId,
+      trigger: 'TECHNICIAN_DECLINED',
+      actor: DISPATCHER,
+    });
+
+    expect(outcome.outcome).toBe('NO_OPTION');
+    if (outcome.outcome !== 'NO_OPTION') throw new Error('unreachable');
+    expect(outcome.escalated).toBe(true);
+
+    // 1. THE WORKLIST. A dispatcher who never clicks this job still sees it.
+    const action = await prismaBase.actionRequest.findUniqueOrThrow({
+      where: { id: outcome.actionRequestId! },
+      select: { tier: true, kind: true, status: true, reason: true, computedImpact: true },
+    });
+    expect(action.kind).toBe('ESCALATE_NO_FEASIBLE_PLAN');
+    expect(action.tier).toBe('RECOMMEND');
+    expect(action.status).toBe('PENDING');
+
+    // THE BREAKDOWN IS IN THE REASON, which is the whole point: the counts are
+    // what say "your fleet is off shift" rather than "something went wrong".
+    expect(action.reason).toContain('NO_TECHNICIAN_ON_SHIFT x');
+
+    const impact = action.computedImpact as Record<string, unknown>;
+    const counts = impact.rejectionCounts as Record<string, number>;
+    // The staffing gap this test created is counted, and so is everything else
+    // the solve refused. NOT asserting which code dominates: this fixture's job
+    // needs a flatbed, so most of the seeded fleet is also
+    // VEHICLE_TYPE_INCOMPATIBLE, and pinning the winner would be asserting the
+    // fixture rather than the behaviour.
+    expect(counts.NO_TECHNICIAN_ON_SHIFT).toBeGreaterThan(0);
+    expect(impact.optionsConsidered).toBe(
+      Object.values(counts).reduce((total, count) => total + count, 0),
+    );
+    // The card's own three fields, so the row can be triaged without opening it.
+    expect(typeof impact.reasonCode).toBe('string');
+    expect(impact.whyNoCrew).toBeTruthy();
+    expect(impact.recommendation).toBeTruthy();
+
+    // 2. THE TIMELINE, as its own event type rather than only as an action —
+    // "show me every job we could not plan" has to be a filter, not a grep
+    // through payloads.
+    const events = await prismaBase.jobEvent.findMany({
+      where: { jobId, eventType: 'NO_FEASIBLE_PLAN' },
+      select: { payload: true },
+    });
+    expect(events).toHaveLength(1);
+    expect((events[0]!.payload as Record<string, unknown>).breakdown).toContain(
+      'NO_TECHNICIAN_ON_SHIFT',
+    );
+
+    // 3. ONE CARD, NOT TWENTY. A job whose triggers keep firing must not refill
+    // the queue an operator is trying to read.
+    const again = await handleTrigger(prismaBase, {
+      jobId,
+      trigger: 'UNIT_BREAKDOWN',
+      actor: DISPATCHER,
+    });
+    expect(again.outcome).toBe('NO_OPTION');
+    if (again.outcome !== 'NO_OPTION') throw new Error('unreachable');
+    expect(again.escalated).toBe(false);
+    expect(
+      await prismaBase.actionRequest.count({
+        where: { jobId, kind: 'ESCALATE_NO_FEASIBLE_PLAN' },
+      }),
+    ).toBe(1);
+  });
+});
+
 // ---------------------------------------------------------------------------
 // Two crews: one that can do EV work and one that cannot. That single
 // difference is what makes every re-solve above have an obvious right answer.

@@ -52,6 +52,7 @@ export async function probeAll(db: PrismaClient, now: Date): Promise<ComponentRe
     await probeWebsocket(db),
     await probeSolver(db, now),
     await probePayments(db, now),
+    await probeCrewOnShift(db, now),
     await probeDispatchCore(db),
   ];
 }
@@ -214,6 +215,59 @@ async function probePayments(db: PrismaClient, now: Date): Promise<ComponentRead
     };
   }
   return { component: 'PAYMENTS', state: 'NORMAL', detail: null };
+}
+
+// HOW MUCH OF THE FLEET IS ACTUALLY WORKING RIGHT NOW.
+//
+// The one probe here that reports a fact about PEOPLE rather than about
+// software. Every other component answers "is this broken"; this answers "is
+// there anybody to send", and the two produce an identical empty board.
+//
+// It counts CREWED UNITS whose technician is on shift, not technicians,
+// because a technician with no van cannot be dispatched and would inflate the
+// number in exactly the situation the probe exists to catch. The seed has 31
+// technicians and 24 vans; on a quiet night the honest figure is the smaller
+// one.
+//
+// ZERO IS NOT ARBITRARY: no crewed unit on shift means literally nothing can be
+// dispatched, and it is the reading that matters. THE HALF IS A CHOSEN FIGURE
+// and is labelled as one — below half the fleet the board cannot cover its own
+// six zones, but nothing was measured to arrive at "half". It exists so a fleet
+// at 1 of 24 reports as starved rather than as merely thin, which is the case
+// that cost an evening.
+const FLEET_IS_THIN_BELOW = 0.5;
+
+async function probeCrewOnShift(db: PrismaClient, now: Date): Promise<ComponentReading> {
+  const crewed = await db.unit.count({ where: { currentTechnicianId: { not: null } } });
+  if (crewed === 0) {
+    return { component: 'CREW_ON_SHIFT', state: 'DEGRADED', detail: 'no unit has a crew assigned' };
+  }
+
+  const onShift = await db.unit.count({
+    where: {
+      currentTechnicianId: { not: null },
+      currentTechnician: {
+        is: { shifts: { some: { startsAt: { lte: now }, endsAt: { gte: now } } } },
+      },
+    },
+  });
+
+  // The numbers are in the detail whatever the verdict, because "8 of 24" is
+  // the sentence that answers the operator's next question and a bare state
+  // never is.
+  const detail = `${onShift} of ${crewed} crewed units have a technician on shift`;
+
+  if (onShift === 0) {
+    return {
+      component: 'CREW_ON_SHIFT',
+      state: 'DEGRADED',
+      detail: `${detail} — nothing can be dispatched`,
+    };
+  }
+  if (onShift / crewed < FLEET_IS_THIN_BELOW) {
+    return { component: 'CREW_ON_SHIFT', state: 'DEGRADED', detail };
+  }
+  return { component: 'CREW_ON_SHIFT', state: 'NORMAL', detail };
 }
 
 // THE ONLY COMPONENT THAT CAN GO CRITICAL. Automatic dispatch is the solver

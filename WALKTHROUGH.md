@@ -39,6 +39,12 @@ The bands are correct and they stay: the evaluation harness fixes its own clock
 and needs them. They are simply wrong for a person driving the product at an
 arbitrary hour, and this script is the workaround.
 
+**You no longer have to guess when this is the problem.** The dispatcher's
+health banner now reports it: *"Running degraded: Crew on shift. Nothing can be
+dispatched until this clears"*, with the count underneath — *"1 of 24 crewed
+units have a technician on shift"* — and, on a seeded build, this script's name.
+If you see that banner, you skipped this step or the window expired.
+
 **If the walkthrough stops working part-way through**, check this first:
 
 ```bash
@@ -187,11 +193,15 @@ Press **Solve — plan every pending job**.
   `TOTAL` and a per-job unit and cost.
 - `SOLVER_RUN_*` and per-job rows in the timeline.
 
-Press **Select this plan** on **BALANCED**. It is one click; the other three
-demand a typed override reason first, and refuse without one.
+Press **Record this decision** on **BALANCED**. It is one click; the other
+three demand a typed override reason first, and refuse without one.
 
-**Expect:** the card flips to *selected*, and a `PLAN_SELECTED` event lands in
-the timeline.
+**Expect:** the card's button reads *decision recorded*, a `PLAN_SELECTED` event
+lands in the timeline, and a line under the cards says what just happened —
+*"Recording a decision does not dispatch anybody"*. The button used to say
+"Select this plan", which is what made an earlier run reasonable to read as
+broken dispatch. It records the choice and why, against every job in the plan.
+Nobody is reserved. Step 6 is where that happens.
 
 ---
 
@@ -252,6 +262,14 @@ Press **Yes**.
 - Dispatcher: a new card appears in the **ACTION QUEUE** on the left —
   `Recommended · REASSIGN_AFTER_TRIGGER`, reason *"confirmed from a message:
   safety change"*, showing the crew it would move the job **from** and **to**.
+
+> **If no crew can take the job you will now be told so.** A re-solve that
+> finds nothing raises a `Recommended · No crew can take this job` card whose
+> reason line carries the breakdown — *"found no crew: NO_TECHNICIAN_ON_SHIFT
+> x23, SLA_UNREACHABLE x1"* — and a `NO_FEASIBLE_PLAN` row lands in the
+> timeline. That used to be completely silent: the solver worked out exactly
+> why and told nobody. If you see that card instead of the reassignment one,
+> read the codes; it is almost always Section 0.
 
 > **The action queue will not be empty, and that is not a fault.** The board was
 > generated half an hour before it was handed to you and it keeps ageing, so a
@@ -578,16 +596,21 @@ Do not spend time writing these down again.
 
 ### Still true
 
-1. **Selecting a plan does not offer the job to anybody.** It records the
-   decision and stops. The reservation only starts from a `REASSIGN_*` action
-   in the action queue, which needs a re-plan trigger — which is why Step 6
-   exists and why this is not simply "press Solve, then accept". This is a
-   wiring gap rather than a design: `src/api/solve.ts` still carries a comment
-   saying holds and the saga are "Phase 11 and Phase 12… until they exist",
-   and both shipped. The job statuses `PLANNED` and `OFFERED` are further
-   evidence — nothing on the happy path ever writes either.
+1. **Recording a plan decision does not offer the job to anybody.** The
+   reservation only starts from a `REASSIGN_*` action in the action queue,
+   which needs a re-plan trigger — which is why Step 6 exists and why this is
+   not simply "press Solve, then accept". This is a wiring gap rather than a
+   design, written up in full at INTERVIEW.md §15.41: `src/api/solve.ts` still
+   carries a comment saying holds and the saga are "Phase 11 and Phase 12…
+   until they exist", and both shipped. **Five** job statuses are further
+   evidence — `OFFERED`, `UNSERVICEABLE`, `AWAITING_DESTINATION` and `TOWING`
+   have no writer at all, and `PLANNED` is only ever written by a compensation.
+   All five have finished driver copy that can never appear.
+   The console no longer implies otherwise; closing the gap is a product
+   decision, not a refactor.
 2. **Shifts are realistic, so the board is time-of-day dependent.** Section 0.
-   `scripts/demo-open-shifts.ts` is a workaround, not a fix.
+   `scripts/demo-open-shifts.ts` is a workaround, not a fix — but the banner
+   now tells you when you need it.
 3. **The fleet dashboard has no live updates.** Refresh is the only way.
 
 ### Fixed since this was written — check they stay fixed
@@ -610,6 +633,21 @@ Do not spend time writing these down again.
    them failed. Both now read `vehicleFilingFilter` in `src/auth/permissions.ts`.
    A driver sees one plate; a fleet manager still sees their tenant's two; a
    dispatcher still sees all six.
+6. **A re-solve that found no crew used to leave no trace.** No action, no job
+   event, no log line — the reason an earlier run was read as broken dispatch.
+   It now raises `ESCALATE_NO_FEASIBLE_PLAN` with the rejection breakdown and
+   writes a `NO_FEASIBLE_PLAN` event. One card per job, not one per trigger.
+7. **A coordinate anywhere on Earth used to be accepted.** `resolveZoneId` took
+   the nearest zone with no maximum distance, so a genuine browser fix in Delhi
+   was filed into a Bengaluru zone 1,742 km away and queued as servicable —
+   then OSRM snapped it onto the Bengaluru road graph and returned a five
+   minute drive. Intake now bounds it at 80 km and refuses in the driver's own
+   words: *"We do not cover where you are yet. The nearest place we work is
+   Bengaluru, about 1742 km away."*
+   **To check it yourself:** on the location step, open *Enter coordinates
+   manually* and type `28.696` / `77.207`.
+8. **The dispatcher had no fleet-level signal for a staffing gap.** There is now
+   a `Crew on shift` component on the health ladder — see Section 0.
 
 ---
 

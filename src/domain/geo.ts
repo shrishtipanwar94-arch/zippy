@@ -46,6 +46,28 @@ export type ZoneCentroid = {
 
 // The zone whose centroid is closest. Ties break on zone id so the choice is
 // deterministic — the Phase 10 harness replays these runs.
+// HOW FAR FROM A ZONE CENTROID IS STILL US.
+//
+// `nearestZone` answers "which of our zones is closest", and for a long time
+// that was taken as an answer to "which zone is this job in". It is not: with
+// no upper bound the nearest zone to a coordinate in Delhi is a zone in
+// Bengaluru, 1,742km away, and intake filed one there — silently, into
+// zone-heb, where it sat in the queue looking exactly like a job somebody
+// could be sent to. Every earlier coordinate had come from a simulator that
+// only generates Bengaluru, so nothing had ever tested the assumption.
+//
+// 80km, and the number is measured rather than picked. The seeded zone
+// centroids span 22.3km corner to corner, so 80 covers the metro and a wide
+// margin of ring road and satellite towns around it while still being an order
+// of magnitude short of the next city. It is a SERVICE-AREA rule, not a
+// geometry one: a fleet that opens a second city adds zones, and this number
+// keeps meaning "near one of our zones" without being touched.
+//
+// Deliberately generous. The cost of rejecting a real customer at the edge of
+// coverage is far higher than the cost of accepting one 70km out and telling a
+// dispatcher the travel time is long.
+export const SERVICE_AREA_RADIUS_KM = 80;
+
 export function nearestZone<T extends ZoneCentroid>(zones: T[], lat: number, lng: number): T | null {
   let best: T | null = null;
   let bestDistance = Number.POSITIVE_INFINITY;

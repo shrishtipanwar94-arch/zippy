@@ -24,7 +24,7 @@ import { buildSafetyContext, triageSafety } from '../domain/safety.js';
 import type { SafetyReport } from '../domain/safety.js';
 import { locationColumns } from '../domain/location.js';
 import type { LocationInput } from '../domain/location.js';
-import { nearestZone } from '../domain/geo.js';
+import { distanceKm, nearestZone, SERVICE_AREA_RADIUS_KM } from '../domain/geo.js';
 import { priceListInForce } from '../pricing/priceList.js';
 import { settlementPathFor } from '../commit/settlement.js';
 import { slaPolicyIdInForce } from '../commit/contractTerms.js';
@@ -90,12 +90,44 @@ export type IntakeResult = {
   next: NextQuestionView;
 };
 
+// WHICH ZONE THIS JOB IS IN — and, first, whether it is in any of them.
+//
+// `nearestZone` returns the closest zone and has no opinion about how far away
+// that is, which is correct for a nearest-neighbour function and was wrong as
+// an answer to this question. A driver in Delhi pressed "use my current
+// location", their browser reported a genuine fix 1,742km from the nearest
+// centroid, and the job was filed into zone-heb and queued as though somebody
+// could be sent to it. Nothing rejected it, nothing flagged it, and the map
+// then framed itself across two states trying to contain it.
+//
+// THE COMPOUNDING FAILURE IS WORTH KNOWING ABOUT and is deliberately not fixed
+// here. OSRM snaps an off-graph coordinate to the nearest node in whatever
+// extract it was built with, so a Delhi coordinate came back as a five-minute
+// drive from a Bengaluru van — the routing layer had no way to say "that is
+// not on my map". Bounding the input is the fix; teaching the router to
+// distrust its own answers is not.
 async function resolveZoneId(tx: Prisma.TransactionClient, lat: number, lng: number): Promise<string> {
-  const zones = await tx.zone.findMany({ select: { id: true, centroidLat: true, centroidLng: true } });
+  const zones = await tx.zone.findMany({
+    select: { id: true, name: true, city: true, centroidLat: true, centroidLng: true },
+  });
   const zone = nearestZone(zones, lat, lng);
   if (!zone) {
     throw new IntakeError('NO_ZONE_CONFIGURED', 'no zones are configured; run the seed');
   }
+
+  const distance = distanceKm(lat, lng, zone.centroidLat, zone.centroidLng);
+  if (distance > SERVICE_AREA_RADIUS_KM) {
+    // THE MESSAGE IS FOR THE DRIVER, so it is a sentence and it names the place
+    // rather than the zone id. Somebody who has just told us their car will not
+    // start is owed "we do not cover where you are" and where we do cover — not
+    // a code, and not silence followed by nobody arriving.
+    throw new IntakeError(
+      'OUTSIDE_SERVICE_AREA',
+      `We do not cover where you are yet. The nearest place we work is ` +
+        `${zone.city}, about ${Math.round(distance)} km away.`,
+    );
+  }
+
   return zone.id;
 }
 

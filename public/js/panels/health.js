@@ -49,9 +49,32 @@ export function render(state) {
         item.append(detail);
       }
       if (component.component === 'PAYMENTS') item.append(paymentsDrillThrough(state));
+      if (component.component === 'CREW_ON_SHIFT') item.append(...shiftHint(state));
       return item;
     }),
   );
+}
+
+// THE ONE PIECE OF DEV COPY ON THIS SURFACE, and it is gated on the same flag
+// the chaos panel is.
+//
+// A real operator seeing "nothing can be dispatched" calls the on-call roster,
+// which is what the fallback sentence already tells them; a shell command would
+// be noise to them and is not theirs to run. But on a seeded build the cause is
+// almost always that the demo shift window has expired, and the walkthrough's
+// step 0 is the fix — so the build that has chaos controls is the build where
+// naming the script saves somebody an evening. `chaos.available` is only ever
+// true when the server answered GET /chaos, which a production build does not.
+function shiftHint(state) {
+  if (!state.chaos?.available) return [];
+  const hint = document.createElement('div');
+  hint.className = 'small mt-1';
+  hint.append(document.createTextNode('Seeded build? The demo shift window may have expired: '));
+  const command = document.createElement('code');
+  command.className = 'mono';
+  command.textContent = 'npx tsx scripts/demo-open-shifts.ts';
+  hint.append(command);
+  return [hint];
 }
 
 // THE ONE DEGRADED STATE WITH A LIST BEHIND IT.

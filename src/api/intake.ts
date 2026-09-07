@@ -34,7 +34,7 @@ import { storeExtraction } from '../ai/store.js';
 import { buildHypothesisView } from '../domain/hypothesisView.js';
 import { logger } from '../infra/logger.js';
 import { recordIntakeAnswer, nextQuestionFor } from '../intake/answers.js';
-import { IntakeError, statusForIntakeError } from '../intake/errors.js';
+import { driverMessageFor, IntakeError, statusForIntakeError } from '../intake/errors.js';
 
 export const intakeRouter = Router();
 
@@ -77,7 +77,15 @@ const describeSchema = z.object({
 
 function sendIntakeError(error: unknown, res: import('express').Response): boolean {
   if (!(error instanceof IntakeError)) return false;
-  res.status(statusForIntakeError(error)).json({ error: error.code.toLowerCase() });
+  // `error` stays the code, because clients and tests match on it. `message` is
+  // added only when the thrower wrote one for a person — see driverMessageFor.
+  // Without it the driver's page shows the code, and "outside_service_area" is
+  // exactly the enum that is never supposed to reach a driver.
+  const message = driverMessageFor(error);
+  res.status(statusForIntakeError(error)).json({
+    error: error.code.toLowerCase(),
+    ...(message ? { message } : {}),
+  });
   return true;
 }
 

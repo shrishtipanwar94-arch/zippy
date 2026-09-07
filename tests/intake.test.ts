@@ -29,7 +29,7 @@ import { capabilitySetIsStable, requiredCapabilities } from '../src/domain/capab
 import { buildSafetyContext, isNightAt, safetyReportSchema, triageSafety } from '../src/domain/safety.js';
 import type { SafetyContext } from '../src/domain/safety.js';
 import { carriagewayFromHeading, isOnHighway, locationColumns, locationSchema } from '../src/domain/location.js';
-import { distanceKm, nearestZone } from '../src/domain/geo.js';
+import { distanceKm, nearestZone, SERVICE_AREA_RADIUS_KM } from '../src/domain/geo.js';
 import { createRandom } from '../src/sim/random.js';
 import { answerAsDriver } from '../src/sim/driverAnswers.js';
 
@@ -555,5 +555,31 @@ describe('location refinement', () => {
     expect(nearestZone(zones, 12.94, 77.63)?.id).toBe('zone-kor');
     expect(nearestZone(zones, 12.97, 77.75)?.id).toBe('zone-whf');
     expect(nearestZone([], 12.9, 77.6)).toBeNull();
+  });
+
+  // NEAREST IS NOT THE SAME AS INSIDE, and treating it as such filed a real
+  // browser geolocation from Delhi into a Bengaluru zone. `nearestZone` is
+  // right to have no opinion about distance — it is a nearest-neighbour
+  // function — so the bound lives with the caller, and this is the number that
+  // decides whether a coordinate is somewhere we work.
+  it('bounds the service area well outside the city and well inside the next one', () => {
+    // The NEAREST seeded centroid to Delhi is the northernmost one, Hebbal —
+    // which is the zone the job was actually filed into.
+    const hebbal = { lat: 13.0358, lng: 77.597 };
+    const koramangala = { lat: 12.9352, lng: 77.6245 };
+    const delhi = { lat: 28.69603, lng: 77.20699 };
+
+    // The reported coordinate, and the figure the driver is now told.
+    expect(Math.round(distanceKm(delhi.lat, delhi.lng, hebbal.lat, hebbal.lng))).toBe(1742);
+    expect(distanceKm(delhi.lat, delhi.lng, hebbal.lat, hebbal.lng)).toBeGreaterThan(
+      SERVICE_AREA_RADIUS_KM,
+    );
+
+    // The seeded zone centroids span 22.3km corner to corner, so the whole
+    // metro plus a wide margin has to stay inside. Half a degree of latitude is
+    // about 55km — a satellite town, and still us.
+    expect(
+      distanceKm(koramangala.lat + 0.5, koramangala.lng, koramangala.lat, koramangala.lng),
+    ).toBeLessThan(SERVICE_AREA_RADIUS_KM);
   });
 });

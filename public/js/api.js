@@ -20,7 +20,15 @@ async function request(method, path, body) {
   const payload = text.length > 0 ? JSON.parse(text) : null;
 
   if (!response.ok) {
-    const error = new Error(payload?.error ?? `${method} ${path} failed (${response.status})`);
+    // `message` FIRST, and it is usually absent. A route that has something to
+    // say to the person in front of the screen sends a sentence alongside the
+    // code; everything else sends the code alone and the surfaces show that,
+    // which is how a driver came to be shown "vehicle_not_found". The code is
+    // kept on the error either way, because handlers branch on it.
+    const error = new Error(
+      payload?.message ?? payload?.error ?? `${method} ${path} failed (${response.status})`,
+    );
+    error.code = payload?.error ?? null;
     error.status = response.status;
     throw error;
   }

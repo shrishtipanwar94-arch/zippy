@@ -26,6 +26,9 @@
 // the selection without it (422). The asymmetry is the design: the common case
 // is frictionless, the exceptional case explains itself.
 //
+// TAKING A PLAN IS NOT DISPATCHING IT, and this panel now says so out loud —
+// see `whereDispatchHappens` at the foot of the render for the full account.
+//
 // Rebuilt wholesale on each render. Plans change only when someone presses
 // Solve, and the reason input is re-seeded from state so a re-render during
 // typing does not discard it.
@@ -50,7 +53,36 @@ export function render(state) {
     return;
   }
 
-  panel.replaceChildren(...state.solve.plans.map((plan) => planCard(plan, state)));
+  panel.replaceChildren(
+    ...state.solve.plans.map((plan) => planCard(plan, state)),
+    whereDispatchHappens(),
+  );
+}
+
+// WHAT THIS BUTTON DOES, AND WHAT IT DOES NOT.
+//
+// It said "Select this plan" and looked exactly like a commit. It is not one:
+// `POST /plans/:id/select` writes a decision_records row per assignment and a
+// PLAN_SELECTED (or PLAN_OVERRIDDEN) event, and stops. No unit is held, no
+// offer is sent, no job row changes — see src/commit/decisionRecords.ts, which
+// imports neither the saga nor the offer module.
+//
+// A walkthrough was lost to exactly this: a job was created, solved and
+// selected, and the technician's screen stayed empty, because the only path
+// into the reservation saga is executing a REASSIGN_* action from the action
+// queue (src/api/actions.ts -> executeReassignment). That gap is real and is
+// written up in INTERVIEW.md; it is not this panel's to close. What this panel
+// can do is stop implying otherwise, which is what the label and this line are.
+function whereDispatchHappens() {
+  const note = document.createElement('div');
+  note.className = 'col-12';
+  note.innerHTML =
+    '<p class="small text-muted mb-0">' +
+    'Recording a decision does not dispatch anybody: it writes the choice and why, ' +
+    'against every job in the plan. A crew is reserved and offered when a ' +
+    '<strong>reassignment action is executed from the action queue</strong>.' +
+    '</p>';
+  return note;
 }
 
 function planCard(plan, state) {
@@ -117,7 +149,7 @@ function planCard(plan, state) {
           data-plan="${escapeHtml(plan.label)}"
           data-plan-variant-id="${escapeHtml(planVariantId)}"
           ${planVariantId ? '' : 'disabled'}>
-          ${isSelected ? 'selected' : 'Select this plan'}
+          ${isSelected ? 'decision recorded' : 'Record this decision'}
         </button>
         ${planVariantId ? '' : '<div class="small text-muted mt-1">not persisted — re-run Solve</div>'}
       </div>

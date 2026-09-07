@@ -29,6 +29,8 @@ import {
 } from '../domain/replanTriggers.js';
 import type { ReplanTrigger } from '../domain/replanTriggers.js';
 import { requestAction, hasOpenAction } from './actionRequests.js';
+import { buildEscalationCard, describeRejectionCounts } from '../domain/escalationCard.js';
+import type { RejectionCode } from '../engine/feasibility.js';
 import { buildDispatchSnapshot } from './dispatchSnapshot.js';
 import { persistSolverRun } from './persistSolverRun.js';
 import { solve } from '../engine/solve.js';
@@ -41,7 +43,15 @@ export type RedispatchOutcome =
   | { outcome: 'ESCALATED'; actionRequestId: string; reason: string }
   | { outcome: 'NO_CHANGE'; solverRunId: string | null; reason: string }
   | { outcome: 'REASSIGNMENT_PROPOSED'; actionRequestId: string; unitId: string; technicianId: string }
-  | { outcome: 'NO_OPTION'; solverRunId: string | null };
+  // `escalated` says whether this run RAISED the card or found one already
+  // open. A caller that logs "escalated" on every repeat would report a fleet
+  // in crisis when one job has been unplannable for an hour.
+  | {
+      outcome: 'NO_OPTION';
+      solverRunId: string | null;
+      escalated?: boolean;
+      actionRequestId?: string;
+    };
 
 export type HandleTriggerInput = {
   jobId: string;
@@ -137,7 +147,7 @@ export async function handleTrigger(
   const plan = outcome.plans.find((candidate) => candidate.label === objective);
   const assignment = plan?.assignments.find((candidate) => candidate.jobId === jobId);
   if (!assignment) {
-    return { outcome: 'NO_OPTION', solverRunId };
+    return escalateNoFeasiblePlan(db, { jobId, trigger, solverRunId, outcome, actor: input.actor });
   }
 
   // 4. THE SAME ANSWER IS NOT A CHANGE.
@@ -192,6 +202,129 @@ export async function handleTrigger(
     unitId: assignment.unitId,
     technicianId: assignment.technicianId,
   };
+}
+
+// NOBODY CAN DO THIS JOB, AND SOMEBODY HAS TO BE TOLD.
+//
+// This branch used to be `return { outcome: 'NO_OPTION', solverRunId }` and
+// nothing else: no action, no job event, not even a log line. The solver had
+// correctly established that every van was off shift and the finding went
+// nowhere — the queue looked normal, the timeline ended at the trigger, and
+// the only way to learn any of it was to open the job and read the escalation
+// card, which nothing invited anybody to do. That is invariant 8 failing on
+// the one path where the system has the most to say.
+//
+// TWO WRITES, AND THEY ARE DIFFERENT THINGS.
+//   NO_FEASIBLE_PLAN is a FACT about the job, with the breakdown, so the
+//     timeline can be filtered by it — "show me every job we could not plan"
+//     is a question ACTION_RECOMMEND cannot answer without reading payloads.
+//   the ActionRequest is a REQUEST addressed to a person, and it is what puts
+//     the job on the worklist a dispatcher actually lives in.
+//
+// The card itself already exists and is already good (Phase 17,
+// src/domain/escalationCard.ts): reason, feasibility code, the closest option
+// and why it was refused, the alternative, a recommendation, three actions.
+// Nothing here duplicates it — the reason string carries the counts so the row
+// is readable at a glance, and the impact carries the card's own summary so
+// the operator can decide whether to open it.
+//
+// ONE CARD PER JOB. A job whose triggers keep firing must not stack twenty
+// identical rows; the same `hasOpenAction` guard the thrash branch uses.
+async function escalateNoFeasiblePlan(
+  db: PrismaClient,
+  input: {
+    jobId: string;
+    trigger: ReplanTrigger;
+    solverRunId: string;
+    outcome: Awaited<ReturnType<typeof solve>>;
+    actor?: { role: string; id: string | null };
+  },
+): Promise<RedispatchOutcome> {
+  const { jobId, trigger, solverRunId, outcome } = input;
+
+  const rejections = outcome.rejected.filter((rejection) => rejection.jobId === jobId);
+  const breakdown = describeRejectionCounts(rejections.map((rejection) => rejection.code));
+  const card = summariseCard(rejections);
+
+  // Logged whatever happens next. The guard below can skip the writes; it must
+  // not skip the record that this run also found nothing, because "it kept
+  // finding nothing" is the interesting shape.
+  logger.warn(
+    { jobId, trigger, solverRunId, optionCount: rejections.length, breakdown },
+    're-solve found no feasible option',
+  );
+
+  if (await hasOpenAction(db, { jobId, kind: 'ESCALATE_NO_FEASIBLE_PLAN' })) {
+    return { outcome: 'NO_OPTION', solverRunId, escalated: false };
+  }
+
+  await appendJobEvent(db, {
+    jobId,
+    eventType: 'NO_FEASIBLE_PLAN',
+    payload: { trigger, solverRunId, optionCount: rejections.length, breakdown },
+    actorRole: input.actor?.role ?? 'SYSTEM',
+    actorId: input.actor?.id ?? null,
+  });
+
+  const action = await requestAction(db, {
+    jobId,
+    kind: 'ESCALATE_NO_FEASIBLE_PLAN',
+    // The breakdown IS the reason. "No feasible plan" on its own is what the
+    // operator already knew from the empty board.
+    reason: `Re-solve after ${trigger} found no crew: ${breakdown}.`,
+    // FLAT VALUES RENDER, NESTED ONES DO NOT — panels/actions.js skips object
+    // values on purpose, because `computed_impact` is written by four callers
+    // with four shapes. So the three things worth reading on the row are flat
+    // and the machine-readable counts are nested: recorded for the audit trail,
+    // and already said in words in the reason line above.
+    impact: {
+      trigger,
+      solverRunId,
+      optionsConsidered: rejections.length,
+      reasonCode: card.reasonCode,
+      whyNoCrew: card.reason,
+      recommendation: card.recommendation,
+      rejectionCounts: countByCode(rejections.map((rejection) => rejection.code)),
+    },
+    actor: input.actor,
+  });
+
+  return {
+    outcome: 'NO_OPTION',
+    solverRunId,
+    escalated: true,
+    actionRequestId: action.actionRequestId,
+  };
+}
+
+function countByCode(codes: RejectionCode[]): Record<string, number> {
+  const counts: Record<string, number> = {};
+  for (const code of codes) counts[code] = (counts[code] ?? 0) + 1;
+  return counts;
+}
+
+// The card's headline three fields, from the rejections already in hand. Built
+// through `buildEscalationCard` rather than re-derived, so the row and the card
+// can never disagree about why this job has no plan.
+function summariseCard(
+  rejections: { code: RejectionCode; detail: string; option: { unitId: string; technicianId: string; estimatedTravelMinutes: number; missingCapabilities: string[] } }[],
+): { reasonCode: string; reason: string; recommendation: string } {
+  const card = buildEscalationCard(
+    'summary',
+    rejections.map((rejection) => ({
+      unitId: rejection.option.unitId,
+      // The unit CODE and the technician's NAME are joins this path does not
+      // have and does not need: nothing in the three fields below reads them.
+      // The card the dispatcher opens does the joins (src/api/escalation.ts).
+      unitCode: rejection.option.unitId,
+      technicianName: null,
+      code: rejection.code,
+      detail: rejection.detail,
+      travelMinutes: rejection.option.estimatedTravelMinutes,
+      missingCapabilities: rejection.option.missingCapabilities,
+    })),
+  );
+  return { reasonCode: card.reasonCode, reason: card.reason, recommendation: card.recommendation };
 }
 
 // ---------------------------------------------------------------------------
