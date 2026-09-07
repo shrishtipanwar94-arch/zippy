@@ -65,6 +65,7 @@ not have to type anything else before Step 1.
 | Postgres, Redis, OSRM | `docker compose up -d`, all three up |
 | database | reset, reseeded, Redis flushed |
 | fleet history | `scripts/demo-prep-beat9.ts` — three RESOLVED battery jobs on `KA01AB1001` |
+| workshop history | `scripts/simulate-200-offers.js` — 200 fabricated outcomes on `WS-KOR-A`, so the learned P(accept) is not running on its prior |
 | board | 21 pending jobs — 4 routine, 10 elevated, 7 high risk — all raised in the last half hour, plus 3 resolved for the fleet history |
 | action queue | empty when handed over; it grows an `ESCALATE_SLA_WINDOW_CLOSED` card per job as the board ages — see the note in Step 6 |
 | simulator | not running; no orphaned process |
@@ -80,10 +81,19 @@ npm run db:reset                                      # drops and reseeds
 docker exec zippy-redis-1 redis-cli FLUSHALL          # stale BullMQ queues
 npx tsx scripts/demo-prep-beat9.ts                    # fleet history
 npx tsx scripts/demo-open-shifts.ts                   # everybody on duty — REQUIRED
+node scripts/simulate-200-offers.js --workshop A --decline-evenings
 npx tsx src/sim/cli.ts --rate 45 --duration 28 --max-jobs 22 --seed 11   --start "$(node -e "console.log(new Date(Date.now()-30*60000).toISOString())")"
 npm run dev                                           # and, separately:
 npm run dev:worker
 ```
+
+`simulate-200-offers` is what stops the learned workshop acceptance model from
+running blind. Without it `acceptance_outcomes` is empty, every workshop sits on
+the same cold-start prior, and the refusal-risk term in the cost function ranks
+nothing. With it, `WS-KOR-A` has a real evening effect — about 0.33 in the
+evening bucket against 0.76–0.82 elsewhere. **The outcomes are fabricated**: no
+workshop has ever answered anything in this system, because there is no workshop
+actor to answer with. The other eleven workshops stay on the prior.
 
 The `--start` matters too. Without it the simulator dates its jobs 2026-06-01,
 every SLA window on the board has closed, and the dispatcher's action queue
@@ -648,6 +658,21 @@ Do not spend time writing these down again.
    manually* and type `28.696` / `77.207`.
 8. **The dispatcher had no fleet-level signal for a staffing gap.** There is now
    a `Crew on shift` component on the health ladder — see Section 0.
+9. **A tow used to be dispatched into a dead end.** The saga's third leg is a
+   workshop confirmation and nothing in the product can answer one — no
+   workshop role, no route, no adapter — so a technician who accepted a tow was
+   released 45 seconds later by a timeout, with a notice saying a re-plan took
+   the job. It had not. Executing a reassignment whose plan names a workshop
+   now refuses before anything is reserved and raises the same
+   `No crew can take this job` card, with a reason naming the missing
+   counterparty. Tows are still undispatchable — that is a feature nobody has
+   built, written up at INTERVIEW.md §15.44 — but the failure is now legible
+   instead of arriving three quarters of a minute late on somebody's phone.
+10. **The job status now follows the reservation.** It read `INTAKE` while a
+   technician's phone counted down, so the driver was told "Finding someone
+   equipped for this" about a job already offered to a named person. `startSaga`
+   writes `OFFERED` (and `AWAITING_DESTINATION` for a tow) conditionally, so a
+   late write cannot drag a committed job backwards.
 
 ---
 

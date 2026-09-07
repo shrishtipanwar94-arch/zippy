@@ -1070,35 +1070,45 @@ The most valuable section. In rough order of severity:
     shipped. `BUILD_PHASES.md:929`, the Phase 9 DO NOT list, says "no
     reservations **yet**" — Phase 12 then built the saga without ever
     specifying what triggers it, and Phase 13 wired the single trigger that
-    phase happened to need. And the schema still carries the shape of the
-    intended path: **five `JobStatus` values are never written by any code** —
-    `OFFERED`, `UNSERVICEABLE`, `AWAITING_DESTINATION` and `TOWING` have no
-    writer at all, and `PLANNED` is written only by `saga.ts:392` (a
-    compensation putting a job back) and `redispatch.ts:474` (releasing a crew
-    on re-plan), never on the way forward. Nothing moves a job INTAKE →
-    PLANNED → OFFERED → COMMITTED, which is the ladder Phase 15's own spec
-    writes out.
+    phase happened to need.
 
-    All five have finished driver copy in `domain/driverNarrative.ts`. "We have
-    found a crew for this and are contacting them now" (PLANNED), "We have
-    asked a technician to come. Waiting for them to confirm" (OFFERED),
-    "Confirming a workshop that can take your car" (AWAITING_DESTINATION),
-    "Your car is on its way to the workshop" (TOWING) and "We have not been
-    able to reach you yet. A dispatcher is looking at this now" (UNSERVICEABLE)
-    are all written, reviewed, and unreachable. Dead copy is the cheapest
-    possible evidence that a path was specified and never built, and it sat
-    there through four checkpoints without anybody noticing, because reading
-    the code from the top never takes you past the point where it stops.
+    THE SCHEMA CARRIED THE SHAPE OF THE INTENDED PATH, as dead statuses. Five
+    `JobStatus` values had no writer anywhere: `OFFERED`, `UNSERVICEABLE`,
+    `AWAITING_DESTINATION` and `TOWING`, plus `PLANNED`, which was written only
+    by a compensation (`saga.ts`) and by releasing a crew on re-plan
+    (`redispatch.ts`) — never on the way forward. Every one of them has
+    finished driver copy in `domain/driverNarrative.ts`: "We have asked a
+    technician to come. Waiting for them to confirm", "Confirming a workshop
+    that can take your car", "Your car is on its way to the workshop". Written,
+    reviewed, unreachable. Dead copy is the cheapest possible evidence that a
+    path was specified and never built, and it sat through four checkpoints
+    because reading the code from the top never takes you past the point where
+    it stops.
 
-    What is NOT wrong: every piece the missing step needs exists and is tested.
-    The saga has compensations and a recovery routine, offers expire, holds are
-    version-checked, and twelve concurrency tests run against a real Postgres.
-    The gap is one call, and the reason it has not been made is that deciding
-    whether taking a plan should reserve a crew — or should raise a RECOMMEND
-    per assignment, which is the shape the rest of the system uses — is a
-    product decision, not a refactor. Until it is made, the console's plans
-    panel says so on screen (`panels/plans.js`) and its button reads "Record
-    this decision" rather than "Select this plan".
+    **THE THREE GAPS ARE NOT THE SAME SIZE, and conflating them is the mistake
+    to avoid when talking about this.**
+
+    `OFFERED` **was one line, and it is now written.** `startSaga` sets it when
+    leg 2 goes out, conditionally on the two statuses a job can legitimately be
+    offered from. It closed a defect a customer could see: while a van was held
+    and a named technician's phone counted down forty-five seconds, the driver's
+    screen read "Finding someone equipped for this", because that is what the
+    narrative returns for a job still marked INTAKE. `AWAITING_DESTINATION` is
+    written in the same place for the same reason, and is unreachable for a
+    different one — see §15.44.
+
+    **The commit path is one call from closed.** Every piece the missing step
+    needs exists and is tested: the saga has compensations and a recovery
+    routine, offers expire, holds are version-checked, twelve concurrency tests
+    run against a real Postgres. What is missing is deciding whether taking a
+    plan should reserve a crew directly, or should raise a RECOMMEND per
+    assignment — which is the shape every other decision in this system already
+    has. That is a product decision, not a refactor, and it is the honest reason
+    it is still open. Until it is made, the console says so on screen
+    (`panels/plans.js`) and its button reads "Record this decision".
+
+    **The tow path is not one call from anything** — it needs a counterparty
+    that was never specified. §15.44.
 
 42. **A real coordinate 1,742km away was accepted, filed into a Bengaluru zone,
     and routed against a Bengaluru road graph — by three layers each doing
@@ -1147,6 +1157,71 @@ The most valuable section. In rough order of severity:
     every one of the eight rejection codes was already being computed, stored
     and thrown away at the last step.
 
+44. **ZIPPY MODELS WORKSHOPS AS DESTINATIONS IT REASONS ABOUT, NOT AS
+    PARTICIPANTS — and the saga's third leg needs a participant.** This is the
+    largest of the three gaps in §15.41 and the only one that is not a wiring
+    job.
+
+    Everything on the reasoning side is real and works. `WorkshopAuthorisation`
+    per brand with an EV class flag, `WorkshopHours`, a shortlist screened by
+    authorisation and opening hours, a learned P(accept) from a Beta-Bernoulli
+    prior over `AcceptanceOutcome`, `destinationRefusalRisk` as a term in the
+    cost function, `DESTINATION_NOT_AUTHORISED` and
+    `DESTINATION_EV_CLASS_MISMATCH` as separate feasibility codes, and a
+    screening panel in the inspector. Phase 22's spec asks for exactly that and
+    it is all there.
+
+    What Phase 22's spec never mentions is a job status, and it never mentions
+    an actor. **There is no WORKSHOP role** — the enum is DRIVER, TECHNICIAN,
+    DISPATCHER, FLEET_MANAGER. **No route anywhere accepts a destination
+    decision.** `recordDestinationDecision` exists, is correct, and is called by
+    nothing but `tests/saga.test.ts`. So leg 3 is created at PROPOSED, and the
+    only thing that can ever move it is the offer-expiry worker, which times it
+    out at the same forty-five second deadline the technician offer uses —
+    after which `advanceSaga` compensates the entire reservation.
+
+    **From the roadside that was worse than not dispatching at all.** A
+    technician accepts a tow; forty-five seconds later they are released by a
+    timeout on a leg they could not have influenced, and their phone shows the
+    Phase 13 release notice saying a re-plan took the job away. It did not.
+    Nothing took it, and nothing could ever have completed it. So
+    `executeReassignment` now refuses to start a saga whose plan names a
+    workshop, before the current crew is released, and raises the same
+    `ESCALATE_NO_FEASIBLE_PLAN` card a no-crew re-solve raises. Failing closed
+    is not a fix — tows remain undispatchable — but a refusal an operator can
+    read beats a dispatch that unwinds itself.
+
+    `TOWING` is a second, separable piece of the same gap and is worth naming
+    on its own: the technician's ladder (`domain/jobLadder.ts`) is
+    `COMMITTED → EN_ROUTE → ON_SITE → DIAGNOSING → WORKING → RESOLVED`, and its
+    own comment lists "awaiting a workshop" as off the ladder. There is no tow
+    rung. A technician towing a car today would press the same five buttons as
+    one changing a tyre. `TOWING` appears nowhere in `BUILD_PHASES.md` at all —
+    not cut, not deferred, never written down.
+
+    **QUALIFY THE LEARNED P(accept) ACCORDINGLY, because this is where a
+    resume claim would overreach.** The estimator is built, the formula is a
+    conjugate prior rather than a model, and it demonstrably moves — §8 records
+    the measurement: 5 accepted / 50 refused in the evening bucket at a 20%
+    ground-truth rate produced `p_accept = 0.2` exactly. But that measurement
+    came from `scripts/simulate-200-offers.js`, which fabricates outcomes
+    directly. **No workshop has ever accepted or refused anything in this
+    system, because none can.** In a running instance `acceptance_outcomes` is
+    empty and every workshop is scored on the cold-start prior, which means
+    `destinationRefusalRisk` currently contributes the same constant to every
+    destination and ranks nothing. The demo prep runs that script against one
+    seeded workshop so the mechanism is visible and the evening effect is real;
+    the other eleven remain on the prior. The correct claim is "built a learned
+    acceptance model and verified it against fabricated ground truth", never
+    "learned from operational data".
+
+    The size of it, plainly: a workshop has to become something that can be
+    asked and can answer — a role and a surface, or a webhook and an adapter,
+    or a dispatcher confirming by phone on the workshop's behalf, which is what
+    most operators would actually do on day one. Then a tow rung on the ladder.
+    Then the statuses light up on their own, because `startSaga` already writes
+    `AWAITING_DESTINATION` and is waiting for something to answer it.
+
 ## 16. How I Would Improve It
 
 **First, above everything below: decide what a dispatcher pressing Solve is
@@ -1159,6 +1234,15 @@ case. Either closes five dead job statuses with it. It is one call in
 `decisionRecords.ts` and a product decision I have not made rather than an
 engineering one I have not done, which is exactly why it survived four
 checkpoints.
+
+**Second: decide what a workshop is** (§15.44). Today it is a row the solver
+reasons about; leg 3 of the saga needs something that can be asked and can
+answer. The cheapest honest version is not an integration — it is a dispatcher
+confirming a destination by phone on the workshop's behalf, which is what an
+operator would do on day one and which needs one route and one button. A
+workshop login or a webhook is the version that scales, and neither is a Phase
+22 job that was missed; it was never specified. A tow rung on the technician's
+ladder follows it.
 
 Then, in the order I would actually do it: wire the triggers that already have
 event sources as Phases 15/15b/15c build them, and raise `UNIT_BREAKDOWN`'s
@@ -1256,14 +1340,21 @@ machine:
   update mechanism a symptom answer goes through — measured: two prior
   incidents cut a stated symptom's question count from one to zero.
 - Built a **destination network with a learned acceptance probability** — a
-  Beta-Bernoulli conjugate prior over real accept/decline/timeout outcomes,
-  no training loop — that a real cost term prices into which workshop a
-  tow is sent to, resolved once per job inside the same candidate-generation
-  pass that resolves part sourcing, so a genuine third dimension of choice
-  never grew the assignment matrix. Measured: a controlled decline-history
+  Beta-Bernoulli conjugate prior over accept/decline/timeout outcomes, no
+  training loop — that a real cost term prices into which workshop a tow is
+  sent to, resolved once per job inside the same candidate-generation pass
+  that resolves part sourcing, so a genuine third dimension of choice never
+  grew the assignment matrix. Measured: a controlled decline-history
   simulation moved the learned probability from a 0.8 cold-start prior to
   exactly 0.2 in the affected bucket, and the workshop ranking flipped
   accordingly in a real solve.
+  **Say "verified against fabricated ground truth", never "learned from
+  operational data."** The outcomes came from
+  `scripts/simulate-200-offers.js`; no workshop has ever answered anything in
+  this system, because there is no workshop actor to answer with (§15.44). In a
+  running instance `acceptance_outcomes` is empty, every workshop sits on the
+  cold-start prior, and the refusal-risk term therefore ranks nothing. The
+  estimator is real and the operational history is not.
 
 Not claimable: dispatch quality against real breakdowns, latency under load,
 throughput, and anything about the Anthropic provider path beyond "it

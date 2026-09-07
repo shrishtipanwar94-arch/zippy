@@ -30,7 +30,7 @@
 // mid-saga must not leave a unit held forever. `recoverSagas` is the startup
 // routine that finishes or compensates whatever it finds.
 
-import type { Prisma, PrismaClient, SagaState } from '@prisma/client';
+import type { JobStatus, Prisma, PrismaClient, SagaState } from '@prisma/client';
 import { appendJobEvent } from '../intake/events.js';
 import { createHold, releaseHold, consumeHold } from './holds.js';
 import { proposeOffer, respondToOffer } from './offers.js';
@@ -106,6 +106,21 @@ export async function startSaga(
     data: { dispatchOfferId: saga.id },
   });
 
+  // THE JOB SAYS SO TOO. `OFFERED` has existed in the schema since Phase 1 and
+  // nothing ever wrote it: the offer lived on `technician_offers` and
+  // `dispatch_offers` while the job row stayed exactly as it was. The
+  // consequence was visible to a customer — a van held, a named technician's
+  // phone counting down forty-five seconds, and the driver's screen reading
+  // "Finding someone equipped for this", because that is what
+  // driverNarrative.ts returns for a job still marked INTAKE.
+  //
+  // CONDITIONAL, and the condition is what makes it safe. A saga whose write
+  // arrives late must never drag a job backwards out of COMMITTED, so only the
+  // two statuses a job can legitimately be offered FROM are named. Zero rows
+  // affected means somebody else got there first, and that is not an error —
+  // it is the same optimistic pattern every unit write in this file uses.
+  await setJobStatus(db, input.jobId, 'OFFERED', ['INTAKE', 'PLANNED']);
+
   // LEG 3, tows only. The workshop side is a stub until Phase 22: the row is
   // real and the state machine treats it as a real leg, but nothing sends it
   // anywhere, so only a test or a future workshop adapter answers it.
@@ -119,6 +134,20 @@ export async function startSaga(
         expiresAt: offer.expiresAt,
       },
     });
+
+    // AND THE JOB SAYS IT IS WAITING ON A WORKSHOP, for the same reason leg 2
+    // now says it has been offered. `AWAITING_DESTINATION` is the more precise
+    // of the two — a job with both legs outstanding is waiting on the workshop
+    // in a way a driver's screen already has words for ("Confirming a workshop
+    // that can take your car").
+    //
+    // UNREACHABLE IN PRODUCTION TODAY, and deliberately written anyway. Nothing
+    // can answer a destination offer — there is no workshop role, no route and
+    // no adapter — so `executeReassignment` now refuses to start a saga that
+    // would need one (see the guard there). This line exists so that the day a
+    // counterparty is built, the status it should set is already correct rather
+    // than being a second thing to remember.
+    await setJobStatus(db, input.jobId, 'AWAITING_DESTINATION', ['INTAKE', 'PLANNED', 'OFFERED']);
   }
 
   await db.dispatchOffer.update({
@@ -127,6 +156,23 @@ export async function startSaga(
   });
 
   return { outcome: 'AWAITING_LEGS', sagaId: saga.id };
+}
+
+// MOVING THE JOB'S OWN STATUS, CONDITIONALLY.
+//
+// One helper rather than two inline `updateMany` calls, because the rule is the
+// same both times and it is easy to get wrong in a way nothing would notice:
+// an unconditional update here would let a slow write from an abandoned saga
+// pull a committed job back to OFFERED. Naming the statuses it may move FROM
+// makes the write safe without a version column, which is the same argument
+// the unit hold makes one leg earlier.
+async function setJobStatus(
+  db: PrismaClient,
+  jobId: string,
+  to: JobStatus,
+  from: JobStatus[],
+): Promise<void> {
+  await db.job.updateMany({ where: { id: jobId, status: { in: from } }, data: { status: to } });
 }
 
 // ---------------------------------------------------------------------------
@@ -388,7 +434,14 @@ async function finishAsRequeued(
     await tx.job.updateMany({
       // Only if it never got committed — a job assigned by a LATER saga must
       // not be dragged back to PLANNED by an earlier one compensating.
-      where: { id: jobId, status: { in: ['INTAKE', 'PLANNED', 'OFFERED'] } },
+      // AWAITING_DESTINATION joined this list when startSaga started writing
+      // it. Without it a compensated tow would be left stranded in a state
+      // nothing else moves out of — the list has to name every status the
+      // forward path can put a job in before it commits.
+      where: {
+        id: jobId,
+        status: { in: ['INTAKE', 'PLANNED', 'OFFERED', 'AWAITING_DESTINATION'] },
+      },
       data: { status: 'PLANNED' },
     });
     await appendJobEvent(tx, {

@@ -109,6 +109,34 @@ afterAll(async () => {
   await prismaBase.$disconnect();
 });
 
+// THIS FILE'S FIXTURE JOB IS A TOW, and that was not noticed until the
+// destination guard was added.
+//
+// `REQUIRED` includes FLATBED_LOADING, so `faultsNeedTow` is true for every job
+// here and candidate generation resolves a destination for every option — which
+// is why the fixture goes to the trouble of creating an authorised workshop.
+// The consequence is that the two tests below were, until now, exercising a
+// reservation that could never have committed in production: leg 3 would have
+// sat at PROPOSED and timed out. They passed because they compensate by hand
+// rather than waiting forty-five seconds for the timeout that would have done
+// it for them.
+//
+// So they say so, and clear the workshop before executing. What they are about
+// is the reservation path and the release path; the tow path has its own
+// describe block below and its own expectations.
+async function withoutDestination(actionRequestId: string): Promise<void> {
+  const action = await prismaBase.actionRequest.findUniqueOrThrow({
+    where: { id: actionRequestId },
+    select: { computedImpact: true },
+  });
+  const impact = action.computedImpact as Record<string, unknown>;
+  expect(impact.destinationWorkshopId).toBe(`${PREFIX}-workshop`);
+  await prismaBase.actionRequest.update({
+    where: { id: actionRequestId },
+    data: { computedImpact: { ...impact, destinationWorkshopId: null } },
+  });
+}
+
 describe('a trigger becomes a reservation', () => {
   it('re-solves, recommends, and starts a real saga when executed', async () => {
     await resetUnits();
@@ -144,7 +172,9 @@ describe('a trigger becomes a reservation', () => {
     expect(run?.trigger).toBe('TECHNICIAN_DECLINED');
 
     // 2. THE DISPATCHER EXECUTES. This is the seam: Phase 12's saga finally
-    // has a caller.
+    // has a caller. The fixture's job is a tow — see `withoutDestination` — and
+    // this test is about the reservation, not the workshop.
+    await withoutDestination(outcome.actionRequestId);
     const executed = await executeReassignment(prismaBase, {
       actionRequestId: outcome.actionRequestId,
       actor: DISPATCHER,
@@ -170,6 +200,131 @@ describe('a trigger becomes a reservation', () => {
     ).toBe(1);
 
     await compensateSaga(prismaBase, { sagaId: executed.sagaId, reason: 'test cleanup' });
+  });
+});
+
+// THE LEG NOBODY CAN ANSWER.
+//
+// startSaga's third leg is a destination offer, and no counterparty for it
+// exists: there is no WORKSHOP role, no route accepts a destination decision,
+// and `recordDestinationDecision` is called only by tests. The leg is created,
+// sits at PROPOSED, and the offer-expiry worker times it out at the same
+// forty-five second deadline the technician offer uses — at which point the
+// whole reservation compensates.
+//
+// From the roadside that is a technician accepting a tow and being released
+// three quarters of a minute later by a timeout they could not have
+// influenced, with a notice saying a re-plan took the job. Nothing took it.
+//
+// So the reservation is refused before it starts. This test is the one that
+// matters: it asserts that NOTHING happened — no saga, no hold, no offer — and
+// that the crew already on the job was not released on the way out.
+describe('a plan that needs a workshop nobody can ask', () => {
+  it('refuses to start the saga and escalates instead', async () => {
+    await resetUnits();
+    const jobId = await freshJob();
+
+    const outcome = await handleTrigger(prismaBase, {
+      jobId,
+      trigger: 'TECHNICIAN_DECLINED',
+      actor: DISPATCHER,
+    });
+    expect(outcome.outcome).toBe('REASSIGNMENT_PROPOSED');
+    if (outcome.outcome !== 'REASSIGNMENT_PROPOSED') throw new Error('unreachable');
+
+    // The plan names a workshop, and it does so on its own — this fixture's job
+    // needs FLATBED_LOADING, so candidate generation resolves a destination for
+    // it. Nothing is written onto the action here; the guard is being shown the
+    // real output of a real solve.
+    const proposed = await prismaBase.actionRequest.findUniqueOrThrow({
+      where: { id: outcome.actionRequestId },
+      select: { computedImpact: true },
+    });
+    expect((proposed.computedImpact as Record<string, unknown>).destinationWorkshopId).toBe(
+      `${PREFIX}-workshop`,
+    );
+
+    const executed = await executeReassignment(prismaBase, {
+      actionRequestId: outcome.actionRequestId,
+      actor: DISPATCHER,
+    });
+
+    expect(executed.outcome).toBe('DESTINATION_UNCONFIRMABLE');
+    if (executed.outcome !== 'DESTINATION_UNCONFIRMABLE') throw new Error('unreachable');
+    expect(executed.escalated).toBe(true);
+
+    // NOTHING WAS RESERVED. Each of these is a separate way the old behaviour
+    // failed: a saga row, a held van, and a technician holding an offer that
+    // was going to be taken back off them.
+    expect(await prismaBase.dispatchOffer.count({ where: { jobId } })).toBe(0);
+    expect(await unitStatus(`${PREFIX}-unit-broad`)).toBe('AVAILABLE');
+    expect(await prismaBase.technicianOffer.count({ where: { job: { id: jobId } } })).toBe(0);
+    expect(await prismaBase.destinationOffer.count({ where: { jobId } })).toBe(0);
+
+    // AND THE JOB DID NOT MOVE. A refusal must not leave it looking offered.
+    const job = await prismaBase.job.findUniqueOrThrow({
+      where: { id: jobId },
+      select: { status: true, assignedUnitId: true },
+    });
+    expect(job.assignedUnitId).toBeNull();
+    expect(job.status).not.toBe('OFFERED');
+    expect(job.status).not.toBe('AWAITING_DESTINATION');
+
+    // The operator is told, on the worklist and on the timeline — the same
+    // trail a no-crew re-solve leaves, because it is the same fact for them.
+    const escalation = await prismaBase.actionRequest.findUniqueOrThrow({
+      where: { id: executed.actionRequestId! },
+      select: { kind: true, tier: true, status: true, reason: true, computedImpact: true },
+    });
+    expect(escalation.kind).toBe('ESCALATE_NO_FEASIBLE_PLAN');
+    expect(escalation.tier).toBe('RECOMMEND');
+    expect(escalation.status).toBe('PENDING');
+    expect(escalation.reason).toContain('no workshop counterparty');
+    expect((escalation.computedImpact as Record<string, unknown>).workshopId).toBe(
+      `${PREFIX}-workshop`,
+    );
+
+    const events = await prismaBase.jobEvent.findMany({
+      where: { jobId, eventType: 'NO_FEASIBLE_PLAN' },
+      select: { payload: true },
+    });
+    expect(events).toHaveLength(1);
+    expect((events[0]!.payload as Record<string, unknown>).reason).toBe(
+      'DESTINATION_UNCONFIRMABLE',
+    );
+  });
+
+  // THE CREW ALREADY ON THE JOB KEEPS IT. A job we cannot dispatch must not
+  // also lose the crew it already had — which is what would happen if the
+  // guard sat after `releaseCurrentCrew` rather than before it.
+  it('does not release the crew already on the job', async () => {
+    await resetUnits();
+    // The narrow crew is already on it, so the re-solve wants to move the job
+    // and `releaseCurrentCrew` is on the path the guard has to get in front of.
+    const jobId = await freshJob({
+      assignedTo: { unitId: `${PREFIX}-unit-narrow`, technicianId: `${PREFIX}-tech-narrow` },
+    });
+
+    const outcome = await handleTrigger(prismaBase, {
+      jobId,
+      trigger: 'DIAGNOSIS_CHANGED',
+      actor: DISPATCHER,
+    });
+    expect(outcome.outcome).toBe('REASSIGNMENT_PROPOSED');
+    if (outcome.outcome !== 'REASSIGNMENT_PROPOSED') throw new Error('unreachable');
+
+    const executed = await executeReassignment(prismaBase, {
+      actionRequestId: outcome.actionRequestId,
+      actor: DISPATCHER,
+    });
+    expect(executed.outcome).toBe('DESTINATION_UNCONFIRMABLE');
+
+    const job = await prismaBase.job.findUniqueOrThrow({
+      where: { id: jobId },
+      select: { assignedTechnicianId: true, assignedUnitId: true },
+    });
+    expect(job.assignedTechnicianId).toBe(`${PREFIX}-tech-narrow`);
+    expect(job.assignedUnitId).toBe(`${PREFIX}-unit-narrow`);
   });
 });
 
@@ -210,6 +365,9 @@ describe('the crew already on site', () => {
     });
     expect(beforeExecute.assignedTechnicianId).toBe(`${PREFIX}-tech-narrow`);
 
+    // The fixture's job is a tow; this test is about the release. See
+    // `withoutDestination`.
+    await withoutDestination(outcome.actionRequestId);
     const executed = await executeReassignment(prismaBase, {
       actionRequestId: outcome.actionRequestId,
       actor: DISPATCHER,

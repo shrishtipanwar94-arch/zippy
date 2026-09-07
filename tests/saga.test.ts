@@ -125,6 +125,124 @@ afterAll(async () => {
   await prismaBase.$disconnect();
 });
 
+// THE JOB ROW HAS TO SAY WHAT IS HAPPENING TO IT.
+//
+// `OFFERED` sat in the schema from Phase 1 with no writer. The offer lived on
+// `technician_offers` and `dispatch_offers` and the job stayed INTAKE — so
+// while a van was held and a named technician's phone counted down forty-five
+// seconds, the driver's screen read "Finding someone equipped for this",
+// because that is what driverNarrative returns for INTAKE.
+describe('the job status follows the reservation', () => {
+  async function jobStatus(jobId: string): Promise<string> {
+    const job = await prismaBase.job.findUniqueOrThrow({
+      where: { id: jobId },
+      select: { status: true },
+    });
+    return job.status;
+  }
+
+  it('reads OFFERED while a technician offer is outstanding, and COMMITTED after', async () => {
+    const jobId = await freshJob();
+    const { unitId, technicianId, version } = await freshUnit('status-offered');
+    // `freshJob` creates the job already PLANNED, which is the state a job is
+    // in when a dispatcher executes a reassignment for it.
+    expect(await jobStatus(jobId)).toBe('PLANNED');
+
+    const started = await startSaga(prismaBase, {
+      jobId,
+      unitId,
+      technicianId,
+      expectedUnitVersion: version,
+      scheduleExpiry: noSchedule,
+    });
+    if (started.outcome !== 'AWAITING_LEGS') throw new Error('setup failed');
+
+    // The window this test exists for: held, offered, nobody has answered.
+    expect(await jobStatus(jobId)).toBe('OFFERED');
+    expect(await unitStatus(unitId)).toBe('HELD');
+
+    await recordTechnicianDecision(prismaBase, { sagaId: started.sagaId, decision: 'ACCEPTED' });
+    expect(await jobStatus(jobId)).toBe('COMMITTED');
+  });
+
+  it('goes back to PLANNED when the offer is declined', async () => {
+    const jobId = await freshJob();
+    const { unitId, technicianId, version } = await freshUnit('status-declined');
+
+    const started = await startSaga(prismaBase, {
+      jobId,
+      unitId,
+      technicianId,
+      expectedUnitVersion: version,
+      scheduleExpiry: noSchedule,
+    });
+    if (started.outcome !== 'AWAITING_LEGS') throw new Error('setup failed');
+    expect(await jobStatus(jobId)).toBe('OFFERED');
+
+    await recordTechnicianDecision(prismaBase, { sagaId: started.sagaId, decision: 'DECLINED' });
+    expect(await jobStatus(jobId)).toBe('PLANNED');
+  });
+
+  it('reads AWAITING_DESTINATION when the plan also needs a workshop', async () => {
+    const jobId = await freshJob();
+    const { unitId, technicianId, version } = await freshUnit('status-destination');
+
+    const started = await startSaga(prismaBase, {
+      jobId,
+      unitId,
+      technicianId,
+      expectedUnitVersion: version,
+      workshopId: `${PREFIX}-workshop`,
+      scheduleExpiry: noSchedule,
+    });
+    if (started.outcome !== 'AWAITING_LEGS') throw new Error('setup failed');
+
+    // The more precise of the two: both legs are outstanding, and the workshop
+    // is the one the driver's screen has words for.
+    expect(await jobStatus(jobId)).toBe('AWAITING_DESTINATION');
+
+    // AND THE COMPENSATION KNOWS ABOUT IT. This is the half that would have
+    // broken quietly: compensateSaga names the statuses it may move a job out
+    // of, and a job stranded in AWAITING_DESTINATION is one nothing else moves.
+    await recordDestinationDecision(prismaBase, {
+      sagaId: started.sagaId,
+      decision: 'DECLINED',
+    });
+    expect(await jobStatus(jobId)).toBe('PLANNED');
+  });
+
+  // A LATE WRITE MUST NOT DRAG A JOB BACKWARDS. The status writes are
+  // conditional on the statuses a job can legitimately be offered from, which
+  // is what makes them safe without a version column.
+  it('does not pull a committed job back to OFFERED', async () => {
+    const jobId = await freshJob();
+    const first = await freshUnit('status-commit-first');
+    const second = await freshUnit('status-commit-second');
+
+    const committed = await startSaga(prismaBase, {
+      jobId,
+      unitId: first.unitId,
+      technicianId: first.technicianId,
+      expectedUnitVersion: first.version,
+      scheduleExpiry: noSchedule,
+    });
+    if (committed.outcome !== 'AWAITING_LEGS') throw new Error('setup failed');
+    await recordTechnicianDecision(prismaBase, { sagaId: committed.sagaId, decision: 'ACCEPTED' });
+    expect(await jobStatus(jobId)).toBe('COMMITTED');
+
+    // A second saga starting on the same job — the shape a duplicated execute
+    // or a stale action produces.
+    await startSaga(prismaBase, {
+      jobId,
+      unitId: second.unitId,
+      technicianId: second.technicianId,
+      expectedUnitVersion: second.version,
+      scheduleExpiry: noSchedule,
+    });
+    expect(await jobStatus(jobId)).toBe('COMMITTED');
+  });
+});
+
 describe('the happy path', () => {
   it('commits when both legs accept', async () => {
     const jobId = await freshJob();

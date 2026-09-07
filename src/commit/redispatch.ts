@@ -19,7 +19,7 @@
 // all. The cost being defended against is not the reassignment, it is the
 // oscillation.
 
-import type { PrismaClient } from '@prisma/client';
+import type { Prisma, PrismaClient } from '@prisma/client';
 import { logger } from '../infra/logger.js';
 import { config } from '../infra/config.js';
 import {
@@ -254,24 +254,12 @@ async function escalateNoFeasiblePlan(
     're-solve found no feasible option',
   );
 
-  if (await hasOpenAction(db, { jobId, kind: 'ESCALATE_NO_FEASIBLE_PLAN' })) {
-    return { outcome: 'NO_OPTION', solverRunId, escalated: false };
-  }
-
-  await appendJobEvent(db, {
+  const raised = await raiseNoFeasiblePlan(db, {
     jobId,
-    eventType: 'NO_FEASIBLE_PLAN',
-    payload: { trigger, solverRunId, optionCount: rejections.length, breakdown },
-    actorRole: input.actor?.role ?? 'SYSTEM',
-    actorId: input.actor?.id ?? null,
-  });
-
-  const action = await requestAction(db, {
-    jobId,
-    kind: 'ESCALATE_NO_FEASIBLE_PLAN',
     // The breakdown IS the reason. "No feasible plan" on its own is what the
     // operator already knew from the empty board.
     reason: `Re-solve after ${trigger} found no crew: ${breakdown}.`,
+    eventPayload: { trigger, solverRunId, optionCount: rejections.length, breakdown },
     // FLAT VALUES RENDER, NESTED ONES DO NOT — panels/actions.js skips object
     // values on purpose, because `computed_impact` is written by four callers
     // with four shapes. So the three things worth reading on the row are flat
@@ -289,12 +277,50 @@ async function escalateNoFeasiblePlan(
     actor: input.actor,
   });
 
-  return {
-    outcome: 'NO_OPTION',
-    solverRunId,
-    escalated: true,
-    actionRequestId: action.actionRequestId,
-  };
+  return { outcome: 'NO_OPTION', solverRunId, ...raised };
+}
+
+// THE THREE WRITES THAT MAKE A DEAD END VISIBLE, in one place.
+//
+// Two callers now: a re-solve that found no crew, and a plan that needs a
+// workshop nothing can answer. They arrive at the same operational fact — this
+// job is not going anywhere and a person has to decide what happens next — so
+// they leave the same trail: a `NO_FEASIBLE_PLAN` event the timeline can be
+// filtered by, and a RECOMMEND card on the worklist carrying the reason.
+//
+// ONE CARD PER JOB. A job whose triggers keep firing must not refill a queue
+// somebody is trying to read.
+async function raiseNoFeasiblePlan(
+  db: PrismaClient,
+  input: {
+    jobId: string;
+    reason: string;
+    eventPayload: Prisma.InputJsonValue;
+    impact: Prisma.InputJsonValue;
+    actor?: { role: string; id: string | null };
+  },
+): Promise<{ escalated: boolean; actionRequestId?: string }> {
+  if (await hasOpenAction(db, { jobId: input.jobId, kind: 'ESCALATE_NO_FEASIBLE_PLAN' })) {
+    return { escalated: false };
+  }
+
+  await appendJobEvent(db, {
+    jobId: input.jobId,
+    eventType: 'NO_FEASIBLE_PLAN',
+    payload: input.eventPayload,
+    actorRole: input.actor?.role ?? 'SYSTEM',
+    actorId: input.actor?.id ?? null,
+  });
+
+  const action = await requestAction(db, {
+    jobId: input.jobId,
+    kind: 'ESCALATE_NO_FEASIBLE_PLAN',
+    reason: input.reason,
+    impact: input.impact,
+    actor: input.actor,
+  });
+
+  return { escalated: true, actionRequestId: action.actionRequestId };
 }
 
 function countByCode(codes: RejectionCode[]): Record<string, number> {
@@ -366,6 +392,12 @@ export type ExecuteOutcome =
   // different facts, and a caller told the first while the second is false
   // has been misled.
   | { outcome: 'SAGA_LOST_RACE'; sagaId: string; reason: string }
+  // THE PLAN NEEDS A WORKSHOP TO SAY YES AND NOTHING CAN ASK ONE. Its own
+  // outcome rather than a NOT_EXECUTABLE, because the two mean opposite things
+  // to whoever is reading: NOT_EXECUTABLE is "this action is malformed or
+  // stale", and this is "the action is perfectly well formed and the product
+  // cannot honour it". A dispatcher is owed the difference.
+  | { outcome: 'DESTINATION_UNCONFIRMABLE'; reason: string; escalated: boolean; actionRequestId?: string }
   | { outcome: 'NOT_EXECUTABLE'; reason: string };
 
 type ReassignImpact = {
@@ -395,6 +427,62 @@ export async function executeReassignment(
     return { outcome: 'NOT_EXECUTABLE', reason: 'action carries no target assignment' };
   }
 
+  // FAIL CLOSED ON THE LEG NOBODY CAN ANSWER.
+  //
+  // startSaga's third leg is a destination offer, and there is no counterparty
+  // for it anywhere in this product: no WORKSHOP role, no route that accepts a
+  // destination decision, no adapter. `recordDestinationDecision` exists and is
+  // called only by tests. So the leg is created, sits at PROPOSED, and is timed
+  // out by the offer-expiry worker at the same forty-five second deadline the
+  // technician offer uses — at which point `advanceSaga` compensates the whole
+  // reservation.
+  //
+  // WHAT THAT LOOKED LIKE FROM THE ROADSIDE: a technician accepts a tow, and
+  // forty-five seconds later is released by a timeout on a leg they could not
+  // have influenced, with a notice on their phone saying a re-plan took the job
+  // away. It did not. Nothing took it; nothing could ever have completed it.
+  //
+  // So the reservation is refused BEFORE it starts, and before the current crew
+  // is released — a job we cannot dispatch must not also lose the crew it
+  // already had. The escalation this raises is the same one a no-crew re-solve
+  // raises, because it is the same fact for the operator: this job needs a
+  // human now.
+  //
+  // THIS IS A GUARD, NOT A FIX. It stops the product doing something worse than
+  // nothing. Tows stay undispatchable until a workshop is a participant rather
+  // than a destination — see INTERVIEW.md §15.44.
+  const workshopId = impact?.destinationWorkshopId ?? null;
+  if (workshopId) {
+    const raised = await raiseNoFeasiblePlan(db, {
+      jobId: action.jobId,
+      reason:
+        'This job needs a tow and the plan names a workshop, but no workshop can be asked ' +
+        'to confirm it — there is no workshop counterparty in the system. Dispatching would ' +
+        'hold a van, offer the job, and release the technician 45 seconds later on a timeout.',
+      eventPayload: { reason: 'DESTINATION_UNCONFIRMABLE', workshopId, actionRequestId: action.id },
+      impact: {
+        reasonCode: 'NO_DESTINATION_AVAILABLE',
+        whyNoCrew: 'The plan requires a workshop to accept the vehicle, and nothing can ask one.',
+        recommendation:
+          'Arrange the tow destination by phone and record it outside the system, or hand ' +
+          'this job to a partner operator.',
+        workshopId,
+      },
+      actor: input.actor,
+    });
+
+    logger.warn(
+      { jobId: action.jobId, workshopId, actionRequestId: action.id },
+      'refused to start a saga whose destination leg cannot be answered',
+    );
+
+    return {
+      outcome: 'DESTINATION_UNCONFIRMABLE',
+      reason: 'no workshop counterparty exists to confirm a destination',
+      ...raised,
+    };
+  }
+
   const retained = impact?.technicianRetained === true;
   const releasedTechnicianId = impact?.releasedTechnicianId ?? null;
 
@@ -419,7 +507,11 @@ export async function executeReassignment(
     unitId,
     technicianId,
     expectedUnitVersion: unit.version,
-    workshopId: impact?.destinationWorkshopId ?? null,
+    // Always null by the time we get here — the guard above returned for every
+    // plan that named one. Passed explicitly rather than dropped so the call
+    // still reads as "this saga has no third leg" rather than silently omitting
+    // an argument the function accepts.
+    workshopId: null,
   });
 
   if (saga.outcome === 'REQUEUED') {

@@ -652,3 +652,144 @@ already computed, stored and discarded at the last step. And: "how did a
 coordinate 1,700km away get a five-minute ETA?" — three layers each
 accommodating an impossible input, and the only one that behaved perfectly, the
 map, was the one that made it visible.
+
+---
+
+## Phase 22g — the job says what is happening to it, and the tow fails closed / 2026-09-07 / (this commit)
+
+### Built
+`src/commit/saga.ts` — `setJobStatus()`, a conditional writer, and two calls to
+it: `OFFERED` when leg 2 goes out, `AWAITING_DESTINATION` when leg 3 does.
+`compensateSaga`'s guard list gains `AWAITING_DESTINATION`.
+
+`src/commit/redispatch.ts` — `raiseNoFeasiblePlan()` extracted from
+`escalateNoFeasiblePlan` so both callers share one description of "make this
+dead end visible", and a guard in `executeReassignment` that refuses to start a
+saga whose plan names a workshop. New outcome `DESTINATION_UNCONFIRMABLE`.
+
+`tests/saga.test.ts` — four tests on the job status through the reservation.
+`tests/redispatch.test.ts` — two on the guard, plus `withoutDestination()` and
+the discovery that made it necessary.
+
+`INTERVIEW.md` §15.41 rewritten to size the three gaps, new §15.44, §16 and the
+§17 resume claim qualified. `WALKTHROUGH.md` prep block and defect list.
+
+### Decisions
+
+**Decision** The status writes are conditional `updateMany`s naming the statuses
+they may move FROM, not `update` by id.
+**Why** A slow write from an abandoned saga must never pull a committed job back
+to `OFFERED`. Zero rows affected means somebody else got there first, which is
+information rather than an error — the same optimistic pattern the unit hold one
+leg earlier already uses.
+**Alternative** A version column on Job, or a transaction around the whole leg.
+**Why not** The job already has a `version` used elsewhere, and taking it here
+would mean threading an expected version through `startSaga`'s signature for a
+write whose only failure mode is "already further along".
+**Tradeoff** A silent no-op. If the guard list is ever wrong the status simply
+does not move and nothing complains — which is exactly what
+`compensateSaga`'s list would have done for `AWAITING_DESTINATION` had the test
+not caught it.
+
+**Decision** `AWAITING_DESTINATION` is written even though nothing can reach it.
+**Why** Asked for, and correct: the line that sets it belongs next to the line
+that creates the offer, not in a future commit that has to remember. It cost one
+call and it made `compensateSaga`'s missing guard entry visible immediately.
+**Alternative** Leave it until a workshop counterparty exists.
+**Why not** Then two things have to be remembered instead of one, and the second
+is the one nobody writes down.
+**Tradeoff** A line of production code with no production path, which is the
+thing this project otherwise treats as a defect. Justified here only because the
+guard that makes it unreachable is in the same change and says so.
+
+**Decision** The tow guard lives in `executeReassignment`, before
+`releaseCurrentCrew`, not inside `startSaga`.
+**Why** Position is the whole point: a job we cannot dispatch must not also lose
+the crew it already had. Refusing inside `startSaga` would happen after the
+release had already run.
+**Alternative** Refuse in `startSaga`, where the leg is actually created.
+**Why not** `startSaga` has no way to raise an escalation without importing the
+action layer, and it is called by tests that legitimately exercise the
+three-leg machine.
+**Tradeoff** `startSaga` still accepts a `workshopId` nothing in production
+passes. Deliberate — the state machine and its tests are correct and should not
+be dismantled because the actor is missing.
+
+**Decision** `DESTINATION_UNCONFIRMABLE` is its own outcome, not a
+`NOT_EXECUTABLE`.
+**Why** They mean opposite things to a reader: `NOT_EXECUTABLE` is "this action
+is stale or malformed", and this is "the action is perfectly well formed and the
+product cannot honour it". The file already split `SAGA_LOST_RACE` out for the
+same reason.
+**Tradeoff** A fourth outcome on a type the API route flattens to
+`reserved: false` anyway.
+
+### Concurrency
+**Scenario** Two dispatchers execute the same reassignment, or a stale action is
+executed after a later saga already committed the job.
+**What races** `setJobStatus` against `commitSaga`'s own status write.
+**Why dangerous** An unconditional write would move a COMMITTED job back to
+OFFERED, and the technician board (`OPEN_STATUSES`) would drop a job somebody is
+driving to.
+**How handled** The write names the statuses it may move from; the loser affects
+zero rows. Asserted directly — "does not pull a committed job back to OFFERED"
+starts a second saga on an already-committed job and checks the status holds.
+**Assumption relied on** That `COMMITTED` and everything above it are never in
+the `from` list. Nothing enforces that beyond reading it.
+
+A second, unchanged: `raiseNoFeasiblePlan`'s `hasOpenAction` check is still a
+read-then-write with a window, so two triggers in the same instant can both
+raise a card. Same shape as the thrash escalation, same judgement — a duplicate
+row in a worklist, not a duplicate dispatch.
+
+### Weaknesses introduced
+- `OFFERED` removes a job from `PENDING_STATUSES`, so a concurrent whole-board
+  solve no longer sees it. That is a fix — a job mid-reservation should not be
+  planned into a second van — but it was not the intent of the change and
+  nothing tests it.
+- An `OFFERED` job is also skipped by the SLA escalation sweep, which scans
+  `['INTAKE','PLANNED']`. Forty-five seconds of invisibility on a job that is
+  already late. Does not matter at current scale; would need naming if the
+  offer TTL ever grew.
+- The tow guard fires on `impact.destinationWorkshopId`, which is written when
+  the RECOMMEND is raised. A plan that needed no workshop when proposed and
+  would need one now is not caught — the guard reads the stored decision, not a
+  fresh one. Correct for auditability and wrong if the two ever disagree.
+- `startSaga`'s `workshopId` parameter now has no production caller. Dead
+  surface kept alive by tests, which is the shape this project usually calls
+  out.
+
+### What broke
+**Two existing tests failed, and the reason was the finding.**
+`tests/redispatch.test.ts`'s fixture job requires `FLATBED_LOADING`, so
+`faultsNeedTow` is true for every job in that file and candidate generation
+resolves a destination for every option — which is why the fixture goes to the
+trouble of creating an authorised workshop. The two tests that execute a
+reassignment were therefore exercising a reservation **that could never have
+committed in production**: leg 3 would have sat at PROPOSED and timed out. They
+passed for four phases because they compensate by hand rather than waiting
+forty-five seconds for the timeout to do it for them. Both now clear the
+workshop explicitly through `withoutDestination()`, which exists mostly to write
+that paragraph down where somebody will read it.
+
+**A test caught the compensation guard I had not thought about.** Writing
+`AWAITING_DESTINATION` without adding it to `compensateSaga`'s `where` list
+would have left a compensated tow stranded in a status nothing else moves out
+of. The assertion that a declined destination returns the job to `PLANNED` is
+what surfaced it, and it is the reason that assertion is in the same test as the
+status write rather than in one of its own.
+
+### Concepts now genuinely in use
+Nothing new. Conditional state transition without a version column, applied to a
+second table; and failing closed as a deliberate alternative to a feature —
+refusing an operation the product cannot honour, and saying why, rather than
+starting it and unwinding.
+
+### Interview angle
+"You found a leg of your saga that nothing could answer. Why did you not just
+auto-accept it?" — because a workshop that has not said yes has not said yes,
+and the honest states are "we cannot dispatch this" and "somebody must arrange
+it by phone", not a fabricated acceptance that would also poison the learned
+P(accept) it feeds. And: "what is the difference between the three gaps in your
+console?" — one line, one call, and one counterparty that was never specified;
+being able to size them separately is most of what §15 is for.
