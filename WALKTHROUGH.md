@@ -66,26 +66,44 @@ not have to type anything else before Step 1.
 | database | reset, reseeded, Redis flushed |
 | fleet history | `scripts/demo-prep-beat9.ts` — three RESOLVED battery jobs on `KA01AB1001` |
 | workshop history | `scripts/simulate-200-offers.js` — 200 fabricated outcomes on `WS-KOR-A`, so the learned P(accept) is not running on its prior |
-| board | 21 pending jobs — 4 routine, 10 elevated, 7 high risk — all raised in the last half hour, plus 3 resolved for the fleet history |
+| board | around twenty pending jobs, all raised in the last half hour, plus the resolved fleet history. **The safety-level split is not fixed** — see below |
 | action queue | empty when handed over; it grows an `ESCALATE_SLA_WINDOW_CLOSED` card per job as the board ages — see the note in Step 6 |
 | simulator | not running; no orphaned process |
 | web | `npm run dev` — http://localhost:3000 |
 | worker | `npm run dev:worker` |
 
-**To start the whole thing over from scratch** — the shift step is in here too,
-in the position it has to be in: after the seed, before anything is dispatched.
+**To start the whole thing over from scratch**, run the prep script. The shift
+step is in it too, in the position it has to be in: after the seed, before
+anything is dispatched.
 
 ```bash
-docker compose up -d
-npm run db:reset                                      # drops and reseeds
-docker exec zippy-redis-1 redis-cli FLUSHALL          # stale BullMQ queues
-npx tsx scripts/demo-prep-beat9.ts                    # fleet history
-npx tsx scripts/demo-open-shifts.ts                   # everybody on duty — REQUIRED
-node scripts/simulate-200-offers.js --workshop A --decline-evenings
-npx tsx src/sim/cli.ts --rate 45 --duration 28 --max-jobs 22 --seed 11   --start "$(node -e "console.log(new Date(Date.now()-30*60000).toISOString())")"
-npm run dev                                           # and, separately:
+docker compose up -d          # postgres, redis, osrm
+bash scripts/demo-prep.sh     # reset, history, shifts, offers, board
+npm run dev                   # and, separately:
 npm run dev:worker
 ```
+
+**`npm run db:reset` refuses to run for an AI agent.** Prisma Migrate detects
+the agent, blocks `migrate reset --force` outright, prints a long consent
+notice and exits non-zero. Run the script yourself and the reset is normal. An
+agent that has your explicit consent re-runs it with
+`PRISMA_USER_CONSENT_FOR_DANGEROUS_AI_ACTION` set to the exact text of the
+message in which you gave that consent.
+
+That refusal is why the sequence is a script and no longer six lines to paste.
+The reset is the first step and every step after it assumes it worked; when it
+was refused, the rest ran anyway and built a board out of yesterday's jobs
+mixed with today's — jobs, units, shifts and an empty-looking queue, all
+present, nothing on screen saying to distrust it. `demo-prep.sh` runs under
+`set -e` with an `ERR` trap, so a refused reset stops it at that line and says
+so.
+
+It could not just be `set -e` in front of the pasted block, and the reason is
+worth knowing before you write one of these again: errexit exempts a command on
+the **left of `&&` or `||`**, so `npm run db:reset && npm run db:seed` swallows
+the refusal, and so does `( set -e; ...steps... ) || echo "failed"` — which
+looks exactly like the fix and is not one. Under `bash -c` errexit can also be
+set and still not stop a failing command. In a script run as a file it behaves.
 
 `simulate-200-offers` is what stops the learned workshop acceptance model from
 running blind. Without it `acceptance_outcomes` is empty, every workshop sits on
@@ -98,6 +116,26 @@ actor to answer with. The other eleven workshops stay on the prior.
 The `--start` matters too. Without it the simulator dates its jobs 2026-06-01,
 every SLA window on the board has closed, and the dispatcher's action queue
 opens with twenty escalations you have to scroll past to find yours.
+
+**Check the board, do not check it against a number.** An earlier version of
+this table said "4 routine, 10 elevated, 7 high risk", which was true of one
+run and read as a promise. It is not one: `src/sim/cli.ts` draws each job's
+fault, its road context and therefore its safety level from a seeded generator,
+but the run also depends on what is already in the database and on the
+wall-clock `--start`, so two preps at `--seed 11` give two different mixes. A
+doc that names the split contradicts the screen and makes you doubt a board
+that is fine.
+
+What actually has to be true before Step 1:
+
+- the dispatch queue has jobs in it, roughly twenty, and every one was raised
+  in the last half hour — not one dated 2026-06-01
+- more than one safety level is present, so the queue's ordering has something
+  to order; at least one HIGH_RISK job is what Step 3 reads best against
+- the action queue is empty
+- `/health` reports `NORMAL`, and `CREW_ON_SHIFT` says 24 of 24 crewed units
+  have a technician on shift — if it says 1 of 24, `demo-open-shifts.ts` did
+  not run and nothing will dispatch
 
 ---
 

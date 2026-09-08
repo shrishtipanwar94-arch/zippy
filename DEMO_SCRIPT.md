@@ -28,10 +28,17 @@ tenancy. Do not talk faster to fit them.
 
 ```bash
 docker compose up -d                 # postgres, redis, osrm
-npm run db:reset && npm run db:seed  # 6 zones, 24 units, 31 technicians, 12 workshops, 3 depots
+npm run db:reset                     # 6 zones, 24 units, 31 technicians, 12 workshops, 3 depots
 npm run dev                          # web process  — http://localhost:3000
 npm run dev:worker                   # worker process — leave both running
 ```
+
+**Two things about that reset.** Prisma Migrate refuses `migrate reset --force`
+when an AI agent invokes it — run it yourself, or see the consent note in
+WALKTHROUGH.md 0b. And it is on its own line rather than
+`npm run db:reset && npm run db:seed`: `db:reset` already runs the seed, and
+chaining with `&&` is how a refused reset gets swallowed by anything that later
+wraps this in `set -e`.
 
 Seed is fixed; a reset gives byte-identical fixtures every time. If OSRM is not
 up, candidate generation falls back to haversine and every travel time on
@@ -334,5 +341,10 @@ any dispatch decision."
 ```bash
 docker compose exec redis redis-cli DEL zippy:sim:stop
 # on the dispatcher: chaos panel → Reset everything
-npm run db:reset && npm run db:seed
+npm run db:reset
 ```
+
+For the full walkthrough board — fleet history, open shifts, workshop
+acceptance history, twenty-odd jobs dated into the last half hour — use
+`bash scripts/demo-prep.sh` instead, which does the reset and everything after
+it in the one order that works.

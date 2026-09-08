@@ -82,6 +82,7 @@ src/realtime/publish.ts     THE fan-out point — Server or Redis emitter, nothi
 src/realtime/server.ts      handshake JWT, rooms, suppressLiveUpdates for chaos
 evaluation/runner.ts        the discrete-event loop; a hidden trueFault drives re-dispatch
 evaluation/ai/              108 labelled descriptions, a keyword control, six metrics
+scripts/demo-prep.sh        the whole demo board in one ordered, fail-fast run
 scripts/simulate-200-offers.js   the Phase 22 check: 200 fabricated destination offers
 scripts/demo-open-shifts.ts the demo workaround for realistic shift bands: everybody on
                             duty for twelve hours, so a board is dispatchable at any hour
