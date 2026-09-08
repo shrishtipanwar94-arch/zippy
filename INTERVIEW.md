@@ -1300,6 +1300,48 @@ The most valuable section. In rough order of severity:
     yet" and not "this page has no socket". The badge is gone from that page;
     the Refresh button is its honest affordance.
 
+47. **A TECHNICIAN COULD NEVER RECEIVE THEIR FIRST OFFER — the subscription was
+    a closed circle.** Fixed.
+
+    `standingRoomsFor` (`realtime/rooms.ts`) gave a TECHNICIAN no rooms, on the
+    stated and reasonable grounds that their interest is per-job and each job
+    room must be authorised against the database. So a technician's socket was
+    only ever in `job:<id>` rooms for jobs a `/technician/work` fetch had
+    already returned, and `pages/technician.js` re-fetched only from
+    `onJobEvent`. Trace an offer for a job they have never seen:
+
+        offer written → TECHNICIAN_OFFER_SENT emitted to job:<id>
+        → technician is not in that room (the job is not theirs yet)
+        → no event reaches the page
+        → onJobEvent never fires → refreshWork() never runs
+        → nothing on screen, and there is no polling behind it
+
+    The page's only `setInterval` ticks the clock for the countdown; it does not
+    fetch. So the offer was invisible for the whole forty-five seconds of its
+    life and then timed out. **The condition for hearing about an offer was
+    already being on the job the offer was for.** Every first offer expired
+    unseen, which from the technician's chair is a surface that never shows
+    anything, and from the dispatcher's is a crew that never answers.
+
+    Found by executing a reassignment against a technician window parked open
+    and watching nothing happen; confirmed against `technician_offers`, where
+    the row existed with status TIMEOUT and an `expires_at` forty-five seconds
+    after the dispatcher's click.
+
+    THE FIX IS ONE STANDING ROOM PER TECHNICIAN, `technician:<technicianId>`,
+    joined on connect, plus `technicianRoomForEvent` naming the events that must
+    reach a technician who has no other connection to the job. That list has
+    exactly one member, `TECHNICIAN_OFFER_SENT`, and is deliberately a named set
+    rather than "anything carrying a technicianId": once the job is theirs they
+    are in its room and hear everything through it, so each addition is a
+    decision that something must reach a stranger to the job. The room carries
+    no authorisation of its own — it is keyed by the caller's own `actorId` from
+    their token, so a technician can only ever be in their own.
+
+    Verified live: technician page signed in and left untouched, reassignment
+    executed over the API, and the offer appeared on screen with its countdown
+    running, without a reload.
+
 ## 16. How I Would Improve It
 
 **First, above everything below: decide what a dispatcher pressing Solve is

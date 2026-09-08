@@ -12,7 +12,7 @@
 
 import { prismaBase } from '../infra/prismaBase.js';
 import { logger } from '../infra/logger.js';
-import { jobRoom, roomsForJobEvent, tenantRoom, zoneRoom } from './rooms.js';
+import { jobRoom, roomsForJobEvent, technicianRoomForEvent, tenantRoom, zoneRoom } from './rooms.js';
 import type { PublishableJobEvent } from './outbox.js';
 
 // TWO WAYS TO REACH A BROWSER, ONE INTERFACE. The web process holds the real
@@ -120,10 +120,18 @@ async function routeAndEmit(target: Emittable, events: PublishableJobEvent[]): P
       safetyLevel: job.safetyLevel,
     };
 
+    // PLUS THE OFFERED TECHNICIAN'S OWN ROOM, when this is an event they must
+    // hear before the job is theirs. Without it their first offer for any job
+    // reaches nobody: they are not in the job room yet and have no standing
+    // room to fall back on. See `technicianRoomForEvent`.
+    const rooms = [...roomsForJobEvent(job)];
+    const technician = technicianRoomForEvent(event.eventType, event.payload);
+    if (technician) rooms.push(technician);
+
     // `to()` takes the whole list and unions it, and Socket.IO delivers once
     // per socket — a dispatcher in both the job room and the zone room gets
     // one copy, not two.
-    target.to(roomsForJobEvent(job)).emit('job:event', message);
+    target.to(rooms).emit('job:event', message);
   }
 }
 

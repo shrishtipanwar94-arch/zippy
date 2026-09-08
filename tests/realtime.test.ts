@@ -20,6 +20,8 @@ import {
   mayRequestJobRoom,
   roomsForJobEvent,
   standingRoomsFor,
+  technicianRoom,
+  technicianRoomForEvent,
   tenantRoom,
   zoneRoom,
 } from '../src/realtime/rooms.js';
@@ -67,9 +69,35 @@ describe('room rules', () => {
   // A driver's interest is per-job and changes over the life of the connection,
   // so they get no standing room and must subscribe explicitly — which is what
   // forces every job room they enter through a database authorisation check.
-  it('gives a driver and a technician no standing rooms', () => {
+  it('gives a driver no standing rooms', () => {
     expect(standingRoomsFor(context({ role: 'DRIVER' }), ['zone-a'])).toEqual([]);
-    expect(standingRoomsFor(context({ role: 'TECHNICIAN' }), ['zone-a'])).toEqual([]);
+  });
+
+  // A TECHNICIAN IS THE EXCEPTION, and it is not a convenience. Their first
+  // contact with a job is an offer that lives forty-five seconds, and until it
+  // arrives they have no business in that job's room. Without a standing room
+  // the first offer for any job reached nobody: not in the room, so no event,
+  // so no refetch, and the page has no polling behind it. Every first offer
+  // expired unseen.
+  it('gives a technician their own standing room', () => {
+    expect(standingRoomsFor(context({ role: 'TECHNICIAN', actorId: 'tech-01' }), ['zone-a']))
+      .toEqual(['technician:tech-01']);
+  });
+
+  it('gives a technician with no actor id nothing rather than a room nobody owns', () => {
+    expect(standingRoomsFor(context({ role: 'TECHNICIAN', actorId: undefined }), ['zone-a']))
+      .toEqual([]);
+  });
+
+  it('routes an offer to the named technician and nothing else to anybody', () => {
+    expect(technicianRoomForEvent('TECHNICIAN_OFFER_SENT', { technicianId: 'tech-07' })).toBe(
+      technicianRoom('tech-07'),
+    );
+    // A short named list, not "anything carrying a technicianId": once the job
+    // is theirs they are in its room and hear everything through that.
+    expect(technicianRoomForEvent('DISPATCH_COMMITTED', { technicianId: 'tech-07' })).toBeNull();
+    expect(technicianRoomForEvent('TECHNICIAN_OFFER_SENT', {})).toBeNull();
+    expect(technicianRoomForEvent('TECHNICIAN_OFFER_SENT', null)).toBeNull();
   });
 
   it('gives a fleet manager with no tenant nothing rather than everything', () => {
