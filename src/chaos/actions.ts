@@ -1,4 +1,4 @@
-// THE FOUR CONTROLS THAT ARE EVENTS, NOT MODES.
+// THE CONTROLS THAT ARE EVENTS, NOT MODES.
 //
 // A switch stays on until somebody turns it off. These do not: taking a
 // technician offline, breaking a unit mid-job, making a destination decline
@@ -26,6 +26,7 @@ export const CHAOS_ACTIONS = [
   'BREAK_UNIT',
   'DECLINE_DESTINATION',
   'INJECT_JOBS',
+  'ADVANCE_TIME',
 ] as const;
 
 export type ChaosActionName = (typeof CHAOS_ACTIONS)[number];
@@ -137,6 +138,109 @@ export async function declineDestination(
 // N breakdowns at once, through real intake. The point of the control is to
 // watch the queue depth and the planner's wall clock move, so anything less
 // than the real path would be measuring the wrong thing.
+// MOVING THE BOARD THROUGH TIME, BY AGEING THE DATA RATHER THAN THE CLOCK.
+//
+// A demo is hostage to real time: an offer lives forty-five seconds, an SLA
+// window thirty minutes, a position goes stale after fifteen. Showing a window
+// close means talking over a static screen for half an hour.
+//
+// WHY NOT A CLOCK ABSTRACTION. The obvious fix is to inject a clock and let a
+// multiplier speed it up. There are sixty-eight `new Date()` call sites across
+// thirty files, and every one of them would have to change — a cross-cutting
+// refactor of the whole codebase, risking the determinism the evaluation
+// harness depends on (invariant 10), to serve a demo control.
+//
+// It is also unnecessary, because every time-dependent behaviour in this system
+// has the same shape: read `now`, compare it against a stored timestamp.
+// `escalateClosedSlaWindows` compares `job.createdAt` against the policy
+// window; the GPS probe compares `unit.lastLocationAt` against
+// POSITION_STALE_AFTER_MS; an offer compares `expiresAt`. Moving those stored
+// timestamps BACKWARDS is indistinguishable, to every one of those readers,
+// from moving the clock forwards — and it touches four columns instead of
+// sixty-eight call sites.
+//
+// WHAT IT DELIBERATELY DOES NOT TOUCH: `job_events`. That table is append-only,
+// enforced by a database trigger, and it should be — the timeline is the
+// truthful record of when things actually happened, and a demo control that
+// rewrote history would make the one artefact you would show an interviewer
+// untrustworthy. So the story panel keeps real wall-clock times while the
+// board's behaviour moves. An ordinary JobEvent records that this was used, so
+// the gap between the two is explained on the timeline rather than mysterious.
+//
+// `onlyJobIds` EXISTS FOR TESTS AND THE PRODUCTION CALLER NEVER PASSES IT. This
+// function operates on EVERYTHING, and `zippy_test` is shared by suites running
+// in parallel — an unscoped call here would age another file's jobs out of
+// their SLA windows mid-assertion. The project has lost afternoons to exactly
+// that shape before (see CLAUDE.md), so the scope hatch is part of the design
+// rather than a concession.
+export async function advanceTime(
+  db: PrismaClient,
+  minutes: number,
+  onlyJobIds?: string[],
+): Promise<ChaosActionResult> {
+  const shiftMs = minutes * 60 * 1000;
+  const shift = (at: Date) => new Date(at.getTime() - shiftMs);
+
+  // Only jobs still in play. Ageing a RESOLVED job changes nothing anybody can
+  // see and would corrupt the earnings and settlement history underneath it.
+  const live = await db.job.findMany({
+    where: {
+      status: { notIn: ['RESOLVED', 'CANCELLED'] },
+      ...(onlyJobIds ? { id: { in: onlyJobIds } } : {}),
+    },
+    select: { id: true, createdAt: true },
+  });
+  for (const job of live) {
+    await db.job.update({ where: { id: job.id }, data: { createdAt: shift(job.createdAt) } });
+  }
+
+  const offers = await db.technicianOffer.findMany({
+    where: { status: 'PROPOSED', ...(onlyJobIds ? { jobId: { in: onlyJobIds } } : {}) },
+    select: { id: true, expiresAt: true },
+  });
+  for (const offer of offers) {
+    await db.technicianOffer.update({
+      where: { id: offer.id },
+      data: { expiresAt: shift(offer.expiresAt) },
+    });
+  }
+
+  // Units are fleet-wide and have no job to scope by, so a scoped call leaves
+  // them alone entirely rather than ageing every other suite's fleet.
+  const units = onlyJobIds
+    ? []
+    : await db.unit.findMany({
+        where: { lastLocationAt: { not: null } },
+        select: { id: true, lastLocationAt: true },
+      });
+  for (const unit of units) {
+    if (!unit.lastLocationAt) continue;
+    await db.unit.update({
+      where: { id: unit.id },
+      data: { lastLocationAt: shift(unit.lastLocationAt) },
+    });
+  }
+
+  // ON THE TIMELINE, so the difference between a job's shifted age and its
+  // truthful event times is explained where somebody reading the job will see
+  // it, rather than looking like a bug.
+  for (const job of live) {
+    await appendJobEvent(db, {
+      jobId: job.id,
+      eventType: 'DEMO_TIME_ADVANCED',
+      payload: { minutes },
+      actorRole: 'SYSTEM',
+      actorId: 'chaos',
+    });
+  }
+
+  logger.warn({ minutes, jobs: live.length, offers: offers.length }, 'chaos: time advanced');
+  return {
+    action: 'ADVANCE_TIME',
+    detail: `advanced ${minutes} minutes: ${live.length} live jobs, ${offers.length} open offers and ${units.length} unit positions are now that much older`,
+  };
+}
+
 export async function injectJobs(db: PrismaClient, count: number): Promise<ChaosActionResult> {
   const driver = await db.driver.findFirst({
     where: { vehicles: { some: {} } },

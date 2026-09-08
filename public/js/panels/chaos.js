@@ -22,6 +22,9 @@ const ACTION_LABELS = {
   BREAK_UNIT: 'Break a unit',
   DECLINE_DESTINATION: 'Force a destination decline',
   INJECT_JOBS: 'Inject 5 jobs',
+  // Not a clock: it ages the board by ten minutes, which every deadline in the
+  // system reads the same way. See src/chaos/actions.ts.
+  ADVANCE_TIME: 'Advance the board 10 minutes',
 };
 
 export function render(state) {

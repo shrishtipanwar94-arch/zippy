@@ -31,6 +31,7 @@ import {
   setChaosSwitch,
 } from '../chaos/switches.js';
 import {
+  advanceTime,
   breakUnit,
   declineDestination,
   injectJobs,
@@ -50,6 +51,9 @@ const actionSchema = z.object({
   // Only INJECT_JOBS reads this. Capped: this goes through real intake, and a
   // typo asking for ten thousand jobs would be a long afternoon.
   count: z.number().int().min(1).max(50).default(5),
+  // Only ADVANCE_TIME reads this. Capped at a day: past that the board is not
+  // being demonstrated, it is being invented.
+  minutes: z.number().int().min(1).max(1440).default(10),
 });
 
 export function mountChaosRoutes(app: Express): void {
@@ -142,5 +146,6 @@ function runAction(name: string, body: z.infer<typeof actionSchema>) {
   if (name === 'TECHNICIAN_OFFLINE') return takeTechnicianOffline(prismaBase, body.targetId);
   if (name === 'BREAK_UNIT') return breakUnit(prismaBase, body.targetId);
   if (name === 'DECLINE_DESTINATION') return declineDestination(prismaBase, body.targetId);
+  if (name === 'ADVANCE_TIME') return advanceTime(prismaBase, body.minutes);
   return injectJobs(prismaBase, body.count);
 }
