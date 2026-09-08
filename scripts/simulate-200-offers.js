@@ -104,8 +104,24 @@ async function ensureFixture(workshopCode) {
   const zone = await prisma.zone.findFirst({ select: { id: true, centroidLat: true, centroidLng: true } });
   if (!zone) throw new Error('no zone seeded — run "npm run db:seed" first');
 
+  // KEYED ON THE NATURAL UNIQUE, NOT ON `RUN`. Every other row this fixture
+  // creates carries the run id in its own identity, so a second run makes a
+  // second row and nothing collides. This one cannot: `vehicle_profiles` has a
+  // unique on (make, model, year_from, year_to) and those four values are
+  // fixed, so an upsert keyed on `${RUN}-profile` never matches the row the
+  // last run left behind and the create then violates the constraint. The
+  // script therefore only ever worked on a freshly reset database, which is
+  // where the demo prep happens to call it — running the prep a second time
+  // without a reset failed here.
   const profile = await prisma.vehicleProfile.upsert({
-    where: { id: `${RUN}-profile` },
+    where: {
+      make_model_yearFrom_yearTo: {
+        make: 'SIMULATE_200',
+        model: 'Fixture',
+        yearFrom: 2020,
+        yearTo: 2025,
+      },
+    },
     update: {},
     create: {
       id: `${RUN}-profile`,
