@@ -451,8 +451,10 @@ describe('the safety escalation', () => {
       .send({ decision: 'CONFIRMED' });
 
     expect(response.status).toBe(200);
-    // Already HIGH_RISK. The confirmation is on the record; nothing re-solves
-    // for a level that did not move.
+    // Already HIGH_RISK, so the level does not move and the event says so.
+    // This fixture's jobs all carry a technician, so nothing re-solves either:
+    // a driver repeating themselves while somebody is driving to them must not
+    // re-solve the board on every message.
     expect(response.body.trigger).toBeNull();
     expect(await eventsForPromotion(jobId, promotionId)).toBe(1);
     const confirmed = await prismaBase.jobEvent.findFirstOrThrow({
@@ -460,7 +462,41 @@ describe('the safety escalation', () => {
       select: { eventType: true, payload: true },
     });
     expect(confirmed.eventType).toBe('SAFETY_LEVEL_CONFIRMED');
-    expect(confirmed.payload).toMatchObject({ changed: false });
+    expect(confirmed.payload).toMatchObject({ changed: false, undispatched: false });
+  });
+
+  it('re-solves a confirmation at the top level when nobody is coming yet', async () => {
+    // THE JOB WITH NO ROUTE TO A CREW. Reserving a crew happens in one place,
+    // executing a reassignment action, and a safety escalation is the only
+    // thing a driver can do that raises one. A job triaged HIGH_RISK at intake
+    // has that escalation spent before it starts — so with no trigger on this
+    // branch the most dangerous jobs were the only ones that could never be
+    // dispatched at all. Found by walking the driver surface end to end.
+    await prismaBase.job.update({
+      where: { id: jobId },
+      data: { assignedTechnicianId: null },
+    });
+
+    const posted = await send(jobId, driverToken(), { body: 'still blocking traffic here' });
+    const promotionId = posted.body.promotions.find(
+      (row: { kind: string }) => row.kind === 'SAFETY_CHANGE',
+    ).promotionId;
+
+    const response = await request(app)
+      .post(`/promotions/${promotionId}/confirm`)
+      .set('Authorization', `Bearer ${driverToken()}`)
+      .send({ decision: 'CONFIRMED' });
+
+    expect(response.status).toBe(200);
+    expect(response.body.trigger).toBe('SAFETY_LEVEL_CONFIRMED');
+    const confirmed = await prismaBase.jobEvent.findFirstOrThrow({
+      where: { jobId, payload: { path: ['promotionId'], equals: promotionId } },
+      select: { eventType: true, payload: true },
+    });
+    // Still not a change: the level did not move and the timeline must not
+    // pretend it did.
+    expect(confirmed.eventType).toBe('SAFETY_LEVEL_CONFIRMED');
+    expect(confirmed.payload).toMatchObject({ changed: false, undispatched: true });
   });
 });
 

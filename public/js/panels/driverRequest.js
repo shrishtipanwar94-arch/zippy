@@ -80,12 +80,46 @@ export function render(state) {
   // in its own right (src/domain/safety.ts), and guessing on the driver's
   // behalf is exactly what that rule exists to prevent.
   if (send) send.disabled = !state.request.location.roadPosition || state.request.locating;
+  renderSendBlocked(panel, state.request);
 
   // WHAT THE LOCATION BUTTON DID. It used to report nothing at all: a driver
   // pressed it and the page looked identical whether the fix succeeded, failed,
   // or hung. Now it says which, and when the fix is poor it says so plainly so
   // the landmark box below stops being optional in the driver's mind.
   renderLocateStatus(state);
+}
+
+// WHY "SEND FOR HELP" IS GREY, in the driver's own words.
+//
+// The button is disabled until a road position is picked, and while the phone
+// is still being asked where it is. Both are deliberate. Neither said so
+// anywhere, and the disabled state is nearly invisible: Bootstrap dims it to
+// 0.65 opacity, which on a full-strength red button against a dark page reads
+// as enabled, and the cursor stays a pointer. So a driver pressed it, nothing
+// happened, and nothing explained why — measured on a live page while walking
+// this flow end to end. geolocation.js already learned this lesson for the
+// locate button; this is the same lesson for the button that matters most.
+//
+// Silent when the button works: a sentence explaining an enabled control is
+// noise.
+function renderSendBlocked(panel, request) {
+  const node = panel.querySelector('[data-field="send-blocked"]');
+  if (!node) return;
+
+  if (request.locating) {
+    node.hidden = false;
+    node.textContent = 'Finding where you are — this button turns on in a moment.';
+    return;
+  }
+
+  if (!request.location.roadPosition) {
+    node.hidden = false;
+    node.textContent = 'Choose where the car is standing, above, and this button turns on.';
+    return;
+  }
+
+  node.hidden = true;
+  node.textContent = '';
 }
 
 // WHAT THE ASSISTANT READ, in a sentence, above the buttons that change it.

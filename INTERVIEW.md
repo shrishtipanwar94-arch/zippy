@@ -1222,6 +1222,84 @@ The most valuable section. In rough order of severity:
     Then the statuses light up on their own, because `startSaga` already writes
     `AWAITING_DESTINATION` and is waiting for something to answer it.
 
+45. **THE MOST DANGEROUS JOBS WERE THE ONLY ONES THAT COULD NEVER BE
+    DISPATCHED — and the bug was invisible from every angle except walking the
+    driver surface end to end.** Fixed.
+
+    Chain four true statements together and the fifth falls out. Reserving a
+    crew happens in exactly one place: executing a reassignment action
+    (`commit/redispatch.ts`'s `executeReassignment`). Selecting a plan only
+    records a decision, which is §15.41's open product question. The only thing
+    a *driver* can do that raises such an action is confirm a safety
+    escalation. And `applySafetyChange` (`commit/eventPromotions.ts`) returned
+    `trigger: null` when the level could not go any higher, on the reasonable
+    grounds that nothing had changed.
+
+    So a job triaged `HIGH_RISK` at intake had its one escalation spent before
+    it started. The driver pressed **Yes** on "Are you blocking moving
+    traffic?", a `SAFETY_LEVEL_CONFIRMED` event landed on the timeline, and
+    nothing else happened — no trigger, no re-solve, no action card, no crew,
+    ever. Alone, at night, on a highway is exactly the combination that triages
+    straight to `HIGH_RISK` (`ON_HIGHWAY`, `NIGHT_AND_ALONE`,
+    `ALONE_AT_NIGHT_ON_HIGHWAY`), so the property was: **the more dangerous
+    your breakdown, the less likely the system could ever send anybody.**
+
+    Every unit test passed throughout. Each of the four statements is correct
+    on its own and each is separately tested; the defect was in the composition
+    and only a walk through the real driver surface surfaced it. The two event
+    trails side by side are the whole story — same flow, different starting
+    safety level:
+
+        started NORMAL                    started HIGH_RISK
+        6 SAFETY_LEVEL_CHANGED            7 SAFETY_LEVEL_CONFIRMED
+        7 ACTION_RECOMMEND                  (ends here)
+        8 ACTION_EXECUTED
+        9 UNIT_HELD
+       10 TECHNICIAN_OFFER_SENT
+       11 TECHNICIAN_OFFER_ACCEPTED
+       12 DISPATCH_COMMITTED
+
+    THE FIX IS A NINTH REPLAN TRIGGER, `SAFETY_LEVEL_CONFIRMED`
+    (`domain/replanTriggers.ts`), returned by that branch when the job has no
+    `assignedTechnicianId`. Deliberately NOT reusing `SAFETY_LEVEL_CHANGED`:
+    the level genuinely did not move and an event claiming otherwise is a lie
+    in a timeline whose whole value is that it is not. Gated on there being no
+    crew, so a driver repeating themselves while somebody is driving to them
+    does not re-solve the board on every message. Both halves are tested in
+    `tests/eventPromotion.test.ts`.
+
+    WHAT IT DOES NOT FIX, and this is the honest part: the underlying shape is
+    still §15.41. A safety confirmation is now a *second* route to a crew where
+    there had been one, but the routes are still incidental — dispatch is
+    reachable only as a side effect of something going wrong, never as a
+    dispatcher simply deciding to send a van. That decision is the one still
+    unmade.
+
+46. **TWO CONTROLS THAT WERE DELIBERATELY INERT AND SAID NOTHING.** Both fixed,
+    and they share a lesson worth stating once: a control that is correctly
+    disabled and silent about it is indistinguishable from broken software, and
+    the person who concludes the software is broken is right to.
+
+    **"Send for help" on the driver's location screen.** Disabled until a road
+    position is picked — deliberate, because an unstated position triages as a
+    risk in its own right (`domain/safety.ts`) and guessing is exactly what
+    that rule exists to prevent. Measured on the live page:
+    `disabled: true`, `pointer-events: none`, `opacity: 0.65`,
+    `cursor: pointer`, on a full-strength red button against a dark page. It
+    looked enabled, kept the hand cursor, swallowed the click and explained
+    nothing. `panels/driverRequest.js` now renders a line under it saying which
+    of the two conditions is holding it, and nothing at all when it works.
+
+    **The fleet dashboard read "No connection" permanently.** `pages/fleet.js`
+    opens no socket on purpose — a fleet manager gets a coalesced summary, not
+    a live feed — but `fleet.html` still carried the connection badge, and
+    `state.connection` never left its initial `'disconnected'`. The badge
+    un-hid the moment somebody signed in and then reported, forever, a socket
+    nobody had ever opened. That is the same wrong sentence `panels/session.js`
+    was already fixed for in the signed-out case; the fix covered "no session
+    yet" and not "this page has no socket". The badge is gone from that page;
+    the Refresh button is its honest affordance.
+
 ## 16. How I Would Improve It
 
 **First, above everything below: decide what a dispatcher pressing Solve is

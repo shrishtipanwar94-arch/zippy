@@ -21,6 +21,15 @@ export const REPLAN_TRIGGERS = [
   'DESTINATION_DECLINED',
   'DRIVER_MOVED_MATERIALLY',
   'SAFETY_LEVEL_CHANGED',
+  // A DRIVER CONFIRMING URGENCY ON A JOB THAT IS ALREADY AT THE TOP LEVEL.
+  // Deliberately not SAFETY_LEVEL_CHANGED, because nothing about the job
+  // changed and an event that says otherwise is a lie in the timeline. It
+  // earns its place on this list anyway: reserving a crew happens in exactly
+  // one place — executing a reassignment action — and a safety escalation is
+  // the only thing a driver can do that raises one. A job triaged HIGH_RISK at
+  // intake has that escalation already spent, so before this existed the most
+  // dangerous jobs were the only ones with no route to a crew at all.
+  'SAFETY_LEVEL_CONFIRMED',
   'JOB_CANCELLED',
 ] as const;
 

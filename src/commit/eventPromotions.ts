@@ -219,18 +219,32 @@ async function applySafetyChange(
 ): Promise<AppliedChange> {
   const job = await tx.job.findUniqueOrThrow({
     where: { id: jobId },
-    select: { safetyLevel: true },
+    select: { safetyLevel: true, assignedTechnicianId: true },
   });
 
   const escalated = escalatedSafetyLevel(job.safetyLevel);
   if (!escalated) {
-    // Already HIGH_RISK. The confirmation is still recorded — a driver saying
-    // "yes I am blocking traffic" is worth having on the record — but nothing
-    // changes and no re-solve is triggered for a level that did not move.
+    // ALREADY AT THE TOP LEVEL, so the level does not move and the event says
+    // exactly that. A confirmation is not a change and recording it as one
+    // would put a lie in the timeline.
+    //
+    // BUT IT STILL RE-SOLVES WHEN NOBODY IS COMING, and that is the whole
+    // reason this branch is not simply `trigger: null`. Reserving a crew
+    // happens in one place — executing a reassignment action — and a safety
+    // escalation is the only thing a driver can do that raises one. A job
+    // triaged HIGH_RISK at intake (alone, at night, on a highway) has that
+    // escalation spent before it starts, so this branch used to end the
+    // driver's only route to a crew: pressing Yes wrote an event and nothing
+    // else, and the most dangerous jobs were the ones that could never be
+    // dispatched. Found by walking the driver surface end to end.
+    //
+    // GATED ON THERE BEING NO CREW, so a driver repeating themselves on a job
+    // somebody is already driving to does not re-solve the board.
+    const undispatched = job.assignedTechnicianId === null;
     return {
       eventType: 'SAFETY_LEVEL_CONFIRMED',
-      eventPayload: { safetyLevel: job.safetyLevel, changed: false },
-      trigger: null,
+      eventPayload: { safetyLevel: job.safetyLevel, changed: false, undispatched },
+      trigger: undispatched ? 'SAFETY_LEVEL_CONFIRMED' : null,
     };
   }
 

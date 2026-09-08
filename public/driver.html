@@ -293,6 +293,14 @@
               Send for help
             </button>
           </div>
+
+          <!-- WHY THE BUTTON IS GREY. It is disabled until a road position is
+               picked, which is deliberate — but it used to say so nowhere, and
+               a dead button with no words is indistinguishable from broken
+               software. js/geolocation.js already learned this lesson for the
+               locate button; this is the same lesson for the one that matters
+               most. -->
+          <p class="share-status mt-2 mb-0" data-field="send-blocked" hidden></p>
         </section>
       </div>
 
