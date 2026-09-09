@@ -19,6 +19,7 @@ import { z } from 'zod';
 import { prismaBase } from '../infra/prismaBase.js';
 import { authenticate, requirePermission } from './middleware/authenticate.js';
 import { summarise, byUrgency } from '../domain/scarcity.js';
+import { sentenceFor } from '../domain/jobStory.js';
 import { orderQueue, slaRisk, ageMinutes, countAtRisk } from '../domain/priority.js';
 import { labelForFault } from '../domain/driverNarrative.js';
 import { isFaultCode } from '../domain/faults.js';
@@ -84,6 +85,7 @@ consoleRouter.get(
       },
     });
 
+
     // The filter options a dispatcher can choose from, derived from what is
     // actually in the table rather than from a hardcoded list that drifts as
     // phases add event types.
@@ -101,6 +103,13 @@ consoleRouter.get(
         payload: event.payload,
         actorRole: event.actorRole,
         at: event.at.toISOString(),
+        // THE EVENT'S OWN SENTENCE. The console used to render
+        // `TECHNICIAN_OFFER_SENT` over a JSON blob, so reading one job meant
+        // translating enum names in your head. Worded server-side
+        // (domain/jobStory.ts) rather than in the panel, for the same reason
+        // the driver's wording is: one vocabulary, testable without a browser,
+        // and it cannot drift from the events it describes.
+        sentence: sentenceFor(event),
         zoneId: event.job.zoneId,
         safetyLevel: event.job.safetyLevel,
         jobStatus: event.job.status,

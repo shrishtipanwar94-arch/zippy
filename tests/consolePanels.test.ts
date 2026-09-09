@@ -19,7 +19,7 @@
 import { describe, expect, it } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { ACTION_KINDS } from '../src/domain/actionTiers.js';
+import { ACTION_KINDS, needsDecision, tierFor } from '../src/domain/actionTiers.js';
 
 // CODE ONLY, COMMENTS STRIPPED — and this is the third time this project has
 // needed it. Phase 7's engine grep matched a comment explaining why Prisma was
@@ -197,3 +197,48 @@ function kindLabelKeys(source: string): Map<string, string> {
   }
   return entries;
 }
+
+// SPLITTING THE QUEUE — every kind is on exactly one side of it.
+//
+// The demo made the cost of one flat list obvious: fourteen
+// ESCALATE_SLA_WINDOW_CLOSED cards buried the single REASSIGN_AFTER_TRIGGER
+// card that was the only thing on the board that would dispatch anybody. A
+// worklist where the urgent item looks identical to thirteen that can wait is
+// a worklist people stop reading.
+describe('the action queue splits into what needs deciding and what is noted', () => {
+  it('classifies every kind the system can raise', () => {
+    // A kind nobody classified would silently land in "noted" and a dispatcher
+    // would never see it. The point of asserting over ACTION_KINDS is that
+    // adding a kind forces the decision.
+    for (const kind of ACTION_KINDS) {
+      expect(typeof needsDecision(kind), kind).toBe('boolean');
+    }
+  });
+
+  it('puts the cards that change who is going on the deciding side', () => {
+    expect(needsDecision('REASSIGN_AFTER_TRIGGER')).toBe(true);
+    expect(needsDecision('REASSIGN_AFTER_DIAGNOSIS_CHANGE')).toBe(true);
+    // Nobody is coming and waiting will not change that — the queue's most
+    // urgent shape, even though its tier is only RECOMMEND.
+    expect(needsDecision('ESCALATE_NO_FEASIBLE_PLAN')).toBe(true);
+  });
+
+  it('keeps the SLA follow-up out of the way, because it blocks no van', () => {
+    // A promise already broken and a bill to settle. Real work for a person,
+    // and not this minute's work: feasibility stops filtering on a deadline
+    // once it has passed, so the job is competing for a van while this waits.
+    expect(needsDecision('ESCALATE_SLA_WINDOW_CLOSED')).toBe(false);
+    expect(needsDecision('NOTIFY_ETA_CHANGED')).toBe(false);
+    expect(needsDecision('RELEASE_EXPIRED_HOLD')).toBe(false);
+  });
+
+  it('is not just the tier wearing a different name', () => {
+    // The tier says how much authority the system claims; this says whether a
+    // van waits. They disagree in both directions, which is why this exists as
+    // its own axis: two RECOMMEND kinds land on opposite sides.
+    expect(tierFor('ESCALATE_NO_FEASIBLE_PLAN')).toBe(tierFor('ESCALATE_SLA_WINDOW_CLOSED'));
+    expect(needsDecision('ESCALATE_NO_FEASIBLE_PLAN')).not.toBe(
+      needsDecision('ESCALATE_SLA_WINDOW_CLOSED'),
+    );
+  });
+});

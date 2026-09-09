@@ -16,15 +16,40 @@ function escapeText(value) {
   return node.innerHTML;
 }
 
+// A SENTENCE AND A TIME, with the machinery underneath for anyone who wants it.
+//
+// This list used to be the event type in bold over a JSON blob, which is the
+// log rather than the story: reading one job meant translating enum names and
+// payloads in your head. The sentence comes from the server
+// (src/domain/jobStory.ts) so there is one vocabulary and it cannot drift from
+// the events it describes.
+//
+// THE RAW EVENT IS STILL HERE, folded away. It is the thing you actually want
+// at 2am when a sentence is not enough, and hiding it entirely would trade one
+// unreadable panel for one that cannot be debugged.
 function eventMarkup(event) {
   const payload = JSON.stringify(event.payload ?? {});
+  const sentence = event.sentence ?? event.eventType;
   return `
     <li class="list-group-item" data-sequence="${event.sequence}">
-      <span class="badge bg-secondary">${event.sequence}</span>
-      <strong>${escapeText(event.eventType)}</strong>
-      <div class="small text-muted">${escapeText(event.at)}</div>
-      <code class="small">${escapeText(payload)}</code>
+      <div class="d-flex justify-content-between align-items-baseline gap-2">
+        <span>${escapeText(sentence)}</span>
+        <span class="small text-muted text-nowrap">${escapeText(clockTime(event.at))}</span>
+      </div>
+      <details class="mt-1">
+        <summary class="small text-muted">${escapeText(event.eventType)}</summary>
+        <code class="small">${escapeText(payload)}</code>
+      </details>
     </li>`;
+}
+
+// The wall clock, because a story is read in times of day rather than ISO
+// stamps. Date parsing stays in the browser deliberately: the server has no
+// business guessing which timezone the reader is sitting in.
+function clockTime(at) {
+  const parsed = new Date(at);
+  if (Number.isNaN(parsed.getTime())) return String(at ?? '');
+  return parsed.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
 }
 
 export function render(state) {

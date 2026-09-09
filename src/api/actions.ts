@@ -15,6 +15,7 @@ import { Router } from 'express';
 import { z } from 'zod';
 import { prismaBase } from '../infra/prismaBase.js';
 import { authenticate, requirePermission } from './middleware/authenticate.js';
+import { isActionKind, needsDecision } from '../domain/actionTiers.js';
 import { resolveAction } from '../commit/actionRequests.js';
 import { executeReassignment } from '../commit/redispatch.js';
 
@@ -40,7 +41,17 @@ actionsRouter.get(
         createdAt: true,
       },
     });
-    res.json({ actions });
+
+    // GROUPED BY WHETHER SOMEBODY HAS TO DECIDE, not by tier. The console
+    // renders two lists off this flag; the reasoning for the split is in
+    // domain/actionTiers.ts, and it lives there rather than in the panel so
+    // there is one answer rather than a server one and a browser one.
+    res.json({
+      actions: actions.map((action) => ({
+        ...action,
+        needsDecision: isActionKind(action.kind) ? needsDecision(action.kind) : true,
+      })),
+    });
   },
 );
 

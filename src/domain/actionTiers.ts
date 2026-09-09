@@ -47,6 +47,49 @@ export const ACTION_KINDS = [
 
 export type ActionKind = (typeof ACTION_KINDS)[number];
 
+// WHAT THE QUEUE SORTS INTO, WHICH IS NOT WHAT THE TIER SORTS INTO.
+//
+// The tier says how much AUTHORITY the system claims: RECOMMEND is confident,
+// APPROVE explicitly refuses to decide. That is the right axis for who signs
+// something off and a poor one for working a queue, because both tiers contain
+// cards a dispatcher must act on and cards they merely need to know about.
+//
+// The demo made the cost of conflating them obvious. Fourteen
+// ESCALATE_SLA_WINDOW_CLOSED cards — every one RECOMMEND, every one a real
+// commercial follow-up, none of them blocking a van — buried the single
+// REASSIGN_AFTER_TRIGGER card that was the only thing on the board that would
+// actually dispatch anybody. Finding it meant scrolling and squinting. That is
+// bad operations design before it is a demo problem: a worklist where the
+// urgent item is visually identical to thirteen items that can wait is a
+// worklist people stop reading.
+//
+// THE QUESTION IS "DOES ACTING ON THIS CHANGE WHO IS GOING, OR WHETHER ANYBODY
+// IS?" — the same question invariant 4 makes the system ask about safety. An
+// SLA window that closed is a promise already broken and a bill to settle; it
+// is real work for a person, and it is not this minute's work.
+const CHANGES_WHO_IS_GOING: ReadonlySet<ActionKind> = new Set([
+  'REASSIGN_AFTER_DIAGNOSIS_CHANGE',
+  'REASSIGN_AFTER_TRIGGER',
+  'RELEASE_TECHNICIAN_NO_LONGER_NEEDED',
+  // Nobody is coming and waiting will not change that, so this is the queue's
+  // most urgent shape even though its tier is only RECOMMEND.
+  'ESCALATE_NO_FEASIBLE_PLAN',
+  'CANCEL_JOB',
+  'APPROVE_CROSS_TENANT_CONTENTION',
+  'ESCALATE_THRASHING_JOB',
+]);
+
+export function needsDecision(kind: ActionKind): boolean {
+  return CHANGES_WHO_IS_GOING.has(kind);
+}
+
+// The `kind` column is a string, so a row written before a kind was renamed
+// would not type as an ActionKind. Narrowing rather than casting means such a
+// row is handled deliberately at the call site instead of crashing the queue.
+export function isActionKind(value: string): value is ActionKind {
+  return (ACTION_KINDS as readonly string[]).includes(value);
+}
+
 const TIERS: Record<ActionKind, ActionTier> = {
   NOTIFY_ETA_CHANGED: 'AUTO',
   RELEASE_EXPIRED_HOLD: 'AUTO',

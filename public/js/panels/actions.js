@@ -74,17 +74,47 @@ export function render(state) {
   if (!panel) return;
 
   const actions = state.actions ?? [];
+  // TWO LISTS, NOT ONE SORTED LIST. Sorting would still put fourteen SLA
+  // follow-ups between a dispatcher and the card that dispatches somebody as
+  // soon as a fifteenth arrives; a heading is what makes "there is nothing for
+  // me right now" readable at a glance. The server decides which is which —
+  // see needsDecision in domain/actionTiers.ts — so there is one answer rather
+  // than a browser one and a server one.
+  const decide = actions.filter((action) => action.needsDecision);
+  const noted = actions.filter((action) => !action.needsDecision);
+
   const markup = `
     <div data-panel="actions" class="card mt-3">
       <div class="card-header d-flex justify-content-between">
         <span>Action queue</span>
-        <span>${actions.length}</span>
+        <span>${decide.length} to decide${noted.length ? ` · ${noted.length} noted` : ''}</span>
       </div>
       <div class="card-body p-2">
         ${
           actions.length === 0
             ? '<p class="text-muted small mb-0">Nothing waiting on a person.</p>'
-            : actions.map(cardMarkup).join('')
+            : `
+              <div class="text-uppercase small text-muted mb-1">Needs a decision</div>
+              ${
+                decide.length === 0
+                  ? '<p class="text-muted small mb-2">Nothing is waiting on you. Nobody is stranded without a plan.</p>'
+                  : decide.map(cardMarkup).join('')
+              }
+              ${
+                noted.length === 0
+                  ? ''
+                  : `<details class="mt-2">
+                       <summary class="text-uppercase small text-muted">
+                         For the record — ${noted.length}
+                       </summary>
+                       <p class="small text-muted mt-1 mb-1">
+                         Real work, and none of it blocks a van. Commercial
+                         follow-up on jobs that are already being dispatched
+                         normally.
+                       </p>
+                       ${noted.map(cardMarkup).join('')}
+                     </details>`
+              }`
         }
       </div>
     </div>`;
