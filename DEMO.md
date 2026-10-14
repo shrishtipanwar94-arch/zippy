@@ -376,13 +376,34 @@ demo job is `COMMITTED` the van is `ON_JOB` and a second job cannot be
 dispatched to it. To run the demo again, run `bash scripts/demo-reset.sh` from
 the top.
 
-**Do not run `npm run db:seed:demo` in the middle of a live demo.** It forces
-the van back to `AVAILABLE` so a half-finished demo can be restarted, and it
-does not close the job the van was on — so the next dispatch puts a second
-active job on the same unit. That is invariant 7 broken by the fixture rather
-than by the product, and it was observed exactly that way while this file was
-being verified: two holds 46 seconds apart, both consumed, because a re-seed
-landed between them.
+**`npm run db:seed:demo` refuses to run while the van has a live job**, and
+tells you to use the reset instead:
+
+```
+refusing to re-seed: the demo van (demo-unit) still has 1 live job.
+
+Forcing it back to AVAILABLE would not close it, and the next
+dispatch would put a second active job on one van — invariant 7.
+
+    cmv8hdak30194oqiovzdliqw1  COMMITTED
+
+Run `bash scripts/demo-reset.sh` to start over. It drops the database
+first, so this check passes and the board comes back clean.
+```
+
+The guard runs before any write, so a refusal leaves the database exactly as it
+was — verified by checking the shift window had not moved. It exists because
+the un-guarded version did real damage: re-seeding forces the van back to
+`AVAILABLE` without closing its job, so the next dispatch put a **second active
+job on one unit** — invariant 7 broken by the fixture rather than by the
+product. Observed as two holds 46 seconds apart, both consumed, with a re-seed
+between them.
+
+`demo-reset.sh` is unaffected: it drops the database before it seeds, so there
+is no job for the guard to find.
+
+**Re-running the seed on a free van is still a no-op plus a fresh shift window**
+— that is the supported way to fix a lapsed shift without losing the board.
 
 **Getting the big board back:** `npm run db:reset` rebuilds the full 24-unit
 seed. The demo seed never modified it — `prisma/seed.ts` and

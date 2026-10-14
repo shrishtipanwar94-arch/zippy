@@ -82,6 +82,45 @@ const SHIFT_ENDS_IN_HOURS = 8;
 // times work when the container is up.
 const CENTRE = { lat: 12.9352, lng: 77.6245 };
 
+// A job in any of these is over; anything else is still live. The same three
+// statuses `FINISHED_JOB_STATUSES` names in src/api/console.ts, src/api/driver.ts
+// and src/health/probes.ts — spelled out again here rather than imported,
+// because a seeder reaching into src/api for a constant is a worse coupling
+// than one more copy of three words.
+const FINISHED_STATUSES = ['RESOLVED', 'CANCELLED', 'UNSERVICEABLE'] as const;
+
+// REFUSE TO RE-SEED OVER A LIVE JOB.
+//
+// `seedVan` forces the unit back to AVAILABLE so a half-finished demo can be
+// restarted, and it does not close the job the van was on. Run it mid-demo and
+// the job stays COMMITTED with this unit assigned while the unit is free to be
+// held again — so the next dispatch puts a SECOND active job on one van, which
+// is invariant 7 ("one active job per unit") broken by the fixture rather than
+// by the product.
+//
+// This runs BEFORE anything is written, so a refusal leaves the database
+// exactly as it was. `scripts/demo-reset.sh` is unaffected: it drops the
+// database first, so by the time it calls this seeder there are no jobs at all.
+async function refuseIfTheVanIsBusy(db: PrismaClient): Promise<void> {
+  const live = await db.job.findMany({
+    where: { assignedUnitId: UNIT, status: { notIn: [...FINISHED_STATUSES] } },
+    select: { id: true, status: true },
+    orderBy: { createdAt: 'asc' },
+  });
+  if (live.length === 0) return;
+
+  const rows = live.map((job) => `    ${job.id}  ${job.status}`).join('\n');
+  throw new Error(
+    `refusing to re-seed: the demo van (${UNIT}) still has ${live.length} live ` +
+      `job${live.length === 1 ? '' : 's'}.\n\n` +
+      `Forcing it back to AVAILABLE would not close ${live.length === 1 ? 'it' : 'them'}, and the next\n` +
+      `dispatch would put a second active job on one van — invariant 7.\n\n` +
+      `${rows}\n\n` +
+      `Run \`bash scripts/demo-reset.sh\` to start over. It drops the database\n` +
+      `first, so this check passes and the board comes back clean.`,
+  );
+}
+
 async function seedZone(db: PrismaClient): Promise<void> {
   await db.zone.upsert({
     where: { id: ZONE },
@@ -235,14 +274,14 @@ async function seedVan(db: PrismaClient, now: Date): Promise<void> {
     // or ON_JOB, and the next run has to put it back or the only unit on the
     // board fails UNIT_UNAVAILABLE.
     //
-    // DO NOT RUN THIS SEEDER IN THE MIDDLE OF A LIVE DEMO. Forcing the van back
-    // to AVAILABLE does not close the job it was on, so the job stays COMMITTED
-    // with this unit assigned while the unit is free to be held again — and the
-    // next dispatch puts a SECOND active job on it, which is invariant 7
-    // ("one active job per unit") broken by the fixture rather than by the
-    // product. Observed exactly that way while verifying this seed: two holds
-    // 46 seconds apart, both CONSUMED, because a re-seed landed between them.
-    // Starting over means `scripts/demo-reset.sh`, which drops the database.
+    // THIS IS WHY `refuseIfTheVanIsBusy` EXISTS. Forcing the van back to
+    // AVAILABLE does not close the job it was on, so without that guard a
+    // mid-demo re-seed left the job COMMITTED with this unit assigned while the
+    // unit was free to be held again — and the next dispatch put a SECOND
+    // active job on it, which is invariant 7 ("one active job per unit") broken
+    // by the fixture rather than by the product. Observed exactly that way
+    // while verifying this seed: two holds 46 seconds apart, both CONSUMED,
+    // because a re-seed landed between them. The guard now refuses instead.
     update: { status: 'AVAILABLE', zoneId: ZONE, currentTechnicianId: TECHNICIAN },
     create: {
       id: UNIT,
@@ -331,6 +370,9 @@ async function stockTheVan(db: PrismaClient, now: Date): Promise<void> {
 async function seedDemo(): Promise<void> {
   const now = new Date();
 
+  // FIRST, BEFORE ANY WRITE. A refusal has to leave the database untouched.
+  await refuseIfTheVanIsBusy(prisma);
+
   // The four lookup tables and the platform ledger, in the same order
   // prisma/seed.ts uses them: prices need parts.
   await seedCapabilities(prisma);
@@ -369,8 +411,12 @@ seedDemo()
     process.exit(0);
   })
   .catch(async (error: unknown) => {
+    // THE REFUSAL IS A MESSAGE, NOT A CRASH. `refuseIfTheVanIsBusy` throws
+    // something a person is meant to read and act on, and a stack trace above
+    // it buries the one line that says what to run. Anything that is not an
+    // Error still prints in full — an unexpected failure should be loud.
     // eslint-disable-next-line no-console
-    console.error(error);
+    console.error(error instanceof Error ? `\n${error.message}\n` : error);
     await prisma.$disconnect();
     process.exit(1);
   });
