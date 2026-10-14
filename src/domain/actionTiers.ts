@@ -38,6 +38,7 @@ export const ACTION_KINDS = [
   'RELEASE_TECHNICIAN_NO_LONGER_NEEDED',
   'ESCALATE_SLA_WINDOW_CLOSED',
   'ESCALATE_NO_FEASIBLE_PLAN',
+  'ESCALATE_DISPATCH_REQUEUED',
 
   // APPROVE — commercial, or an admission that something has already failed.
   'ESCALATE_THRASHING_JOB',
@@ -74,6 +75,9 @@ const CHANGES_WHO_IS_GOING: ReadonlySet<ActionKind> = new Set([
   // Nobody is coming and waiting will not change that, so this is the queue's
   // most urgent shape even though its tier is only RECOMMEND.
   'ESCALATE_NO_FEASIBLE_PLAN',
+  // Same shape, different cause: a plan existed and the reservation lost its
+  // race, so the job is back on the board with nobody on it.
+  'ESCALATE_DISPATCH_REQUEUED',
   'CANCEL_JOB',
   'APPROVE_CROSS_TENANT_CONTENTION',
   'ESCALATE_THRASHING_JOB',
@@ -125,6 +129,20 @@ const TIERS: Record<ActionKind, ActionTier> = {
   // worse than no button. Execute here means "I have seen it and I am dealing
   // with it", which is exactly what the SLA card's button already means.
   ESCALATE_NO_FEASIBLE_PLAN: 'RECOMMEND',
+  // A SAGA THAT LOST ITS RACE, MADE VISIBLE (invariant 8). `finishAsRequeued`
+  // parks the job back at PLANNED with no unit and no technician, and until
+  // this card existed that state reached an operator only by accident: the job
+  // rejoined the undifferentiated pending pile, ranked below every HIGH_RISK
+  // job, and the first thing that actually said anything was
+  // ESCALATE_SLA_WINDOW_CLOSED — which fires once the promise is ALREADY
+  // broken. A degraded state visible only after it becomes a breach is not
+  // visible in any sense the invariant means.
+  //
+  // RECOMMEND, and Execute means what it means on the two cards above: "I have
+  // seen it and I am dealing with it". It deliberately does NOT restart a
+  // saga — picking a new crew is a re-solve, which is handleTrigger's job and
+  // needs a plan this card does not carry.
+  ESCALATE_DISPATCH_REQUEUED: 'RECOMMEND',
 
   ESCALATE_THRASHING_JOB: 'APPROVE',
   CANCEL_JOB: 'APPROVE',

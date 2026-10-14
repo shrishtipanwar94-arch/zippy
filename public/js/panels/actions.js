@@ -63,6 +63,7 @@ const KIND_LABEL = {
   RELEASE_TECHNICIAN_NO_LONGER_NEEDED: 'Release a crew this job no longer needs',
   ESCALATE_SLA_WINDOW_CLOSED: 'SLA window closed — commercial follow-up',
   ESCALATE_NO_FEASIBLE_PLAN: 'No crew can take this job',
+  ESCALATE_DISPATCH_REQUEUED: 'The crew for this job did not hold — nobody is assigned',
 
   ESCALATE_THRASHING_JOB: 'This job keeps being re-planned',
   CANCEL_JOB: 'Cancel this job',

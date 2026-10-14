@@ -36,6 +36,7 @@ import { createHold, releaseHold, consumeHold } from './holds.js';
 import { proposeOffer, respondToOffer } from './offers.js';
 import { recordReleaseCompensationQuietly } from './earnings.js';
 import { recordAcceptanceOutcome } from './destinationAcceptance.js';
+import { requestAction, hasOpenAction } from './actionRequests.js';
 import { runPublishingTransaction } from '../realtime/transaction.js';
 
 export const TERMINAL_STATES: SagaState[] = ['COMMITTED', 'REQUEUED'];
@@ -416,10 +417,17 @@ export async function compensateSaga(
   return 'REQUEUED';
 }
 
-// The job goes back on the board. Nothing CONSUMES this yet — the re-solve
-// trigger list is Phase 13's, and defining one here would put the second copy
-// of it in the codebase. What exists now is the durable fact: state REQUEUED
-// and an event saying why.
+// The job goes back on the board. No re-solve is triggered from here — the
+// trigger list is Phase 13's and defining one here would put the second copy
+// of it in the codebase — so what this writes is the durable fact (state
+// REQUEUED, an event saying why) plus the card that puts it in front of a
+// person.
+//
+// THE CARD IS INVARIANT 8, NOT DECORATION. Without it the only thing that ever
+// said a requeued job was stuck was ESCALATE_SLA_WINDOW_CLOSED, which fires
+// after the promise is already broken; in between, the job sat at PLANNED with
+// nobody on it, ranked below every HIGH_RISK job in a queue that shows the top
+// fifty. See src/domain/actionTiers.ts for why the tier is RECOMMEND.
 async function finishAsRequeued(
   db: PrismaClient,
   sagaId: string,
@@ -449,5 +457,18 @@ async function finishAsRequeued(
       eventType: 'DISPATCH_REQUEUED',
       payload: { sagaId, reason } satisfies Prisma.InputJsonValue,
     });
+  });
+
+  // AFTER the transaction, because requestAction opens its own. One card per
+  // job, not one per attempt: a job whose reservation loses the race twice is
+  // still one thing a dispatcher has to deal with, and the same guard the
+  // thrash and no-plan branches use keeps the queue readable.
+  if (await hasOpenAction(db, { jobId, kind: 'ESCALATE_DISPATCH_REQUEUED' })) return;
+
+  await requestAction(db, {
+    jobId,
+    kind: 'ESCALATE_DISPATCH_REQUEUED',
+    reason: `the reservation for this job did not hold (${reason}); nobody is assigned and it will not move on its own`,
+    impact: { sagaId, reason } satisfies Prisma.InputJsonValue,
   });
 }

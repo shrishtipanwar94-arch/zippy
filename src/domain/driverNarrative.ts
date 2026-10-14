@@ -126,7 +126,20 @@ export function headlineFor(context: NarrativeContext): string {
     // nobody has been asked yet; OFFERED means somebody has been asked and has
     // forty-five seconds to answer. Both are progress, and saying so is the
     // whole job of this screen.
+    // PLANNED SPLITS ON WHETHER THERE IS ACTUALLY A CREW ON THE ROW, because
+    // two paths park a job here with nobody on it: a saga whose hold lost its
+    // race (finishAsRequeued, src/commit/saga.ts) and a crew taken off after a
+    // diagnosis change (releaseCurrentCrew, src/commit/redispatch.ts). Keyed on
+    // the status alone, this sentence told a driver a crew had been found and
+    // was being contacted when nothing was held, nobody had been asked, and
+    // nothing would move until a dispatcher acted — the opposite of the truth,
+    // on the one screen whose reader is already having a bad day.
+    //
+    // `helperName` is the durable fact and was already in this context, so the
+    // honest branch costs no new backend. The crew sentence survives for any
+    // path that does put a crew on a PLANNED row.
     case 'PLANNED':
+      if (context.helperName === null) return 'Still looking for a crew for this.';
       return 'We have found a crew for this and are contacting them now.';
     case 'OFFERED':
       return 'We have asked a technician to come. Waiting for them to confirm.';
