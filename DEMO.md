@@ -321,7 +321,48 @@ nothing else.
 
 **The offer expired before you pressed Accept.** 45 seconds is the real TTL.
 Start again from Step 3: send another message and confirm it. The van goes back
-on the board when the offer times out.
+on the board when the offer times out. See the note below before you consider
+making it longer.
+
+### The 45 seconds is not configurable, and lengthening it takes two changes
+
+There is **no environment variable** for it. Two module constants govern the
+window, and the only production caller overrides neither:
+
+| constant | value | file |
+| --- | --- | --- |
+| `DEFAULT_OFFER_TTL_MS` | 45 s | `src/commit/offers.ts:31` |
+| `DEFAULT_HOLD_TTL_MS` | 2 min | `src/commit/holds.ts:37` |
+
+`startSaga` does accept `offerTtlMs` and `holdTtlMs` per call, but
+`executeReassignment` (`src/commit/redispatch.ts`) passes neither, so both
+defaults always apply.
+
+**Raising only the offer breaks the accept.** `consumeHold` updates
+`WHERE status = 'ACTIVE' AND expires_at > now`, and `releaseExpiredHolds` in
+`src/workers/cleanup.ts` marks anything past its expiry `EXPIRED_BY_SWEEP`. So
+with a five-minute offer against a two-minute hold, a technician pressing
+**Accept** at 3:00 sees the offer still counting down and the reservation fails
+because the van it was holding has already been let go — a worse demo than the
+one that merely runs out. **The hold TTL has to be at least the offer TTL.**
+
+Nothing here has been changed. The production defaults are deliberate — a
+technician answering a phone, a van not stranded by a dispatcher who closed
+their laptop — and `tests/concurrency/holds.test.ts` imports
+`DEFAULT_HOLD_TTL_MS` and builds a hold with it, so it follows the constant
+rather than pinning the number. If you want a longer window for talking, the
+honest options are, in order of how much they touch:
+
+1. **Accept promptly** — have the technician window open and in front of you
+   before Step 4. This is what the demo is written for.
+2. **Pass the TTLs at the one call site** — give `executeReassignment` a pair of
+   optional arguments that default to today's values, so only the demo path
+   supplies longer ones.
+3. **Put them in `src/infra/config.ts`** as env vars with today's values as
+   defaults. Cleanest, and the widest blast radius: both constants are asserted
+   against in the concurrency suite.
+
+Say which and I will do it as its own change.
 
 **The dispatcher's banner is red.** Read it — it names the component and what
 the fallback is. `Crew on shift` degraded means the shift has lapsed; see above.
