@@ -162,16 +162,22 @@
           <!-- SOLVE IS A CONTROL, NOT A PANEL. It spent a whole card — header,
                border, body padding — on one button and an empty row, which made
                the board region open on furniture. It is now a slim bar at the
-               top of the column: the button, the run summary, and the error
-               line, with the plans appearing underneath only once a solve has
-               produced any. -->
+               top of the column: the button and the error line, with the run's
+               own account of itself and then the plans appearing underneath
+               only once a solve has produced any. -->
           <div class="board-bar">
             <button data-action="solve" class="btn btn-primary btn-sm">
               Solve — plan every pending job
             </button>
-            <span data-field="solve-summary" class="text-muted small ms-auto"></span>
           </div>
           <div data-field="plan-error" class="alert alert-warning py-1 px-2 small" hidden></div>
+
+          <!-- THE SOLVE, NARRATING ITSELF. Fills in one sentence at a time
+               while the run is happening — the server streams a line per stage
+               (src/api/solve.ts) and panels/solveTrace.js appends them. It sits
+               above the plans because it is the story of how they were arrived
+               at, and the plans are the answer. -->
+          <div class="solve-trace" data-panel="solve-trace" hidden></div>
           <!-- THE THREE PLANS. Phase 4's per-row unit dropdown lived in this
                page and is gone: a dispatcher chooses between whole plans now,
                not between units one job at a time. Selecting one RECORDS the

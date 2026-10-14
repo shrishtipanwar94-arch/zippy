@@ -97,6 +97,21 @@ body.console {
   padding: 0.375rem 0.5rem;
 }
 
+/* THE DECISION, IN WORDS, at the top of the inspector. Set slightly larger than
+ * the tables under it: this is the answer, and the arithmetic below it is the
+ * working. Plain prose on the panel's own ground rather than another card —
+ * boxing it would make it look like one more block to skip. */
+.decision-story {
+  font-size: var(--size-3);
+  line-height: 1.5;
+}
+
+.decision-story-title {
+  font-size: var(--size-2);
+  font-weight: var(--weight-strong);
+  margin-bottom: var(--space-2);
+}
+
 /* ---------------------------------------------------------------------------
  * THE ACTION QUEUE (Phase 13, surfaced in Phase 22b).
  *

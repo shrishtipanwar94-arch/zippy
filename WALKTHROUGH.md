@@ -233,9 +233,14 @@ Press **Solve — plan every pending job**.
 
 **Expect:**
 
-- A summary line beside the button: *N jobs · N options · N feasible · Nms*.
-  With this board, 22 jobs (the 21 waiting plus yours) and several hundred
-  options.
+- A transcript filling in under the button, one sentence at a time while the
+  run is happening: how many jobs are waiting, how many crew-and-job
+  combinations were paired (with this board, 22 jobs and several hundred
+  combinations), how many could actually do the work and what refused the rest,
+  that the most dangerous jobs were matched in a round of their own before cost
+  was compared at all, how many jobs ended with a crew, and how long it took.
+  The safety line is the marked one — that is invariant 4 happening where you
+  can watch it.
 - Four plan cards underneath: **FASTEST_RESOLUTION**, **LOWEST_COST**,
   **BALANCED** (marked `RECOMMENDED`), **PROTECT_CONTRACTS**, each with a
   `TOTAL` and a per-job unit and cost.
@@ -263,6 +268,11 @@ Click your job's row in the priority queue (or its id in the timeline).
 into a full column — on a window narrower than 1440 it is a wide band under the
 board instead. Inside it, **WHY THIS TECHNICIAN?**:
 
+- the decision written as prose at the top — *"Why Ravi in VAN-07?"* — naming
+  how many crews were ruled out and for what, why this one is the crew on the
+  card, and which competing plan would have sent somebody else and what that
+  would have cost. If the job is HIGH_RISK it says so, and says it was matched
+  before any cost was compared;
 - a header naming the believed fault distribution and the capabilities required;
 - the **chosen** crew, with its unit code and technician;
 - the cost breakdown, term by term — `expectedTimeToResolution`, `slaRisk`,

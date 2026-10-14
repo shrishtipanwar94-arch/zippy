@@ -38,6 +38,8 @@ import { scoreOption } from './cost.js';
 import type { CostBreakdown, WeightVectorName } from './cost.js';
 import { WEIGHT_VECTORS } from './cost.js';
 import { UNAVAILABLE_COST, solveAssignment } from './allocation.js';
+import { addBand, countRejectionsByCode, countUnassignedByReason } from './trace.js';
+import type { SafetyBandTrace, StageReporter } from './trace.js';
 import { findContestedResources } from '../domain/contractContention.js';
 import type { ContestedResource } from '../domain/contractContention.js';
 import type { TravelTimeSource } from '../infra/routing.js';
@@ -194,6 +196,10 @@ function buildPlan(
   unitIds: string[],
   scored: ScoredCandidate[],
   safetyByJob: Map<string, SafetyLevelSnapshot>,
+  // Told about each band as it is solved, so a caller can watch the handover
+  // rather than infer it from the finished plan. Optional, and absent for every
+  // vector but the recommended one — see the call site.
+  onBand?: (band: SafetyBandTrace) => void,
 ): Plan {
   const bestByJobAndUnit = new Map<string, ScoredCandidate>();
   for (const candidate of scored) {
@@ -224,7 +230,17 @@ function buildPlan(
     totalCost += band.totalCost;
 
     const taken = new Set(band.assignments.map((assignment) => assignment.unitId));
-    remainingUnitIds = remainingUnitIds.filter((unitId) => !taken.has(unitId));
+    const leftBelow = remainingUnitIds.filter((unitId) => !taken.has(unitId));
+
+    onBand?.({
+      level,
+      jobCount: bandJobIds.length,
+      assignedCount: band.assignments.length,
+      unitsOffered: remainingUnitIds.length,
+      unitsLeftBelow: leftBelow.length,
+    });
+
+    remainingUnitIds = leftBelow;
   }
 
   return { label, assignments, unassignedJobIds, totalCost };
@@ -365,11 +381,27 @@ export type SolveInput = {
   // generateCandidates; the Phase 10 harness passes `haversineTravelTimes` so
   // a replayed scenario is instant and identical every run.
   travelTimes?: TravelTimeSource;
+  // TOLD WHAT IS HAPPENING, AS IT HAPPENS. Optional and read-only: a run with a
+  // reporter attached produces exactly the plans a run without one produces, so
+  // the evaluation harness passing none loses nothing but the narration. See
+  // src/engine/trace.ts for why the stages carry facts and never sentences.
+  onStage?: StageReporter;
 };
 
 export async function solve(input: SolveInput): Promise<SolverOutcome> {
   const startedAt = Date.now();
   const { jobs, snapshot, now, jobZone, zonePartitionThreshold, travelTimes, deadlineMs } = input;
+  const onStage = input.onStage;
+  const since = () => Date.now() - startedAt;
+
+  onStage?.({
+    stage: 'PENDING',
+    elapsedMs: 0,
+    jobCount: jobs.length,
+    unitCount: snapshot.units.length,
+    availableUnitCount: snapshot.units.filter((unit) => unit.status === 'AVAILABLE').length,
+    technicianCount: snapshot.technicians.length,
+  });
 
   // 1-3. Candidates then feasibility, per job.
   const scored: ScoredCandidate[] = [];
@@ -406,6 +438,21 @@ export async function solve(input: SolveInput): Promise<SolverOutcome> {
   const feasibleCount = scored.length / Object.keys(WEIGHT_VECTORS).length;
   const zonePartitioned = optionCount > zonePartitionThreshold;
 
+  onStage?.({
+    stage: 'CANDIDATES',
+    elapsedMs: since(),
+    jobCount: jobs.length - unplannedJobIds.length,
+    optionCount,
+  });
+  onStage?.({
+    stage: 'FEASIBILITY',
+    elapsedMs: since(),
+    optionCount,
+    feasibleCount,
+    rejectedCount: rejected.length,
+    rejectedByCode: countRejectionsByCode(rejected),
+  });
+
   // 5. One assignment per weight vector.
   const allJobIds = jobs.map((job) => job.id);
   const allUnitIds = snapshot.units.map((unit) => unit.id);
@@ -415,15 +462,34 @@ export async function solve(input: SolveInput): Promise<SolverOutcome> {
 
   const safetyByJob = new Map(jobs.map((job) => [job.id, job.safetyLevel]));
 
+  // THE SAFETY HANDOVER IS REPORTED FOR ONE PLAN ONLY — the recommended one.
+  // Every vector solves the same bands in the same order over the same jobs, so
+  // reporting all four would put the same argument on screen four times about
+  // plans nobody took. Summed across zone partitions; see trace.ts `addBand`.
+  const bandTotals = new Map<SafetyLevelSnapshot, SafetyBandTrace>();
+
   const plans: Plan[] = (Object.keys(WEIGHT_VECTORS) as WeightVectorName[]).map((label) => {
     const forThisVector = scored.filter((candidate) => candidate.cost.weightVector === label);
+    const recordBand =
+      onStage && label === RECOMMENDED_PLAN
+        ? (band: SafetyBandTrace) => addBand(bandTotals, band)
+        : undefined;
 
     // Each partition is solved independently and the results concatenated —
     // a unit only ever appears in one partition, so no unit can be assigned
     // twice across them.
     const parts = partitions.map((partition) =>
-      buildPlan(label, partition.jobIds, partition.unitIds, forThisVector, safetyByJob),
+      buildPlan(label, partition.jobIds, partition.unitIds, forThisVector, safetyByJob, recordBand),
     );
+
+    if (recordBand) {
+      onStage?.({
+        stage: 'SAFETY_BANDS',
+        elapsedMs: since(),
+        planLabel: label,
+        bands: SAFETY_ASSIGNMENT_ORDER.flatMap((level) => bandTotals.get(level) ?? []),
+      });
+    }
 
     return {
       label,
@@ -432,6 +498,29 @@ export async function solve(input: SolveInput): Promise<SolverOutcome> {
       totalCost: parts.reduce((sum, part) => sum + part.totalCost, 0),
     };
   });
+
+  const recommended = plans.find((plan) => plan.label === RECOMMENDED_PLAN);
+
+  onStage?.({
+    stage: 'COST',
+    elapsedMs: since(),
+    // Read off the weight vector rather than written down, for the same reason
+    // the plan count is not written down: adding a term should be one edit.
+    termCount: Object.keys(WEIGHT_VECTORS[RECOMMENDED_PLAN]).length,
+    planLabels: Object.keys(WEIGHT_VECTORS),
+    zonePartitioned,
+  });
+
+  if (recommended) {
+    onStage?.({
+      stage: 'OUTCOME',
+      elapsedMs: since(),
+      planLabel: recommended.label,
+      assignedCount: recommended.assignments.length,
+      unassignedCount: recommended.unassignedJobIds.length,
+      unassignedByReason: countUnassignedByReason(recommended.unassignedJobIds, rejected),
+    });
+  }
 
   // 6. Which scarce units a contract job and a consumer job both wanted.
   //
@@ -443,6 +532,16 @@ export async function solve(input: SolveInput): Promise<SolverOutcome> {
   const contestedResources = contestedIn(RECOMMENDED_PLAN, plans, scored, jobs);
 
   // 7. Return the plans. Nothing has been written.
+  const wallClockMs = Date.now() - startedAt;
+
+  onStage?.({
+    stage: 'DONE',
+    elapsedMs: wallClockMs,
+    wallClockMs,
+    timedOut,
+    unplannedCount: unplannedJobIds.length,
+  });
+
   return {
     snapshotHash: hashSnapshot(jobs, snapshot),
     plans,
@@ -450,7 +549,7 @@ export async function solve(input: SolveInput): Promise<SolverOutcome> {
     optionCount,
     feasibleCount,
     zonePartitioned,
-    wallClockMs: Date.now() - startedAt,
+    wallClockMs,
     timedOut,
     unplannedJobIds,
     contestedResources,

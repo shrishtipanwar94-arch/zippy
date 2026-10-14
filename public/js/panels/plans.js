@@ -32,21 +32,20 @@
 // Rebuilt wholesale on each render. Plans change only when someone presses
 // Solve, and the reason input is re-seeded from state so a re-render during
 // typing does not discard it.
+//
+// THE RUN'S OWN NUMBERS ARE NO LONGER HERE. This panel used to carry a summary
+// strip — "25 jobs · 600 options · 318 feasible · 1400ms" — which is the same
+// four figures the solve trace above now states in sentences, as bare numbers
+// with nothing attached to them. Two versions of one fact, one of which a
+// person has to be told how to read, is one too many.
+
+import { describeJobRejections } from './rejectionWords.js';
 
 const RECOMMENDED = 'BALANCED';
 
 export function render(state) {
   const panel = document.querySelector('[data-panel="plans"]');
   if (!panel) return;
-
-  const summary = document.querySelector('[data-field="solve-summary"]');
-  if (summary) {
-    summary.textContent = state.solve
-      ? `${state.solve.jobCount} jobs · ${state.solve.optionCount} options · ` +
-        `${state.solve.feasibleCount} feasible · ${state.solve.wallClockMs}ms` +
-        (state.solve.zonePartitioned ? ' · ZONE-PARTITIONED' : '')
-      : '';
-  }
 
   if (!state.solve || state.solve.plans.length === 0) {
     panel.replaceChildren();
@@ -190,24 +189,11 @@ function escapeHtml(value) {
 // dominant reason, so the counts add up to the unassigned total and can be read
 // as "six of the ten".
 //
-// PHRASES LIVE HERE AND ARE ASSERTED AGAINST THE ENGINE. Same arrangement as
-// ACTION_LABELS in actions.js: the console has no build step and cannot import
-// the server's types, so the map is duplicated and tests/consolePanels.test.ts
-// asserts it covers every RejectionCode. Duplication a test catches beats a
-// bundler.
-const REJECTION_PHRASES = {
-  UNIT_UNAVAILABLE: 'every capable unit is already on a job',
-  VEHICLE_TYPE_INCOMPATIBLE: 'no unit can handle the vehicle',
-  CAPABILITY_MISSING: 'no crew holds the skills the fault needs',
-  ACCESS_RESTRICTION: 'no unit can physically reach the vehicle',
-  NO_TECHNICIAN_ON_SHIFT: 'capable units have no technician on shift',
-  SLA_UNREACHABLE: 'unreachable within SLA',
-  PART_UNAVAILABLE: 'the part is not in any van in range',
-  NO_DESTINATION_AVAILABLE: 'no workshop can take it',
-  DESTINATION_NOT_AUTHORISED: 'no authorised destination',
-  DESTINATION_EV_CLASS_MISMATCH: 'no destination certified for the EV class',
-  TENANT_CONTRACT_EXCLUDES: 'the contract excludes this work',
-};
+// THE PHRASES LIVE IN ./rejectionWords.js, in two voices — one about a job and
+// one about a crew — because the trace and the inspector count crews while this
+// card counts jobs. Both are asserted against the engine's RejectionCode union
+// by tests/unassignedReasons.test.ts: the console has no build step and cannot
+// import the engine's types, so a test does what a compiler would.
 
 // The one reason to give a job, when its options were refused for several. The
 // most common one, ties broken by name so the sentence is stable between
@@ -235,29 +221,15 @@ export function describeUnassigned(unassignedJobIds, rejected) {
     if (codes) codes.push(rejection.code);
   }
 
-  const jobsByReason = new Map();
-  let unexplained = 0;
+  const counts = {};
   for (const codes of codesByJob.values()) {
-    const code = dominantReason(codes);
     // A job with no rejections at all was not refused — it lost to another job
     // for a unit both could have taken. That is contention, not infeasibility,
     // and calling it a reason code would be inventing one.
-    if (!code) {
-      unexplained += 1;
-      continue;
-    }
-    jobsByReason.set(code, (jobsByReason.get(code) ?? 0) + 1);
+    const reason = dominantReason(codes) ?? 'CONTENTION';
+    counts[reason] = (counts[reason] ?? 0) + 1;
   }
 
-  const parts = [...jobsByReason.entries()]
-    .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
-    .map(([code, count]) => `${count} ${REJECTION_PHRASES[code] ?? code}`);
-
-  if (unexplained > 0) {
-    parts.push(`${unexplained} lost a unit to a higher-priority job`);
-  }
-
-  return parts.join(' · ');
+  return describeJobRejections(counts).join(' · ');
 }
 
-export { REJECTION_PHRASES };

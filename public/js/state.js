@@ -28,6 +28,13 @@ const state = {
   // Null until a dispatcher presses Solve.
   solve: null,
 
+  // THE SOLVE, NARRATING ITSELF. One entry per stage the engine reported, in
+  // the order it reported them — the server streams them while the run is
+  // happening (src/api/solve.ts), so this array grows during the solve rather
+  // than arriving complete at the end. `running` is what tells the panel the
+  // difference between "still working" and "that was all of it".
+  solveTrace: { stages: [], running: false },
+
   // THE INCIDENT TIMELINE. Held here rather than in the panel because the
   // filters and the rows are one piece of state — changing a filter refetches,
   // and the panel must never hold a copy that can disagree with this one.
@@ -290,6 +297,20 @@ export function setJobs(jobs) {
 
 export function setSolve(result) {
   state.solve = result;
+}
+
+// A new solve is a new story, so the last one goes rather than being appended
+// to: two runs' stages in one list would read as one impossibly long run.
+export function startSolveTrace() {
+  state.solveTrace = { stages: [], running: true };
+}
+
+export function pushSolveStage(stage) {
+  state.solveTrace.stages.push(stage);
+}
+
+export function finishSolveTrace() {
+  state.solveTrace.running = false;
 }
 
 // A LIVE EVENT, PUSHED. The timeline is fetched once and then kept current by

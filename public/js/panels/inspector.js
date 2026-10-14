@@ -23,6 +23,8 @@
 // operator selects a different job, and has no scroll position worth
 // preserving across a deliberate selection change.
 
+import { narrateDecision } from './decisionNarration.js';
+
 export function render(state) {
   const panel = document.querySelector('[data-panel="inspector"]');
   if (!panel) return;
@@ -54,6 +56,14 @@ export function render(state) {
   }
 
   parts.push(runSummary(decision.solverRun));
+
+  // THE DECISION IN WORDS, ABOVE THE ARITHMETIC. Everything below this is the
+  // same decision expressed as numbers; this is it expressed as the sentence a
+  // dispatcher would say to a customer. It computes nothing — see
+  // panels/decisionNarration.js.
+  const narration = narrateDecision(decision);
+  if (narration) parts.push(narrationBlock(narration));
+
   if (decision.hypothesis) parts.push(hypothesisBlock(decision.hypothesis));
 
   // Per job, not per option — and above the options, because when screening
@@ -62,11 +72,6 @@ export function render(state) {
   if (screening) parts.push(screening);
 
   parts.push(sectionTitle(`Chosen (${decision.chosen.length})`));
-  // ABOVE the chosen option, not below it: when a human overruled the
-  // recommendation, their reason is the answer to "why this technician?" and
-  // the cost table underneath is the answer to a question nobody asked.
-  const override = overrideBlock(decision);
-  if (override) parts.push(override);
 
   if (decision.chosen.length === 0) {
     parts.push(hint('Every option was rejected — see the reason codes below.'));
@@ -101,26 +106,42 @@ function runSummary(run) {
   return box;
 }
 
-// WHY A HUMAN DIFFERED FROM THE RECOMMENDATION — the one question the cost
-// breakdown below cannot answer.
+// THE DECISION AS PROSE. One heading, a paragraph per thing worth saying, and —
+// when a human departed from the recommendation — their reason in amber.
 //
-// The server refuses to record a non-BALANCED plan without a reason (422 from
-// POST /plans/:id/select) and stores it on decision_records.override_reason_code.
-// Until Phase 22b's audit this panel read `decision.decisionRecordNote`, a key
-// GET /decisions/:jobId has never sent — so the justification was demanded,
-// stored, and then shown to nobody. It is `overrideReasonCode`.
+// AMBER FOR THE OVERRIDE, and this is the one question the cost breakdown below
+// genuinely cannot answer. The server refuses to record a non-BALANCED plan
+// without a reason (422 from POST /plans/:id/select) and stores it on
+// decision_records.override_reason_code. Until Phase 22b's audit this panel read
+// `decision.decisionRecordNote`, a key GET /jobs/:id/decision has never sent —
+// so the justification was demanded, stored, and then shown to nobody.
 //
-// Amber rather than muted: an overridden decision is the one case where the
-// numbers underneath do NOT explain the assignment, and an operator scanning
-// this panel needs to see that before they start reading the cost terms.
-function overrideBlock(decision) {
-  if (!decision.overrideReasonCode) return null;
-
+// textContent throughout rather than innerHTML: every sentence here is built in
+// the browser out of server data, and a rejection detail or an override reason
+// is not a place to discover that something upstream accepted a `<`.
+function narrationBlock(narration) {
   const box = document.createElement('div');
-  box.className = 'override-note small mb-2';
-  box.innerHTML =
-    '<div class="text-muted">overridden by a dispatcher</div>' +
-    `<div>${escapeHtml(decision.overrideReasonCode)}</div>`;
+  box.className = 'decision-story mb-3';
+
+  const heading = document.createElement('div');
+  heading.className = 'decision-story-title';
+  heading.textContent = narration.title;
+  box.append(heading);
+
+  for (const paragraph of narration.paragraphs) {
+    const line = document.createElement('p');
+    line.className = 'mb-1';
+    line.textContent = paragraph;
+    box.append(line);
+  }
+
+  if (narration.override) {
+    const note = document.createElement('div');
+    note.className = 'override-note small mt-2';
+    note.textContent = narration.override;
+    box.append(note);
+  }
+
   return box;
 }
 

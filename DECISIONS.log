@@ -793,3 +793,216 @@ it by phone", not a fabricated acceptance that would also poison the learned
 P(accept) it feeds. And: "what is the difference between the three gaps in your
 console?" — one line, one call, and one counterparty that was never specified;
 being able to size them separately is most of what §15 is for.
+
+## Phase 22h — the engine narrates itself / 2026-09-10 / (this commit)
+
+### Built
+`src/engine/trace.ts` — new. `SolveStage` (a discriminated union of seven
+stages: PENDING, CANDIDATES, FEASIBILITY, SAFETY_BANDS, COST, OUTCOME, DONE),
+`StageReporter`, `SafetyBandTrace`, `countRejectionsByCode()`,
+`countUnassignedByReason()`, `addBand()`, `CONTENTION_REASON`. Facts only — the
+file writes no prose.
+
+`src/engine/solve.ts` — `SolveInput.onStage?`, optional and read-only.
+`buildPlan()` gains an `onBand` callback and reports `unitsOffered` /
+`unitsLeftBelow` as each safety band hands units down.
+
+`src/api/solve.ts` — `POST /solve` now answers NDJSON instead of one JSON body.
+`StreamMessage` (`stage` | `result` | `error`), and `planAndRecord()` split out
+so the route is only the streaming contract.
+
+`public/js/api.js` — `solveJobs(onStage)` and `eachJsonLine()`, which buffers
+partial lines and flushes the TextDecoder's straddling multi-byte tail.
+`authHeaders()` and `failure()` extracted from `request()`.
+
+`public/js/state.js` — `solveTrace: { stages, running }`, `startSolveTrace()`,
+`pushSolveStage()`, `finishSolveTrace()`.
+
+`public/js/panels/solveTrace.js` — new, appends-only.
+`public/js/panels/solveNarration.js` — new, `stageSentence()`.
+`public/js/panels/decisionNarration.js` — new, `narrateDecision()`.
+`public/js/panels/rejectionWords.js` — new, `REJECTION_PHRASES` and
+`CREW_REJECTION_PHRASES` in two voices, `describeJobRejections()`,
+`describeCrewRejections()`.
+`public/js/panels/planWords.js` — new, `PLAN_WORDS`, `planWord()`,
+`describePlans()`.
+
+`public/js/panels/inspector.js` — `narrationBlock()` replaces `overrideBlock()`,
+built with `textContent` throughout. `public/js/panels/plans.js` — the summary
+strip and its private `REJECTION_PHRASES` deleted; `describeUnassigned()` now
+delegates its wording.
+
+`src/api/console.ts` — `namesForTechnicians()`, `withName()`, and
+`selectedOptionId` on the decision payload. `src/commit/decisionRecords.ts` —
+`latestDecisionFor()` returns `selectedOptionId`.
+
+`public/dispatcher.html`, `public/css/console.css`,
+`public/css/console-regions.css` — the trace panel and `.decision-story`, with a
+`prefers-reduced-motion` branch on the line animation.
+
+`tests/narration.test.ts` — new, 18 tests on the actual wording.
+`tests/unassignedReasons.test.ts` — the two phrase maps and `PLAN_WORDS`
+asserted complete against the engine. No schema change, no migration.
+
+### Decisions
+
+**Decision** The engine reports facts; the console owns every sentence.
+**Why** One vocabulary for the decision, in the place a person reads it. The
+trace and the inspector have to agree with the plan card about what
+`CAPABILITY_MISSING` means, and they can only do that if the phrase exists once.
+**Alternative** Have `solve()` emit finished strings.
+**Why not** The engine would grow a second vocabulary that drifts from the
+console's within a phase, and `src/engine` would acquire a presentation concern
+it has never had.
+**Tradeoff** The console has no build step, so the phrase maps cannot import the
+engine's `RejectionCode` union or `WEIGHT_VECTORS`. Two tests parse the
+TypeScript source and do what a compiler would.
+
+**Decision** NDJSON over the existing POST, not a socket.
+**Why** The stages belong to one request and die with it. Socket.IO is already
+connected and carries board-wide events; putting a per-request transcript on it
+would mean every dispatcher receives every other dispatcher's solve narration.
+**Alternative** Socket.IO, or poll a run-status endpoint.
+**Why not** A socket needs a correlation id and a subscription teardown to say
+"this run, this operator", which is machinery for something the response body
+already scopes correctly.
+**Tradeoff** Headers go out with the first line, so the status code is committed
+before the work starts. A failure after that point is a 200 carrying an `error`
+line — see Weaknesses.
+
+**Decision** The safety handover is reported for the recommended plan only, and
+summed across zone partitions.
+**Why** All four vectors solve the same bands in the same order over the same
+jobs; reporting each would put one argument on screen four times about plans
+nobody took. A partitioned solve runs the bands once per zone, and showing the
+same band three times with numbers a reader cannot add up is worse than summing.
+**Alternative** Report every vector, or report each partition separately.
+**Why not** Both produce a transcript that is longer and says less.
+**Tradeoff** The summed line hides that a partitioned board was several
+independent matrices. The COST stage says so on its own line instead.
+
+**Decision** A 110ms minimum beat between showing lines (`TRACE_LINE_MS` in
+`public/js/pages/dispatcher.js`).
+**Why** The first stages land while routing is still going and genuinely arrive
+seconds apart; the last four are arithmetic over data already in memory and land
+within a millisecond, which drops four sentences at once and reads as a result.
+**Alternative** No delay, or an artificial delay on the server.
+**Why not** Delaying on the server would make `wallClockMs` — a number the DONE
+line prints — describe the pause rather than the solve.
+**Tradeoff** The screen takes longer than the run. The stated runtime is the
+server's real measurement, so on a fast board the last line can claim fewer
+milliseconds than the transcript visibly took to appear.
+
+**Decision** The per-job narration never says how many crews were CONSIDERED.
+**Why** `persistSolverRun.ts` writes every rejected option but only the feasible
+options a plan actually picked, so the feasible-but-unchosen ones were never
+recorded. "Of the six who could, this one was cheapest" is a count nobody can
+check.
+**Alternative** Persist a per-job tally, or derive it from the stored rows.
+**Why not** Deriving it undercounts — four vectors choosing one van is four rows
+and one unit. Persisting it is a migration, and the number is a nicety next to
+the reasons, which are all recorded exactly.
+**Tradeoff** The panel answers "how many were ruled out and why" and declines
+"out of how many". `tests/narration.test.ts` pins the refusal so a later edit
+cannot quietly invent it.
+
+**Decision** Weight-vector names get English words too (`planWords.js`).
+**Why** `PROTECT_CONTRACTS` is the right thing to print on a plan card, where it
+is a label. Inside a sentence it is jargon, and both new surfaces write prose.
+**Alternative** Leave the labels raw in prose.
+**Why not** The rule that turns reason codes into phrases is about sentences,
+not about which enum it is.
+**Tradeoff** A fourth vocabulary map to keep complete. `planWord()` falls back to
+the label, so an unworded vector reads as the code — ugly and true, which is the
+right way round.
+
+**Decision** The plan card's summary strip is deleted, not kept alongside.
+**Why** `25 jobs · 600 options · 318 feasible · 1400ms` is the same four figures
+the trace now states with what they count. Two versions of one fact, one of which
+a person must be told how to read, is one too many.
+**Alternative** Keep it as a compact summary for someone who prefers density.
+**Why not** It is the exact reading the brief calls bare numbers.
+**Tradeoff** A returning operator who had learned the strip has to read sentences.
+
+### Concurrency
+**Scenario** A dispatcher presses Solve twice before the first run finishes.
+**What races** Two NDJSON streams pushing stages into one `solveTrace.stages`
+array.
+**Why dangerous** Not a data race — the console is single-threaded — but the
+transcript would interleave two runs into one that describes neither, and the
+final `setSolve` would pair the loser's plans with the winner's transcript.
+**How handled** A `solving` flag in `dispatcher.js` ignores the second press.
+**Assumption relied on** One console tab is one operator. Two tabs still produce
+two independent runs; that was already true and the server serialises nothing.
+
+**Scenario** The solve throws after the first stage line is written.
+**What races** Nothing, but the status code is already committed.
+**Why dangerous** Express's error handler would try to set 500 on a response
+whose headers have gone, and the browser would get a truncated stream with no
+signal that it was truncated.
+**How handled** The snapshot read stays ABOVE the first `res.write`, so
+everything that can fail early still fails as ordinary JSON with a status. After
+that, failures are an `error` line and `api.js` throws on it; a stream that ends
+with no `result` line throws too.
+**Assumption relied on** `buildDispatchSnapshot` is the only pre-solve step that
+can fail. If a future edit puts work between the header write and the solve, that
+work loses its status code silently.
+
+### Weaknesses introduced
+- **A failed solve answers 200.** Once the stream has started the status cannot
+  change, so a mid-run failure is a 200 whose body carries an `error` line. The
+  browser handles it; anything watching HTTP status — a proxy, an uptime check —
+  sees success. Does not matter at current scale because nothing monitors this
+  route, and it would matter the moment something did.
+- **The transcript is not persisted.** It lives in browser state and a reload
+  loses it. The `SolverRun` row still holds the same figures, so nothing
+  auditable is lost — but the sentences are not reconstructable after the fact.
+- **The stated runtime and the perceived runtime differ**, because of the beat.
+  The number is honest; the experience is slower than the number.
+- **One extra query per decision panel open** (`namesForTechnicians`), over the
+  handful of technicians a job's options name. Chosen over a join on every option
+  row for a field only this panel wants.
+- **Four phrase maps to keep complete.** Three are asserted against the engine by
+  tests; that is the only thing making the duplication safe.
+- **`describeCrewRejections` counts OPTIONS, not crews**, and the sentence says
+  "crews". For one job the two coincide, which is where it is used — but the name
+  and the noun would both be wrong if it were ever pointed at a whole board.
+
+### Concepts now genuinely in use
+NDJSON and chunked transfer — one flushed JSON object per line, read
+incrementally with a `ReadableStream` reader, a line buffer, and a streaming
+`TextDecoder`. First place in the project where a response is consumed before it
+is complete. Backpressure is NOT handled: `res.write` returns a boolean nothing
+reads, which is safe only because a transcript is a handful of small lines.
+
+### What broke
+Nothing broke in the wiring — the stream, the stages and both panels worked as
+built. Two things were wrong on review.
+
+The plan labels were printed as raw enums inside prose: `The FASTEST_RESOLUTION
+plan would have sent…`, and a comma-joined list of all four in the COST line. The
+rule about reason codes had been followed exactly and read as being only about
+reason codes. The fix is `planWords.js` plus a completeness test that parses
+`WEIGHT_VECTORS` out of `src/engine/cost.ts` — there was a test asserting every
+`RejectionCode` has words and no equivalent for the vectors, which is why nothing
+caught it. That test also asserts a word is not merely the label echoed back,
+because `planWord()`'s fallback returns the label and a map entry that copied the
+code would otherwise pass.
+
+Verification was blocked for most of the session: Docker was not running, so the
+DB-backed suites could not run and `tests/solve.test.ts`'s invariant-2 suite
+failed on connection rather than on anything real. Worth stating plainly because
+the pure narration tests pass without a database and it would have been easy to
+call the work verified on their evidence alone. With Postgres, Redis and OSRM up:
+996 fast tests and 12 concurrency tests pass, typecheck and lint clean.
+
+### Interview angle
+"Your solver is a pure function over a snapshot — how did you make it narrate
+itself without breaking that?" A `StageReporter` callback the engine calls and
+never reads, so a run with a reporter returns exactly the plans a run without one
+returns and the evaluation harness, which passes none, is unaffected.
+
+"You say safety is lexicographic rather than a weight. Prove it." The
+SAFETY_BANDS line prints how many units each band was offered and how many it
+left below: no amount of cost can move a unit upward across those two numbers,
+because by the time the lower band is solved the unit is already gone.

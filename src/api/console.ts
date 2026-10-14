@@ -192,6 +192,7 @@ consoleRouter.get(
         hypothesis: job.faultHypotheses[0] ?? null,
         decisionRecord: null,
         overrideReasonCode: null,
+        selectedOptionId: null,
         runSource: 'none',
       });
       return;
@@ -231,6 +232,15 @@ consoleRouter.get(
       }),
     ]);
 
+    // THE CREW'S NAME, not only their id. The inspector now writes the decision
+    // as a sentence a dispatcher can read aloud to a customer, and "tech-07 is
+    // going" is not that sentence. One extra read, over the handful of
+    // technicians this job's options name — the alternative is a join on every
+    // option row for a field only this panel wants.
+    const technicianNames = await namesForTechnicians(
+      options.map((option) => option.technicianId),
+    );
+
     res.json({
       job: {
         id: job.id,
@@ -244,14 +254,22 @@ consoleRouter.get(
       solverRun,
       // Split here rather than in the browser: "chosen" and "rejected" are two
       // different questions and the panel renders them differently.
-      chosen: options.filter((candidate) => candidate.feasible),
-      rejected: options.filter((candidate) => !candidate.feasible),
+      chosen: options
+        .filter((candidate) => candidate.feasible)
+        .map((candidate) => withName(candidate, technicianNames)),
+      rejected: options
+        .filter((candidate) => !candidate.feasible)
+        .map((candidate) => withName(candidate, technicianNames)),
       // From Stage 2 this can be a real record. When it is, the screen is
       // showing what a HUMAN chose and why they differed from the
       // recommendation; when it is null, it is showing what the solver
       // proposed and nobody has committed to.
       decisionRecord: decision.decisionRecordId,
       overrideReasonCode: decision.overrideReasonCode,
+      // Which of the options above a dispatcher actually took. Null until
+      // somebody records a decision, which is the difference between "this is
+      // who is going" and "this is who the solver would send".
+      selectedOptionId: decision.selectedOptionId,
       runSource: decision.solverRunId
         ? 'decision-record'
         : job.assignedUnitId
@@ -260,6 +278,33 @@ consoleRouter.get(
     });
   },
 );
+
+// ---------------------------------------------------------------------------
+// A technician's name lives on their user row. Read as one query over the
+// distinct ids, and missing from the map rather than faked when a technician
+// has been removed — the panel falls back to the id, which is still true.
+async function namesForTechnicians(technicianIds: string[]): Promise<Map<string, string>> {
+  const distinct = [...new Set(technicianIds)];
+  if (distinct.length === 0) return new Map();
+
+  const technicians = await prismaBase.technician.findMany({
+    where: { id: { in: distinct } },
+    select: { id: true, user: { select: { name: true } } },
+  });
+
+  return new Map(
+    technicians
+      .filter((technician) => technician.user?.name)
+      .map((technician) => [technician.id, technician.user.name]),
+  );
+}
+
+function withName<T extends { technicianId: string }>(
+  option: T,
+  names: Map<string, string>,
+): T & { technicianName: string | null } {
+  return { ...option, technicianName: names.get(option.technicianId) ?? null };
+}
 
 // ---------------------------------------------------------------------------
 // Which solver run actually produced the assignment a job is carrying now.

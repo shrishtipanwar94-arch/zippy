@@ -14,6 +14,7 @@
 import { describe, expect, it, beforeAll, afterAll } from 'vitest';
 import { solve, hashSnapshot } from '../src/engine/solve.js';
 import type { SolverOutcome } from '../src/engine/solve.js';
+import type { SolveStage } from '../src/engine/trace.js';
 import type { DispatchSnapshot, JobForDispatch } from '../src/engine/candidates.js';
 import { FAULT_CODES } from '../src/domain/faults.js';
 import type { FaultDistribution } from '../src/domain/faults.js';
@@ -676,5 +677,135 @@ describe('solve — the deadline (Phase 17)', () => {
     });
 
     expect(outcome.timedOut).toBe(false);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// THE SOLVE TRACE (src/engine/trace.ts). The console streams these while a run
+// is happening, so what matters is that they arrive in the order the work
+// actually happened, that the numbers on them are the same numbers the finished
+// outcome carries, and — the part invariant 2 cares about — that attaching a
+// reporter cannot change the answer.
+
+describe('solve — the stage trace', () => {
+  const snapshot: DispatchSnapshot = {
+    units: [
+      {
+        id: 'u1',
+        zoneId: 'z1',
+        currentTechnicianId: 't1',
+        capabilityCodes: ['JUMP_START'],
+        lat: 12.94,
+        lng: 77.63,
+        kind: 'VAN',
+        status: 'AVAILABLE',
+      },
+      {
+        id: 'u2',
+        zoneId: 'z1',
+        currentTechnicianId: 't2',
+        capabilityCodes: ['JUMP_START'],
+        lat: 12.95,
+        lng: 77.64,
+        kind: 'VAN',
+        status: 'AVAILABLE',
+      },
+    ],
+    technicians: [
+      { id: 't1', capabilityCodes: ['JUMP_START'] },
+      { id: 't2', capabilityCodes: ['JUMP_START'] },
+    ],
+    shifts: [
+      { technicianId: 't1', ...allDayShift },
+      { technicianId: 't2', ...allDayShift },
+    ],
+    zones: [{ id: 'z1', centroidLat: 12.94, centroidLng: 77.63 }],
+  };
+
+  const jobs = [job('risky', { safetyLevel: 'HIGH_RISK' }), job('ordinary')];
+  const jobZone = new Map([
+    ['risky', 'z1'],
+    ['ordinary', 'z1'],
+  ]);
+
+  async function trace(): Promise<{ stages: SolveStage[]; outcome: SolverOutcome }> {
+    const stages: SolveStage[] = [];
+    const outcome = await solve({
+      jobs,
+      snapshot,
+      now: NOW,
+      jobZone,
+      zonePartitionThreshold: HUGE_THRESHOLD,
+      onStage: (stage) => stages.push(stage),
+    });
+    return { stages, outcome };
+  }
+
+  it('reports the run in the order the work happened', async () => {
+    const { stages } = await trace();
+    expect(stages.map((stage) => stage.stage)).toEqual([
+      'PENDING',
+      'CANDIDATES',
+      'FEASIBILITY',
+      'SAFETY_BANDS',
+      'COST',
+      'OUTCOME',
+      'DONE',
+    ]);
+  });
+
+  it('says the same numbers the finished outcome says', async () => {
+    const { stages, outcome } = await trace();
+    const candidates = stages.find((stage) => stage.stage === 'CANDIDATES')!;
+    const feasibility = stages.find((stage) => stage.stage === 'FEASIBILITY')!;
+    const done = stages.find((stage) => stage.stage === 'DONE')!;
+
+    expect(candidates).toMatchObject({ optionCount: outcome.optionCount });
+    expect(feasibility).toMatchObject({
+      optionCount: outcome.optionCount,
+      feasibleCount: outcome.feasibleCount,
+      rejectedCount: outcome.rejected.length,
+    });
+    expect(done).toMatchObject({ wallClockMs: outcome.wallClockMs, timedOut: outcome.timedOut });
+  });
+
+  // The safety bands are the whole reason the trace exists, and this is the
+  // claim: the dangerous round is solved against the full fleet and hands down
+  // only what it did not take.
+  it('reports the safety bands most dangerous first, each seeing fewer units', async () => {
+    const { stages } = await trace();
+    const bands = stages.find((stage) => stage.stage === 'SAFETY_BANDS')!;
+    if (bands.stage !== 'SAFETY_BANDS') throw new Error('unreachable');
+
+    expect(bands.planLabel).toBe('BALANCED');
+    expect(bands.bands.map((band) => band.level)).toEqual(['HIGH_RISK', 'NORMAL']);
+    expect(bands.bands[0]).toMatchObject({ jobCount: 1, assignedCount: 1, unitsOffered: 2, unitsLeftBelow: 1 });
+    expect(bands.bands[1]).toMatchObject({ jobCount: 1, unitsOffered: 1 });
+  });
+
+  // Once per run, not once per weight vector: every vector solves the same
+  // bands over the same jobs, and four copies of the same argument is not four
+  // arguments.
+  it('reports the bands for the recommended plan only', async () => {
+    const { stages } = await trace();
+    expect(stages.filter((stage) => stage.stage === 'SAFETY_BANDS')).toHaveLength(1);
+  });
+
+  // INVARIANT 2, THE NARROW VERSION. A reporter is a reader, never a writer:
+  // the same snapshot with and without one has to produce the same plans, or
+  // the evaluation harness (which passes none) would be measuring a different
+  // system from the one the console shows.
+  it('changes nothing about the plans it produces', async () => {
+    const withReporter = await trace();
+    const withoutReporter = await solve({
+      jobs,
+      snapshot,
+      now: NOW,
+      jobZone,
+      zonePartitionThreshold: HUGE_THRESHOLD,
+    });
+
+    expect(withReporter.outcome.snapshotHash).toBe(withoutReporter.snapshotHash);
+    expect(JSON.stringify(withReporter.outcome.plans)).toBe(JSON.stringify(withoutReporter.plans));
   });
 });

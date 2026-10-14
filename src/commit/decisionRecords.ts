@@ -189,16 +189,26 @@ export async function selectPlan(
 export async function latestDecisionFor(
   db: PrismaClient,
   jobId: string,
-): Promise<{ solverRunId: string | null; decisionRecordId: string | null; overrideReasonCode: string | null }> {
+): Promise<{
+  solverRunId: string | null;
+  decisionRecordId: string | null;
+  overrideReasonCode: string | null;
+  // WHICH OPTION A HUMAN ACTUALLY TOOK. Carried out of here so the inspector
+  // can name the crew that is going rather than infer one: a job's cheapest
+  // option and the option a dispatcher chose are the same row on an ordinary
+  // day and different rows on exactly the day somebody needs the answer.
+  selectedOptionId: string | null;
+}> {
   const record = await db.decisionRecord.findFirst({
     where: { jobId },
     orderBy: { createdAt: 'desc' },
-    select: { id: true, solverRunId: true, overrideReasonCode: true },
+    select: { id: true, solverRunId: true, overrideReasonCode: true, selectedOptionId: true },
   });
 
   return {
     solverRunId: record?.solverRunId ?? null,
     decisionRecordId: record?.id ?? null,
     overrideReasonCode: record?.overrideReasonCode ?? null,
+    selectedOptionId: record?.selectedOptionId ?? null,
   };
 }

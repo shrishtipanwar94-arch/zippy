@@ -6,33 +6,38 @@
 import { getState } from './state.js';
 
 async function request(method, path, body) {
-  const headers = { 'Content-Type': 'application/json' };
-  const { token } = getState();
-  if (token) headers.Authorization = `Bearer ${token}`;
-
   const response = await fetch(path, {
     method,
-    headers,
+    headers: authHeaders(),
     body: body === undefined ? undefined : JSON.stringify(body),
   });
 
   const text = await response.text();
   const payload = text.length > 0 ? JSON.parse(text) : null;
 
-  if (!response.ok) {
-    // `message` FIRST, and it is usually absent. A route that has something to
-    // say to the person in front of the screen sends a sentence alongside the
-    // code; everything else sends the code alone and the surfaces show that,
-    // which is how a driver came to be shown "vehicle_not_found". The code is
-    // kept on the error either way, because handlers branch on it.
-    const error = new Error(
-      payload?.message ?? payload?.error ?? `${method} ${path} failed (${response.status})`,
-    );
-    error.code = payload?.error ?? null;
-    error.status = response.status;
-    throw error;
-  }
+  if (!response.ok) throw failure(response, payload, method, path);
   return payload;
+}
+
+// `message` FIRST, and it is usually absent. A route that has something to say
+// to the person in front of the screen sends a sentence alongside the code;
+// everything else sends the code alone and the surfaces show that, which is how
+// a driver came to be shown "vehicle_not_found". The code is kept on the error
+// either way, because handlers branch on it.
+function failure(response, payload, method, path) {
+  const error = new Error(
+    payload?.message ?? payload?.error ?? `${method} ${path} failed (${response.status})`,
+  );
+  error.code = payload?.error ?? null;
+  error.status = response.status;
+  return error;
+}
+
+function authHeaders() {
+  const headers = { 'Content-Type': 'application/json' };
+  const { token } = getState();
+  if (token) headers.Authorization = `Bearer ${token}`;
+  return headers;
 }
 
 // THE LADDER. Unauthenticated on purpose — /health is the endpoint a load
@@ -100,8 +105,69 @@ export function listJobs() {
   return request('GET', '/jobs');
 }
 
-export function solveJobs() {
-  return request('POST', '/solve');
+// SOLVE IS THE ONE STREAMING CALL, and it is the only reason this file knows
+// what a ReadableStream is.
+//
+// The server answers NDJSON — one complete JSON object per line, flushed as the
+// run reaches each stage, with the full report as the last line (see the header
+// of src/api/solve.ts). Reading it line by line is what lets the console show
+// the solve happening instead of a spinner: `onStage` is called with each stage
+// the moment it lands, and the promise resolves with the report.
+//
+// Failures before the first line are ordinary JSON errors with a status code,
+// exactly like every other call here. A failure after it can only arrive as an
+// `error` line, because the status was sent long ago.
+export async function solveJobs(onStage) {
+  const response = await fetch('/solve', { method: 'POST', headers: authHeaders() });
+
+  if (!response.ok) {
+    const text = await response.text();
+    throw failure(response, text.length > 0 ? JSON.parse(text) : null, 'POST', '/solve');
+  }
+
+  let result = null;
+  await eachJsonLine(response, (message) => {
+    if (message.type === 'stage') onStage?.(message.stage);
+    if (message.type === 'result') result = message;
+    if (message.type === 'error') throw new Error(message.message);
+  });
+
+  if (!result) throw new Error('the solver stream ended before it produced a plan');
+  return result;
+}
+
+// Chunks do not arrive on line boundaries — one read can carry two and a half
+// lines — so whatever follows the last newline is held back until the rest of
+// it turns up.
+async function eachJsonLine(response, handle) {
+  let buffer = '';
+  const consume = (chunk) => {
+    buffer += chunk;
+    const lines = buffer.split('\n');
+    buffer = lines.pop() ?? '';
+    for (const line of lines) {
+      if (line.trim().length > 0) handle(JSON.parse(line));
+    }
+  };
+
+  if (!response.body) {
+    // No streaming reader here (an older browser). Every line is still present
+    // and in order; they simply all arrive at once.
+    consume(await response.text());
+  } else {
+    const reader = response.body.getReader();
+    const decoder = new TextDecoder();
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      consume(decoder.decode(value, { stream: true }));
+    }
+    // A multi-byte character can straddle two chunks, so the decoder holds the
+    // first half back. This releases it.
+    consume(decoder.decode());
+  }
+
+  if (buffer.trim().length > 0) handle(JSON.parse(buffer));
 }
 
 export function listEvents(filters) {

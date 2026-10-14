@@ -15,5 +15,3 @@ export function describeUnassigned(
   unassignedJobIds: string[],
   rejected: RejectionSummaryInput[] | null | undefined,
 ): string;
-
-export const REJECTION_PHRASES: Record<string, string>;

@@ -10,7 +10,12 @@
 import { describe, expect, it } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { describeUnassigned, REJECTION_PHRASES } from '../public/js/panels/plans.js';
+import { describeUnassigned } from '../public/js/panels/plans.js';
+import {
+  CREW_REJECTION_PHRASES,
+  REJECTION_PHRASES,
+} from '../public/js/panels/rejectionWords.js';
+import { PLAN_WORDS, describePlans } from '../public/js/panels/planWords.js';
 
 describe('the unassigned breakdown', () => {
   it('counts jobs rather than rejected options', () => {
@@ -78,8 +83,19 @@ describe('the unassigned breakdown', () => {
 // import the engine's types, so the phrase map is duplicated in the panel and
 // this asserts it against the source of truth. Duplication a test catches beats
 // a bundler.
+//
+// TWO MAPS, BOTH CHECKED. A code answers two different questions on this
+// console — "why is this job still waiting?" (the plan card, counting jobs) and
+// "why was this crew ruled out?" (the solve trace and the inspector, counting
+// crews) — and the answers are different sentences. A code added to the engine
+// and worded in only one of them would leave a raw enum on one screen and a
+// sentence on the other, which is the failure this pair of checks exists for.
 describe('every rejection code the engine can produce has words', () => {
   const codes = rejectionCodesFromEngine();
+  const maps = {
+    'about a job': REJECTION_PHRASES,
+    'about a crew': CREW_REJECTION_PHRASES,
+  };
 
   it('finds the codes to check against', () => {
     // If the union is ever restructured this test would silently pass on an
@@ -87,15 +103,17 @@ describe('every rejection code the engine can produce has words', () => {
     expect(codes.length).toBeGreaterThan(5);
   });
 
-  it.each(rejectionCodesFromEngine())('has a phrase for %s', (code) => {
-    expect(REJECTION_PHRASES[code], code).toBeTruthy();
-    expect((REJECTION_PHRASES[code] ?? '').length, code).toBeGreaterThan(4);
-  });
+  for (const [voice, phrases] of Object.entries(maps)) {
+    it.each(rejectionCodesFromEngine())(`has a phrase ${voice} for %s`, (code) => {
+      expect(phrases[code], code).toBeTruthy();
+      expect((phrases[code] ?? '').length, code).toBeGreaterThan(4);
+    });
 
-  it('carries no phrases for codes that do not exist', () => {
-    const known = new Set(codes);
-    expect(Object.keys(REJECTION_PHRASES).filter((key) => !known.has(key))).toEqual([]);
-  });
+    it(`carries no phrases ${voice} for codes that do not exist`, () => {
+      const known = new Set(codes);
+      expect(Object.keys(phrases).filter((key) => !known.has(key))).toEqual([]);
+    });
+  }
 });
 
 function rejectionCodesFromEngine(): string[] {
@@ -103,4 +121,43 @@ function rejectionCodesFromEngine(): string[] {
   const block = source.slice(source.indexOf('export type RejectionCode ='));
   const body = block.slice(0, block.indexOf(';'));
   return [...body.matchAll(/'([A-Z][A-Z0-9_]+)'/g)].map((match) => match[1]!);
+}
+
+// THE PLAN LABELS, FOR THE SAME REASON ONE RUNG UP. A weight vector's name is a
+// fine thing to print on a plan card, where it is a label; inside a sentence it
+// is jargon, and both the solve trace and the inspector write sentences. A
+// vector added to the engine and forgotten in PLAN_WORDS would put
+// `PROTECT_CONTRACTS` in the middle of English prose.
+describe('every plan the engine solves has words', () => {
+  const labels = weightVectorNamesFromEngine();
+
+  it('finds the plans to check against', () => {
+    expect(labels.length).toBeGreaterThan(3);
+  });
+
+  it.each(weightVectorNamesFromEngine())('has a word for %s', (label) => {
+    expect(PLAN_WORDS[label], label).toBeTruthy();
+    // Worded, not passed through: the fallback in planWord() returns the label
+    // itself, so a map entry that merely echoed the code would read as a pass.
+    expect(PLAN_WORDS[label], label).not.toBe(label);
+  });
+
+  it('carries no words for plans that do not exist', () => {
+    const known = new Set(labels);
+    expect(Object.keys(PLAN_WORDS).filter((key) => !known.has(key))).toEqual([]);
+  });
+
+  it('names them all in one list, with no code left in it', () => {
+    const sentence = describePlans(labels);
+    for (const label of labels) expect(sentence).not.toContain(label);
+    expect(sentence.endsWith('plans')).toBe(true);
+  });
+});
+
+function weightVectorNamesFromEngine(): string[] {
+  const source = readFileSync(join(process.cwd(), 'src/engine/cost.ts'), 'utf8');
+  const block = source.slice(source.indexOf('export const WEIGHT_VECTORS ='));
+  // The keys of the vector map are the only ALL-CAPS identifiers at exactly two
+  // spaces of indentation that open a block; the terms inside them are camel.
+  return [...block.matchAll(/^ {2}([A-Z][A-Z0-9_]+): \{$/gm)].map((match) => match[1]!);
 }

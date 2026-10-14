@@ -12,6 +12,9 @@ import {
   setJobs,
   setSession,
   setSolve,
+  startSolveTrace,
+  pushSolveStage,
+  finishSolveTrace,
   setTimeline,
   setTimelineFilter,
   setInspectorJob,
@@ -33,6 +36,7 @@ import { connect, onPoll } from '../socket.js';
 import { render as renderSession } from '../panels/session.js';
 import { render as renderJobsTable } from '../panels/jobsTable.js';
 import { render as renderPlans } from '../panels/plans.js';
+import { render as renderSolveTrace } from '../panels/solveTrace.js';
 import { render as renderTimeline } from '../panels/timeline.js';
 import { render as renderInspector } from '../panels/inspector.js';
 import { render as renderScarcity } from '../panels/scarcity.js';
@@ -53,6 +57,7 @@ import { loadPromotions, registerChatPanels, wireChatActions } from '../chatActi
 
 registerPanel(renderSession);
 registerPanel(renderJobsTable);
+registerPanel(renderSolveTrace);
 registerPanel(renderPlans);
 registerPanel(renderTimeline);
 registerPanel(renderInspector);
@@ -101,15 +106,59 @@ document.querySelector('[data-action="login"]').addEventListener('click', async 
 // board: the solver plans every pending job at once, because a global
 // assignment is the entire point of Phase 9. Picking units one at a time is
 // exactly the greedy behaviour that strands jobs.
+//
+// AND IT NARRATES ITSELF ON THE WAY. The route streams a line per stage while
+// the run is happening (src/api/solve.ts), so the screen fills in with what the
+// solver is doing instead of pausing and producing a report.
+let solving = false;
+
 document.querySelector('[data-action="solve"]').addEventListener('click', async () => {
+  // Two runs at once would interleave their stages into one transcript that
+  // describes neither of them.
+  if (solving) return;
+  solving = true;
+
+  startSolveTrace();
+  // The previous run's plans go with the previous run's transcript. Leaving
+  // them under a trace describing a different board is the one thing this panel
+  // must not do.
+  setSolve(null);
+  render();
+
   try {
-    setSolve(await api.solveJobs());
+    const result = await api.solveJobs(showStage);
+    // The last stages land a millisecond apart; this lets them finish arriving
+    // before the plans appear underneath them.
+    await traceQueue;
+    setSolve(result);
     setError(null);
   } catch (error) {
     setError(error.message);
   }
+
+  finishSolveTrace();
+  solving = false;
   render();
 });
+
+// A MINIMUM BEAT BETWEEN LINES, and nothing more than that.
+//
+// The first stages land while the routing calls are still going, so they
+// genuinely arrive seconds apart. The last four are arithmetic over data already
+// in memory and land within a millisecond of each other, which would drop four
+// sentences on the screen at once and read as a result rather than as work. The
+// beat delays SHOWING a line that has already arrived; it never invents one and
+// never reorders them.
+const TRACE_LINE_MS = 110;
+let traceQueue = Promise.resolve();
+
+function showStage(stage) {
+  traceQueue = traceQueue.then(async () => {
+    pushSolveStage(stage);
+    render();
+    await new Promise((resolve) => setTimeout(resolve, TRACE_LINE_MS));
+  });
+}
 
 render();
 

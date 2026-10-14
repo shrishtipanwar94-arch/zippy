@@ -280,3 +280,79 @@
   border-bottom: 1px solid var(--line);
   margin-bottom: var(--space-2);
 }
+
+/* ---------------------------------------------------------------------------
+ * THE SOLVE TRACE. The run, sentence by sentence, while it happens.
+ *
+ * Deliberately NOT a card. It is a transcript of something in progress rather
+ * than a panel with a standing heading, and giving it a header and a border
+ * would make an empty console open on yet another box. It appears when the
+ * first line lands and stays until the next solve replaces it.
+ */
+
+.solve-trace {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  padding: var(--space-3);
+  border-left: 2px solid var(--line);
+  background: var(--surface);
+  border-radius: var(--radius-card);
+  font-size: var(--size-3);
+}
+
+/* Each line fades in where it lands. The animation is on arrival only — a line
+ * already on screen is never re-rendered (panels/solveTrace.js appends), so
+ * nothing on this panel ever flickers. */
+.trace-line {
+  animation: trace-line-in 180ms ease-out;
+}
+
+@keyframes trace-line-in {
+  from {
+    opacity: 0;
+    transform: translateY(-2px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .trace-line {
+    animation: none;
+  }
+}
+
+/* THE SAFETY LINE, MARKED. Invariant 4 is the strongest design decision in the
+ * system and this is the one place a person can watch it happen, so it is the
+ * one line on the transcript that is not the same weight as its neighbours. */
+.trace-line-key {
+  color: var(--text);
+  font-weight: var(--weight-strong);
+  border-left: 2px solid var(--brand);
+  margin-left: -14px;
+  padding-left: 12px;
+}
+
+.trace-detail {
+  color: var(--text-muted);
+  font-weight: var(--weight-normal);
+  padding-left: var(--space-4);
+  position: relative;
+}
+
+.trace-detail::before {
+  content: '·';
+  position: absolute;
+  left: var(--space-2);
+  color: var(--text-faint);
+}
+
+/* Still streaming. A pulsing left edge rather than a spinner: the transcript is
+ * already showing progress, and a spinner beside it would be a second, less
+ * informative answer to the same question. */
+.solve-trace-running {
+  border-left-color: var(--brand);
+}
