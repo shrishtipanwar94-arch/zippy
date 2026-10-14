@@ -139,14 +139,18 @@ cp .env.example .env          # fill in two JWT secrets; the LLM key is optional
 docker compose up -d          # postgres 16, redis 7, osrm
 ./scripts/setup-osrm.sh       # ONCE: downloads and preprocesses the Bengaluru map
 npm install
-npm run db:migrate            # 11 migrations
+npm run db:migrate            # 16 migrations
 npm run db:seed               # 6 zones, 24 units, 31 technicians, uneven capabilities
 
 npm run eval                  # the table above, into EVALUATION.md
 npm run eval:ai               # the AI table above, into EVALUATION_AI.md
-npm test                      # 800 fast tests, then 9 concurrency tests against
+npm test                      # 970 fast tests, then 12 concurrency tests against
                               # a Postgres 16 container the suite starts itself
 ```
+
+For the smallest board a dispatch actually succeeds on — one zone, one crew, one
+van, and a dry check that proves it is dispatchable before you open a browser —
+see `DEMO.md`. It uses its own seed and leaves the one above alone.
 
 Then `npm run dev` and `npm run dev:worker`, and open `/dispatcher.html`,
 `/driver.html` or `/technician.html`. Every seeded account shares one password,
