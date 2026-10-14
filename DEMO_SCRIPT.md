@@ -2,25 +2,24 @@
 
 The live walk-through. One clean seed, target **under twelve minutes**.
 
-**The twelve-minute run is beats 1, 2, 4, 5, 6, 7, 8, 9** — the per-beat
-estimates below sum to ~10.5 min plus ~1 min of open/close. **Beats 3 and 10
-(`[CUT FIRST]`) are backup**, not part of the timed run: keeping all ten puts
-the paper budget at ~13.5 min, over the limit before a word is spoken. Pull 3
-back in if the room wants the honest-loss story; pull 10 in if they push on
-tenancy. Do not talk faster to fit them.
+**The twelve-minute run is beats 1, 2, 4, 5, 6, 7, 8** — the per-beat
+estimates below sum to under 10 min plus ~1 min of open/close. **Beats 3 and 9
+(`[CUT FIRST]`) are backup**, not part of the timed run. Pull 3 back in if the
+room wants the honest-loss story; pull 9 in if they push on tenancy. Do not
+talk faster to fit them.
+
+There were ten beats until the fleet manager's dashboard was cut (INTERVIEW.md
+§19). Its beat is gone; the tenancy it demonstrated is now beat 9's job.
 
 > **Status: click paths spot-checked against a live build, not yet timed.**
 > From a fresh `db:reset`: beats 1, 2, 4 walked end to end in the browser;
 > beat 5 confirmed over HTTP (a `STUCK_OR_DAMAGED` job returns a `CHOSEN`
 > destination with a three-workshop `screened` shortlist); beat 6's simulator
-> confirmed to generate and write board load; beat 9's endpoint returns the
-> right shape. Beats 3, 7, 8, 10 are from the code and a chaos-panel DOM read
-> only. Phase 25's check — "runs clean twice from a reset database, under
-> twelve minutes" — still needs a human with a real Chrome window and a
-> stopwatch; automated runs from this repo hit browser-harness screenshot
+> confirmed to generate and write board load. Beats 3, 7, 8, 9 are from the
+> code and a chaos-panel DOM read only. Phase 25's check — "runs clean twice
+> from a reset database, under twelve minutes" — still needs a human with a
+> real Chrome window and a stopwatch; automated runs from this repo hit browser-harness screenshot
 > timeouts and cannot be trusted for timing.
->
-> **Beat 9 needs setup on a fresh seed** — see the note in that beat.
 
 ---
 
@@ -44,7 +43,10 @@ Seed is fixed; a reset gives byte-identical fixtures every time. If OSRM is not
 up, candidate generation falls back to haversine and every travel time on
 screen is flagged degraded — fine for a dry run, wrong for the real thing.
 
-**Beat 9 history is pre-seeded** (see that beat's SETUP note). After it runs,
+**Fleet history is pre-seeded** by `scripts/demo-prep-beat9.ts`. The beat it
+was named for is gone with the fleet dashboard, but the script still runs: its
+three incidents are what the fleet-vehicle INTAKE PRIOR reads, which is the
+part of Phase 21 that survived. After it runs,
 `vehicle-metrocab-1` carries **three RESOLVED `FLAT_BATTERY` jobs** — so the
 dispatcher board opens showing "Jobs on the board: 3" with three RESOLVED rows,
 and the **dispatch queue is empty**. That is the intended starting state, not
@@ -56,16 +58,15 @@ job you create in Beat 1 appears at the top of both.
 | role | email | page |
 | --- | --- | --- |
 | dispatcher | `dispatch-ops@zippy.internal` | `/dispatcher.html` |
-| fleet manager | `fm-metrocab@zippy.internal` | `/fleet.html` |
 | technician | `tech1@zippy.internal` (…`tech31`) | `/technician.html` |
 | driver | `driver-metrocab-1@zippy.internal` (…`driver-<tenant>-<n>`) | `/driver.html` |
 
 Each login page pre-fills its own email and the dev password, so signing in is
-one click on **Sign in**. Open four tabs: dispatcher, driver, technician,
-fleet. Dispatcher is the tab you present from; the others you cut to.
+one click on **Sign in**. Open three tabs: dispatcher, driver, technician.
+Dispatcher is the tab you present from; the others you cut to.
 
 > Beats 1, 2 and 4 and the panel/label names below were walked against a live
-> run from a fresh seed. Beats 3, 5, 6, 9, 10 have not been walked end to end —
+> run from a fresh seed. Beats 3, 5, 6, 9 have not been walked end to end —
 > confirm them on the first rehearsal.
 
 **One line to open with:** "Zippy dispatches roadside breakdowns for
@@ -269,44 +270,7 @@ written from a real walk-through of all six components."
 
 ---
 
-## Beat 9 — repeat-pattern flag on the fleet dashboard  ·  ~60s
-
-**Objective:** the tenancy / fleet-manager surface.
-
-> **SETUP.** On a fresh seed the dashboard has no history — `slaMetPercent` and
-> every `repeatPatternFlag` come back `null`. The rule needs **three** incidents
-> of the same fault on one vehicle inside a 60-day window (`REPEAT_PATTERN_MIN_
-> COUNT = 3`), and the SLA %/mean-resolution numbers are month-scoped, so they
-> need incidents dated *this* month.
->
-> **Already done for `vehicle-metrocab-1`** by `scripts/demo-prep-beat9.ts`:
-> three RESOLVED `FLAT_BATTERY` jobs (`demo-prep-batt-0..2`), all this month,
-> each with a `TECHNICIAN_ARRIVED` event and an approved ₹1,800 estimate; two
-> met the 30-minute window, one missed it. Confirmed via `GET /fleet/dashboard`
-> as `fm-metrocab@zippy.internal`:
-> `repeatPatternFlag = "3rd incident of a flat battery in 60 days…"`,
-> `slaMetPercent 66.7` (3 decided), `meanResolutionMinutes 57`,
-> `resolvedCount 3`, `spendRupees ₹5,400`, `currentExposure ₹0`,
-> `activeIncidents 0`. **Re-run `npx tsx scripts/demo-prep-beat9.ts` after any
-> `db:reset`.** The script is insert-only (Postgres blocks `DELETE` on
-> `job_events`), so a reset is the only clean way to undo it — don't run it
-> twice without a reset in between.
-
-1. Fleet tab (logged in as `fm-metrocab@zippy.internal`) → **fleet
-   dashboard**: this manager's own SLA %, a boolean current-exposure figure,
-   spend, and incident history — scoped to their tenant only.
-2. Point at the vehicle carrying the **repeat-incident flag** — a rule, not a
-   model: the same exact fault code seen more than once inside the window.
-
-**Say:** "A fleet manager sees only their own vehicles — the Prisma extension
-rewrites every query by tenant, and cross-tenant reads are audited. The
-repeat flag is rule-based and matches on the exact fault code; it deliberately
-does not merge `FLAT_BATTERY` and `FAILED_BATTERY`, and I can tell you why
-that's a known limitation."
-
----
-
-## Beat 10 — cross-tenant contention → APPROVE card  ·  ~75s  `[CUT FIRST]`
+## Beat 9 — cross-tenant contention → APPROVE card  ·  ~75s  `[CUT FIRST]`
 
 **Objective:** a contract decision that needs a human.
 

@@ -1006,3 +1006,144 @@ returns and the evaluation harness, which passes none, is unaffected.
 SAFETY_BANDS line prints how many units each band was offered and how many it
 left below: no amount of cost can move a unit upward across those two numbers,
 because by the time the lower band is solved the unit is already gone.
+
+---
+
+## Phase 22i — cutting a surface, and a requeue that told the driver the opposite of the truth / 2026-10-14 / (this commit)
+
+### Built
+Nothing new was built. One surface was removed and one bug was fixed.
+
+REMOVED — the fleet manager's dashboard, all of it reachable only from
+`GET /fleet/dashboard`: `public/fleet.html`, `public/js/pages/fleet.js`,
+`public/js/panels/fleetDashboard.js`, `src/api/fleet.ts` (`fleetRouter`),
+`src/commit/fleetDashboard.ts` (`buildFleetDashboard`, `toActiveIncidentView`,
+`groupByVehicle`), `src/commit/fleetIncidents.ts` (`fleetIncidentsFor`,
+`isActiveIncident`, `FleetIncident`), `src/domain/fleetMetrics.ts`
+(`slaMetSummary`, `currentExposurePaise`, `meanResolutionSummary`,
+`spendPaiseThisMonth`, `isActive`, `startOfMonthUtc`),
+`src/domain/fleetSlaOutcome.ts` (`slaOutcomeFor`), `tests/fleetDashboard.test.ts`.
+Plus the `/fleet` nav card, the `/fleet` static page route, the `fleetDashboard`
+permission resource, and the two orphaned frontend helpers
+(`getFleetDashboard`, `setFleetDashboard`). `tests/fleetDomain.test.ts` trimmed
+315 to 94 lines.
+
+FIXED — `src/domain/driverNarrative.ts` (`headlineFor`) now branches the PLANNED
+sentence on `helperName`; `src/domain/actionTiers.ts` gains
+`ESCALATE_DISPATCH_REQUEUED` (RECOMMEND, in `CHANGES_WHO_IS_GOING`);
+`src/commit/saga.ts` (`finishAsRequeued`) raises that card;
+`public/js/panels/actions.js` gains its label. New:
+`tests/requeueNarration.test.ts` (7 tests).
+
+### Decisions
+
+Decision: cut the fleet dashboard UI and API, keep the tenancy in the engine.
+Why: BUILD_PHASES.md's own "IF YOU FALL BEHIND" list names it as cut #2 in
+exactly those words, and the cluster turned out to be strictly self-contained —
+`buildFleetDashboard` had one importer, `fleetIncidentsFor` one, `slaOutcomeFor`
+one, and nothing in `evaluation/`, `scripts/` or `prisma/` referenced any of it.
+Alternative: remove the whole FLEET_MANAGER concept. Why not: the role is woven
+through auth, permissions, job ownership, realtime rooms and the notification
+worker, and removing it would take cross-tenant contention and per-tenant row
+scoping with it — the strongest tenancy material in the repo, and all of it
+engine-side rather than dashboard-side. Tradeoff: the "fourth projection of the
+same event stream" claim is gone, and `src/domain/repeatPattern.ts` is now a
+tested rule with no caller.
+
+Decision: three files beyond the literal brief went too — `fleetIncidents.ts`,
+`fleetMetrics.ts`, `fleetSlaOutcome.ts`. Why: they are the handler's exclusive
+data and calculation layer with zero other consumers, so keeping them would
+leave dead code that the docs would then have to either explain or lie about.
+Alternative: keep them against a future surface. Why not: nothing is scheduled,
+and git is the place unused code waits.
+
+Decision: fix the requeue bug in the NARRATION, not in the status. Why:
+`helperName` was already in `NarrativeContext` and is the durable fact, so the
+honest branch costs no new backend and no migration. Alternative: write a
+different JobStatus from `finishAsRequeued`. Why not: `PLANNED` is read as
+pending by `dispatchSnapshot.ts`'s `PENDING_STATUSES` and by the console queue,
+so changing it would move the job out of the solver's own candidate set in order
+to fix a sentence.
+
+Decision: `ESCALATE_DISPATCH_REQUEUED` does not restart a saga. Why: choosing a
+new crew is a re-solve, which is `handleTrigger`'s job and needs a plan this card
+does not carry; Execute means "I have seen it", exactly as it does on the two
+escalation cards beside it. Alternative: put the kind in `REASSIGNMENT_KINDS` so
+executing it starts a reservation. Why not: there is no chosen unit on the card
+to reserve. Tradeoff: a dispatcher still has to cause a re-solve by hand.
+
+### Concurrency
+Scenario: a saga's leg 1 loses its race, twice, for the same job.
+What races: two dispatchers proposing the same unit, or one proposing against a
+version another already moved. `createHold`'s conditional UPDATE affects zero
+rows for the loser.
+Why dangerous: the card is raised outside the transaction that writes state
+REQUEUED, so two losers could each find no open card and each raise one.
+How handled: `hasOpenAction` guards on `(jobId, kind, status PENDING)`, the same
+guard the thrash and no-plan branches use.
+Assumption relied on: that guard is read-then-write and therefore NOT atomic —
+two simultaneous requeues of one job can still produce two cards. Identical in
+shape to section 15.33's cross-tenant contention weakness, with the same honest
+fix unbuilt (a partial unique index Prisma cannot model). Cosmetic: both cards
+point at the same job and resolving either leaves the other resolvable.
+
+### Weaknesses introduced
+- `src/domain/repeatPattern.ts` has no production caller. Tested, correct, dead.
+  Matters only as tidiness at this scale; recorded as INTERVIEW.md section
+  15.35 so it is not discovered as a surprise.
+- `ESCALATE_DISPATCH_REQUEUED` can double up under a simultaneous double
+  requeue, above.
+- The Phase 15c coverage-cap booking gap is now UNMASKED rather than fixed.
+  `fleetSpend` used to read the approved estimate total and so hid it; that
+  reader is gone, and the bug it was sidestepping is still there. Section 15.34
+  rewritten to say so.
+- `tests/requeueNarration.test.ts` leaves one CANCELLED job per run behind in
+  `zippy_test` forever, because `job_events` is append-only by trigger and the
+  rows cannot be deleted. It ages the previous run's job rather than growing a
+  pending backlog, which is the best available shape, not a good one.
+
+### Concepts now genuinely in use
+Nothing new. The requeue card reuses the existing action-tier table and the
+`hasOpenAction` dedupe; the narration fix is a branch on data already in hand.
+Worth naming instead: scoping an assertion to rows the test itself created,
+which is the only thing that made the invariant-8 test provable at all.
+
+### What broke
+The invariant-8 test was wrong twice before it was right, and both failures were
+more interesting than the fix.
+
+First it looked for `job.jobId` in `GET /queue`'s response, which returns `id`.
+That was my error, not the product's.
+
+Then it still failed, and the reason was the real finding. `/queue` does select
+crewless PLANNED jobs — `status in (INTAKE, PLANNED)` and `assignedUnitId: null`
+— but it returns `orderQueue(...).slice(0, 50)`, and `zippy_test` holds 9,274
+pending unassigned jobs accumulated from every previous run. A NORMAL job two
+minutes old sorts below every HIGH_RISK one and is nowhere near the top fifty.
+So the honest statement of the bug is sharper than the one I started with: a
+requeued job was not merely narrated wrongly, it reached an operator only once
+`ESCALATE_SLA_WINDOW_CLOSED` fired — after the promise was already broken. That
+is what made the card the fix rather than a nicety, and it is CLAUDE.md's
+shared-database gotcha arriving as a product finding rather than as flakiness.
+
+The cleanup then hit the append-only trigger: `jobs.deleteMany` is refused with
+`P0001: append-only table job_events: DELETE is not permitted`, because the saga
+writes two events. Hence per-run ids and ageing instead.
+
+Separately, `src/engine/solve.ts` was found to contain three raw NUL bytes used
+as a composite-map-key separator, written as literal control characters rather
+than the six-character escape. `file` reports the source as `data` and ripgrep
+refuses to show matching lines in it, so searching that file silently returns
+"Binary file matches". Pre-existing at HEAD, not touched: out of scope, and the
+rules for this work barred `src/engine`.
+
+### Interview angle
+"You removed a feature. How did you know it was safe?" By reading imports rather
+than grepping names: the intake prior's two modules import only `domain/faults`
+and `domain/fleetPrior`, so the thing Phase 21 is actually checked on — a fleet
+vehicle asking fewer intake questions — never touched the dashboard at all.
+
+"Invariant 8 says every degraded state is visible to an operator. Was it?" No —
+and the test is what proved it. A requeued job sat in a 50-row slice of 9,274
+pending rows with nothing marking it, so the first thing that spoke was the SLA
+breach card. Visible only after it becomes a breach is not visible.

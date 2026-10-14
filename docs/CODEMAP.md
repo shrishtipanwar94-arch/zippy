@@ -19,7 +19,6 @@ src/api/driver.ts           GET /jobs/:id/driver-view — every sentence, server
 src/api/technician.ts       offers, the status ladder, the completion code
 src/api/stock.ts            van stock, confirmations, a parts declaration
 src/api/vehicles.ts         POST /vehicles — registration, tenant off the token
-src/api/fleet.ts            GET /fleet/dashboard — a fleet manager's own numbers
 src/api/chat.ts             messages, promotions, who may confirm which kind
 src/api/estimates.ts        estimate, approval, capture — the money surface
 src/api/escalation.ts       GET/POST /jobs/:id/escalation — the no-plan handover
@@ -38,7 +37,7 @@ src/domain/                 small, single-purpose vocabulary files, one concept 
                                          hypothesis shape; six health parts; code->card; chat->PROPOSAL
   stockConfidence·contractExposure·contractContention
                                          age; a breach priced as credit; a scarce unit two tenants wanted
-  fleetSlaOutcome·fleetMetrics·repeatPattern·fleetPrior   the fleet dashboard's math
+  fleetPrior·repeatPattern              a vehicle's history sharpens its intake prior; a recurrence rule (no caller — see INTERVIEW.md §15.35)
   workshopAcceptance·workshopHours      betaAcceptMean — counter + conjugate prior, no ML; isWorkshopOpen (IST)
   money·ledger·pricing·coverage         paise, double entry, contract caps
   (also) entropy, safety, faults, symptoms, geo, carriageway, wording, prompts
@@ -61,7 +60,7 @@ src/commit/                  the only place any of this writes
   redispatch.ts                     handleTrigger + executeReassignment
   destinationAcceptance·contractTerms·contention   real outcome->one count; sla pinned at intake; a contention card, never a decision
   vanStock·stockMovements·partsConsumption         the parts write path
-  vehicleRegistration·fleetIncidents·fleetDashboard   one vehicle one tenant; the fleet numbers' one query
+  vehicleRegistration·fleetPrior        one vehicle one tenant; the prior's read of past incidents
   eventPromotions.ts                a flagged message becomes a job change — with a human
   estimates·payments·ledger·payouts the money write path
 src/ai/client.ts            the boundary: one SchemaCall type, two providers behind it

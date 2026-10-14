@@ -151,12 +151,11 @@ room, the driver and technician the least.
 | Driver | http://localhost:3000/driver | `driver-metrocab-1@zippy.internal` |
 | Dispatcher | http://localhost:3000/dispatcher | `dispatch-ops@zippy.internal` |
 | Technician | http://localhost:3000/technician | `tech01@zippy.internal` — **you will change this** |
-| Fleet | http://localhost:3000/fleet | `fm-metrocab@zippy.internal` |
 
 Every account uses the password `password-dev-only`, and every sign-in page
 arrives with both fields filled. Signing in is one click on **Sign in**.
 
-**Sign in to the driver, dispatcher and fleet windows now. Leave the technician
+**Sign in to the driver and dispatcher windows now. Leave the technician
 window on its sign-in page** — you do not yet know which technician you will be.
 
 **Expect:** each window's "No connection" badge disappears once there is a
@@ -471,15 +470,6 @@ Read the six digits off the driver's window, type them in, press **Finish job**.
   finished-job sentence and the progress list is fully ticked.
 - Dispatcher: `JOB_RESOLVED`; the row leaves the priority queue; **Active
   incidents** drops by one.
-- **Fleet window:** press **Refresh**. The job moves out of **ACTIVE INCIDENTS**
-  and into **PER-VEHICLE INCIDENT HISTORY** under `KA01AB1001`, with an SLA
-  outcome of *met* or *breached*. **Mean resolution time** and **Spend this
-  month** both move.
-
-The fleet window is the one surface with no live socket — it is a summary a
-person checks, not a feed, so **Refresh** is the only way it updates. If you
-were waiting for it to change on its own, that is why.
-
 ---
 
 ## 11 — Things worth breaking on purpose
@@ -579,12 +569,12 @@ same place — so the whole thing is suppressed on purpose.
 If you are also checking the responsive work, the fastest pass is one window
 resized rather than four. Chrome DevTools → device toolbar → type the width in.
 
-| width | driver / technician | dispatcher | fleet |
-| --- | --- | --- | --- |
-| 390 | one column, sticky bottom action bar | one column, priority queue first | metric tiles one-up, incidents as stacked cards |
-| 768 | one column, capped around 640px wide | one column | tiles two-up |
-| 1024 | **map beside the job details**, person card and action side by side | two columns, investigate as a band under the board | tiles three-up |
-| 1440 | same two columns, wider | three columns, investigate as a rail until a job is picked | tiles five-up |
+| width | driver / technician | dispatcher |
+| --- | --- | --- |
+| 390 | one column, sticky bottom action bar | one column, priority queue first |
+| 768 | one column, capped around 640px wide | one column |
+| 1024 | **map beside the job details**, person card and action side by side | two columns, investigate as a band under the board |
+| 1440 | same two columns, wider | three columns, investigate as a rail until a job is picked |
 
 Nothing on any surface at any of those widths should scroll sideways. The
 dispatcher's wide tables scroll **inside their own card** on a phone; if the
@@ -641,7 +631,6 @@ deliberate and it is what makes the plan cards disagree with each other.
 | role | email | page |
 | --- | --- | --- |
 | dispatcher | `dispatch-ops@zippy.internal` | `/dispatcher` |
-| fleet manager | `fm-metrocab@zippy.internal` | `/fleet` |
 | driver, contract | `driver-metrocab-1@zippy.internal` (`KA01AB1001`) | `/driver` |
 | driver, contract | `driver-metrocab-2@zippy.internal` (`KA01AB1002`) | `/driver` |
 | driver, walk-in | `driver-walkin-1@zippy.internal` (`KA04GH4001`) | `/driver` |
@@ -669,11 +658,10 @@ Do not spend time writing these down again.
 2. **Shifts are realistic, so the board is time-of-day dependent.** Section 0.
    `scripts/demo-open-shifts.ts` is a workaround, not a fix — but the banner
    now tells you when you need it.
-3. **The fleet dashboard has no live updates.** Refresh is the only way.
 
 ### Fixed since this was written — check they stay fixed
 
-4. **A driver who resumed a job used to get no live updates.** The window
+3. **A driver who resumed a job used to get no live updates.** The window
    subscribed to the job's room only when it created the job; both restore
    paths set the active job, refetched once, and stopped — so a driver who
    signed in again, or simply reloaded, sat on a socket that said "Connected"
@@ -685,17 +673,17 @@ Do not spend time writing these down again.
    **To check it yourself:** mid-run, reload the driver window and press the
    job in "Which car do you mean?". Everything after that should still update
    live.
-5. **The vehicle picker used to offer vehicles the driver could not file
+4. **The vehicle picker used to offer vehicles the driver could not file
    against.** `GET /vehicles` was scoped by tenant only while intake matched on
    `driverId`, so a Metrocab driver was offered both Metrocab cars and one of
    them failed. Both now read `vehicleFilingFilter` in `src/auth/permissions.ts`.
-   A driver sees one plate; a fleet manager still sees their tenant's two; a
-   dispatcher still sees all six.
-6. **A re-solve that found no crew used to leave no trace.** No action, no job
+   A driver sees one plate; a FLEET_MANAGER token still scopes to their
+   tenant's two; a dispatcher still sees all six.
+5. **A re-solve that found no crew used to leave no trace.** No action, no job
    event, no log line — the reason an earlier run was read as broken dispatch.
    It now raises `ESCALATE_NO_FEASIBLE_PLAN` with the rejection breakdown and
    writes a `NO_FEASIBLE_PLAN` event. One card per job, not one per trigger.
-7. **A coordinate anywhere on Earth used to be accepted.** `resolveZoneId` took
+6. **A coordinate anywhere on Earth used to be accepted.** `resolveZoneId` took
    the nearest zone with no maximum distance, so a genuine browser fix in Delhi
    was filed into a Bengaluru zone 1,742 km away and queued as servicable —
    then OSRM snapped it onto the Bengaluru road graph and returned a five
@@ -704,9 +692,9 @@ Do not spend time writing these down again.
    Bengaluru, about 1742 km away."*
    **To check it yourself:** on the location step, open *Enter coordinates
    manually* and type `28.696` / `77.207`.
-8. **The dispatcher had no fleet-level signal for a staffing gap.** There is now
+7. **The dispatcher had no fleet-level signal for a staffing gap.** There is now
    a `Crew on shift` component on the health ladder — see Section 0.
-9. **A tow used to be dispatched into a dead end.** The saga's third leg is a
+8. **A tow used to be dispatched into a dead end.** The saga's third leg is a
    workshop confirmation and nothing in the product can answer one — no
    workshop role, no route, no adapter — so a technician who accepted a tow was
    released 45 seconds later by a timeout, with a notice saying a re-plan took
@@ -716,7 +704,7 @@ Do not spend time writing these down again.
    counterparty. Tows are still undispatchable — that is a feature nobody has
    built, written up at INTERVIEW.md §15.44 — but the failure is now legible
    instead of arriving three quarters of a minute late on somebody's phone.
-10. **The job status now follows the reservation.** It read `INTAKE` while a
+9. **The job status now follows the reservation.** It read `INTAKE` while a
    technician's phone counted down, so the driver was told "Finding someone
    equipped for this" about a job already offered to a named person. `startSaga`
    writes `OFFERED` (and `AWAITING_DESTINATION` for a tow) conditionally, so a

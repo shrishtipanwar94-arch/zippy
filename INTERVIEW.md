@@ -15,11 +15,12 @@ a crew needs and where a tow goes, inside the same candidate-generation pass
 that never grows the assignment matrix; a dispatcher turns one plan into a
 real three-leg reservation; a technician who finds something different
 triggers a re-solve; the work is priced, approved, paid, booked to a
-double-entry ledger and paid out; a fleet manager reads their own SLA
-performance, exposure and per-vehicle history off the same event stream. Four
-browser surfaces exist and have been used. An LLM fills in the intake form and
-has been measured against a keyword control. Every failure mode has a rung on
-a degradation ladder, a switch that forces it, and a banner that names it.
+double-entry ledger and paid out; and a contract tenant's jobs are priced,
+scoped and arbitrated against consumer jobs for the same scarce van. Three
+browser surfaces exist and have been used — driver, technician, dispatcher. An
+LLM fills in the intake form and has been measured against a keyword control.
+Every failure mode has a rung on a degradation ladder, a switch that forces it,
+and a banner that names it.
 
 What does not exist: the Razorpay adapter (22b) and anything after.
 
@@ -60,7 +61,7 @@ been taken by an earlier, marginally better match is not stranded.
 - Layers, in dependency order:
   - `src/domain/` — pure. Fault rules, entropy, safety, geo, **replan
     triggers**, **action tiers**, contract exposure, contract contention,
-    fleet metrics, repeat-pattern flag, the learned P(accept) formula
+    the fleet-vehicle intake prior, the learned P(accept) formula
     (`workshopAcceptance.ts`) and workshop opening hours. No Prisma, no
     clock, no `Math.random`.
   - `src/engine/` — the solver. Candidates, feasibility, durations, cost,
@@ -175,7 +176,6 @@ POST /actions/:id/execute     take a RECOMMEND — starts the reservation saga
 POST /actions/:id/approve     sign off (or reject) an APPROVE, approver recorded
 GET  /admin/queues            Bull Board, DISPATCHER only
 POST /vehicles                register a vehicle to one tenant, tenant off the token
-GET  /fleet/dashboard         a fleet manager's own SLA%, exposure, spend, history
 ```
 
 Conventions held: typed errors mapped to status codes in one place per module,
@@ -671,20 +671,24 @@ deploys. `PROTECT_CONTRACTS` changes exactly one weight from `BALANCED` — the
 contract-exposure weight, ×10 — so the two plan cards differ in exactly the
 question a dispatcher is actually being asked.
 
-**Fleet dashboard (21).** SLA met % is a FOUR-state answer per incident (MET
-/ BREACHED / UNDECIDED / NOT_APPLICABLE), because a job still inside its
-window is neither a success nor a failure and counting it either way would
-make the percentage swing on jobs still in progress — the same "only jobs
-that finished have a resolution time" move applied to a binary outcome.
-Current exposure is a BOOLEAN "already breached", never a probability: the
-dashboard has no candidate option to price uncertainty about, unlike the
-cost function's own `contractSlaExposure`, and inventing one from a possibly
-stale or absent ETA would be claiming precision the data does not support. A
-fleet vehicle's own incident history sharpens its intake prior through the
-SAME `applyLikelihood` mechanism a symptom answer already goes through,
-capped at the five most recent incidents — measured directly: two prior
-battery incidents plus an identical stated symptom needs zero further
-questions where a stranger's identical vehicle needs one.
+**The fleet-vehicle intake prior (21).** A fleet vehicle's own incident
+history sharpens its intake prior through the SAME `applyLikelihood`
+mechanism a symptom answer already goes through, capped at the five most
+recent incidents — measured directly: two prior battery incidents plus an
+identical stated symptom needs zero further questions where a stranger's
+identical vehicle needs one. Reusing the Bayes update rather than writing a
+second one is the decision: history is just another observation about the
+same distribution, so a separate code path would have been a second thing to
+keep correct for no new capability.
+
+Phase 21 also built a fleet manager's dashboard — SLA met % as a four-state
+answer per incident, current exposure, spend, per-vehicle history and a
+repeat-pattern flag. **That surface has since been cut**, on the build plan's
+own "if you fall behind" instruction to keep the tenancy in the engine and
+drop the UI. What survives is everything the engine needed: the intake prior
+above, contract exposure in the cost function, cross-tenant contention, and
+per-tenant row scoping. `src/domain/repeatPattern.ts` survives as a tested
+rule with no caller — see §15.35.
 
 **Workshop network (22).** Destination selection resolves ONCE PER JOB, not
 once per pair the way parts sourcing does — a workshop choice depends on the
@@ -1001,20 +1005,25 @@ The most valuable section. In rough order of severity:
     one contested unit. Cosmetic — approving one executes nothing — and the
     honest fix (a partial unique index on `(job_id, kind) WHERE status =
     'PENDING'`) is not built.
-34. **Fleet spend can silently disagree with the ledger** (21) the first
-    time a fleet contract gets a coverage CAP rather than unlimited cover —
-    the dashboard reads the approved estimate total directly rather than the
-    `tenant:<id>` ledger account, sidestepping a real Phase 15c booking gap
-    (a capped contract's uncovered remainder posts to the generic customer
-    receivable, not the tenant's own account) rather than fixing it, because
-    fixing a Phase 15c bug was out of scope for a phase named "fleet
-    dashboard".
+34. **A capped contract's uncovered remainder is booked to the wrong ledger
+    account** (15c) — it posts to the generic customer receivable rather than
+    the `tenant:<id>` account. Phase 21's dashboard used to sidestep this by
+    reading the approved estimate total directly instead of the ledger, and
+    that dashboard has since been cut; cutting it removed the symptom and not
+    the bug, which is still here and still unfixed.
 35. **The repeat-pattern rule and the intake prior both match on the EXACT
     fault code**, never a category (21) — `FLAT_BATTERY` and
     `FAILED_BATTERY` never combine into one pattern even though both are "the
-    battery" to a fleet manager reading the dashboard. Neither has any
-    recency WEIGHTING either, only a recency CAP: a five-day-old incident
-    and a fifty-nine-day-old one count exactly the same.
+    battery" to anyone reading them. Neither has any recency WEIGHTING
+    either, only a recency CAP: a five-day-old incident and a
+    fifty-nine-day-old one count exactly the same.
+
+    The intake prior is live. **The repeat-pattern rule has no production
+    caller at all** — the fleet dashboard was the only thing that rendered the
+    flag, and cutting that surface left the rule behind, still unit-tested and
+    still correct but dead until something reads it. Kept rather than deleted
+    because the rule is sound and where it belongs — most likely the
+    dispatcher's job inspector — is a separate decision.
 36. **`REFUSAL_DISTANCE_PENALTY_KM` (22) is the single most consequential
     unmeasured number in the workshop layer.** It sets the exchange rate
     between "closer" and "more likely to accept a tow", and nothing has ever
@@ -1298,7 +1307,9 @@ The most valuable section. In rough order of severity:
     nobody had ever opened. That is the same wrong sentence `panels/session.js`
     was already fixed for in the signed-out case; the fix covered "no session
     yet" and not "this page has no socket". The badge is gone from that page;
-    the Refresh button is its honest affordance.
+    the Refresh button is its honest affordance. (That page has since been cut
+    entirely — §19. The lesson outlived it: a status badge has to report the
+    thing it is actually wired to, not the thing the other pages wire it to.)
 
 47. **A TECHNICIAN COULD NEVER RECEIVE THEIR FIRST OFFER — the subscription was
     a closed circle.** Fixed.
@@ -1372,7 +1383,7 @@ job's only rejections are SLA ones; idempotency keys on the two external
 mutations; a travel-time cache; and an owner column for saga recovery instead
 of a staleness heuristic. Since the checkpoint: a partial unique index behind
 the cross-tenant contention guard; the Phase 15c coverage-cap booking gap
-`fleetSpend` currently sidesteps rather than fixes; and measuring
+that cutting the fleet dashboard exposed rather than fixed; and measuring
 `REFUSAL_DISTANCE_PENALTY_KM` against what a real dispatcher would actually
 trade, the same way the SLA breach curve is still a ruler rather than a
 fitted model. The largest single piece is the coverage engine (Phases 23–24,
@@ -1453,11 +1464,17 @@ machine:
   per-job ranking) by solving one Hungarian assignment per safety band —
   proved byte-identical against the evaluation harness's own outcome metrics
   when no two safety levels actually compete.
-- Built a **fleet manager dashboard** reading SLA performance, financial
-  exposure and per-vehicle incident history entirely from events earlier
-  phases already wrote, with a rule-based (explicitly not predictive)
-  repeat-incident flag and an intake prior that reuses the SAME Bayesian
-  update mechanism a symptom answer goes through — measured: two prior
+- Built **per-tenant isolation as a Prisma client extension rather than a
+  filter every query has to remember** — one place decides the tenant a read
+  is scoped to, a caller with no tenant gets a value that matches no rows
+  rather than a widened query, and a tenant asking for another tenant's job
+  gets 404 rather than 403. Paired with cross-tenant contention that
+  ESCALATES: when a contract job and a consumer job want the same scarce van
+  at the same safety level, both sides are priced and the choice is put to a
+  human rather than made silently.
+- Built an **intake prior that reuses the SAME Bayesian update mechanism a
+  symptom answer goes through**, so a vehicle's own incident history is just
+  another observation about the same distribution — measured: two prior
   incidents cut a stated symptom's question count from one to zero.
 - Built a **destination network with a learned acceptance probability** — a
   Beta-Bernoulli conjugate prior over accept/decline/timeout outcomes, no
@@ -1478,8 +1495,9 @@ machine:
 
 Not claimable: dispatch quality against real breakdowns, latency under load,
 throughput, and anything about the Anthropic provider path beyond "it
-compiles". Not claimable either: fleet spend reconciling with the ledger
-under a capped contract, or the Razorpay adapter (22b, not built).
+compiles". Not claimable either: a capped contract's remainder reaching the
+right ledger account, a fleet manager surface of any kind (cut — §19), or the
+Razorpay adapter (22b, not built).
 
 ## 18. Technical Vocabulary
 
@@ -1529,8 +1547,8 @@ under a capped contract, or the Razorpay adapter (22b, not built).
 
 ## 19. Current Project State
 
-**Phases 0–22 complete — the build plan's recommended ship point.** 800 fast
-tests across 55 files (3 skipped), plus a 9-test concurrency suite against a
+**Phases 0–22 complete — the build plan's recommended ship point.** 970 fast
+tests across 63 files (3 skipped), plus a 12-test concurrency suite against a
 real Postgres container started by the suite itself. `tsc --noEmit` (src,
 tests, evaluation, prisma) and `eslint src evaluation` clean. `npm run eval`
 reruns byte-identical outcome metrics across six scenarios (parts-stockout
@@ -1600,11 +1618,15 @@ Working, in the order it was built:
   credit, safety bands in the global assignment, cross-tenant contention
   escalated to an APPROVE card, vehicle registration checked against two
   tenancy conflicts.
-- **The fleet dashboard** — active incidents, a four-state SLA outcome, a
-  boolean current-exposure figure, a rule-based repeat-incident flag, an
-  intake prior reusing the symptom Bayes update, and fleet-manager
-  notifications coalesced on a ten-minute window through the same queue the
-  driver's ninety-second one already used.
+- **The fleet-vehicle intake prior and coalesced fleet notifications** — a
+  vehicle's own incident history folded into its starting fault distribution
+  through the symptom Bayes update, and fleet-manager notifications coalesced
+  on a ten-minute window through the same queue the driver's ninety-second
+  one already used. Phase 21's fleet manager DASHBOARD was also built and has
+  since been **cut** — on the build plan's own instruction to keep the tenancy
+  in the engine and drop the UI. There are three browser surfaces, not four.
+  `src/domain/repeatPattern.ts` outlived it as a tested rule with no caller
+  (§15.35).
 - **The workshop network** — brand and EV-class authorisation as separate
   reason codes, opening hours read in IST, a Beta-Bernoulli learned P(accept)
   with no ML infrastructure, a destination-refusal cost term priced in
