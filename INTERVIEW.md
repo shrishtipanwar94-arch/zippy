@@ -1353,6 +1353,62 @@ The most valuable section. In rough order of severity:
     executed over the API, and the offer appeared on screen with its countdown
     running, without a reload.
 
+48. **A PERMANENTLY DEGRADED ROUTING LAYER LOOKS NORMAL ON THE BANNER.** OSRM
+    failure is handled correctly everywhere except in the one place an operator
+    would look. `src/infra/routing.ts` wraps every call: unreachable, non-200,
+    a bad `code`, or a timeout all fall through to a haversine estimate, and the
+    result carries `method: 'HAVERSINE_FALLBACK'` and `degraded: true` rather
+    than being silently substituted. `generateCandidates` copies that onto every
+    option as `travelEstimateDegraded`.
+
+    **And nothing reads it.** The field is set in `src/engine/candidates.ts` and
+    has no consumer: `persistSolverRun` does not write it, `dispatch_options`
+    has no column for it, and the inspector does not render it. So the
+    dispatcher approving a plan cannot tell whether it was built on real road
+    times or on straight lines inflated by a 1.4 road factor. The driver is
+    better served than the dispatcher here — `eta_estimates.degraded` is a real
+    column and the driver's arrival card is flagged from it.
+
+    Worse, the health ladder has no routing component at all. The seven are
+    `AI_EXTRACTION`, `GPS`, `WEBSOCKET`, `SOLVER`, `PAYMENTS`, `CREW_ON_SHIFT`
+    and `DISPATCH_CORE`. An instance deployed with OSRM down, or pointed at a
+    URL nothing serves, reports **"All systems normal"** while every dispatch
+    decision it makes is a guess. That is invariant 8 — every degraded state is
+    visible to an operator — not holding for the component whose absence changes
+    the most decisions. `docker-compose.yml`'s own comment calls a missing OSRM
+    "an EXPECTED, handled state", which is true of the fallback and not of the
+    silence.
+
+    Measured, same job and crew: 1.7 min and `degraded=true` with OSRM down
+    against 1.0 min and `degraded=false` with it up, where the real route was
+    698.7 m and 62.1 s. The error is roughly 70% on a short job, and it is
+    unsigned — haversine cannot know about one-way roads or a central divider,
+    so it is sometimes optimistic and sometimes not.
+
+    **The fix: a `ROUTING` probe on the ladder.** `src/health/probes.ts` already
+    has the shape for it — one function returning a `ComponentReading`, added to
+    `probeAll` and to the component list in `src/domain/healthLadder.ts` with a
+    label and a fallback sentence. Two honest implementations:
+
+    - **Cheap and immediate:** count options from the most recent solver run
+      whose travel estimate was degraded, the way `probeGps` counts stale
+      positions. DEGRADED when any recent decision used the fallback, with the
+      detail reading "N of M options in the last solve used a straight-line
+      estimate". Needs `travelEstimateDegraded` persisted on `dispatch_options`
+      first — one column and one line in `persistSolverRun` — which is worth
+      doing anyway, since it is the same field the inspector should be showing.
+    - **Direct:** ask OSRM for one known-good short route on each health tick
+      and report on the answer. Simpler to write and it adds an outbound call
+      on a timer, which is acceptable in the worker (it is not in a decision
+      path, so invariant 10 is untouched) but is a liveness check rather than
+      evidence about the decisions actually made.
+
+    I would do both, in that order. It is NOT CRITICAL under the ladder's own
+    definition — dispatch continues and the fallback is deterministic, so the
+    evaluation harness is unaffected (it passes `haversineTravelTimes`
+    deliberately and always has) — but DEGRADED is exactly what it is, and the
+    banner should say so.
+
 ## 16. How I Would Improve It
 
 **First, above everything below: decide what a dispatcher pressing Solve is
@@ -1383,10 +1439,13 @@ job's only rejections are SLA ones; idempotency keys on the two external
 mutations; a travel-time cache; and an owner column for saga recovery instead
 of a staleness heuristic. Since the checkpoint: a partial unique index behind
 the cross-tenant contention guard; the Phase 15c coverage-cap booking gap
-that cutting the fleet dashboard exposed rather than fixed; and measuring
-`REFUSAL_DISTANCE_PENALTY_KM` against what a real dispatcher would actually
-trade, the same way the SLA breach curve is still a ruler rather than a
-fitted model. The largest single piece is the coverage engine (Phases 23–24,
+that cutting the fleet dashboard exposed rather than fixed; a `ROUTING`
+component on the health ladder, with `travelEstimateDegraded` persisted on
+`dispatch_options` and shown in the inspector, so an instance running on
+straight-line estimates stops reporting itself healthy (§15.48 — the cheapest
+real gap on this list); and measuring `REFUSAL_DISTANCE_PENALTY_KM` against
+what a real dispatcher would actually trade, the same way the SLA breach curve
+is still a ruler rather than a fitted model. The largest single piece is the coverage engine (Phases 23–24,
 cut — see §19): pre-position idle capability against a bucketed empirical
 demand rate, score every reposition through the dispatch cost function, gate
 it behind the four anti-thrash guards, and then run the ablation that decides
