@@ -324,45 +324,46 @@ Start again from Step 3: send another message and confirm it. The van goes back
 on the board when the offer times out. See the note below before you consider
 making it longer.
 
-### The 45 seconds is not configurable, and lengthening it takes two changes
+### Giving yourself longer than 45 seconds
 
-There is **no environment variable** for it. Two module constants govern the
-window, and the only production caller overrides neither:
+Both clocks are environment variables, and 45 seconds is only the default:
 
-| constant | value | file |
+| variable | default | what it governs |
 | --- | --- | --- |
-| `DEFAULT_OFFER_TTL_MS` | 45 s | `src/commit/offers.ts:31` |
-| `DEFAULT_HOLD_TTL_MS` | 2 min | `src/commit/holds.ts:37` |
+| `OFFER_TTL_MS` | `45000` | how long the technician's phone counts down |
+| `HOLD_TTL_MS` | `120000` | how long the van stays held while that happens |
 
-`startSaga` does accept `offerTtlMs` and `holdTtlMs` per call, but
-`executeReassignment` (`src/commit/redispatch.ts`) passes neither, so both
-defaults always apply.
+**For a demo where you are talking through the screen**, put this in `.env`
+before starting the two processes — three minutes to answer, five minutes of
+hold:
 
-**Raising only the offer breaks the accept.** `consumeHold` updates
-`WHERE status = 'ACTIVE' AND expires_at > now`, and `releaseExpiredHolds` in
-`src/workers/cleanup.ts` marks anything past its expiry `EXPIRED_BY_SWEEP`. So
-with a five-minute offer against a two-minute hold, a technician pressing
-**Accept** at 3:00 sees the offer still counting down and the reservation fails
-because the van it was holding has already been let go — a worse demo than the
-one that merely runs out. **The hold TTL has to be at least the offer TTL.**
+```
+OFFER_TTL_MS=180000
+HOLD_TTL_MS=300000
+```
 
-Nothing here has been changed. The production defaults are deliberate — a
-technician answering a phone, a van not stranded by a dispatcher who closed
-their laptop — and `tests/concurrency/holds.test.ts` imports
-`DEFAULT_HOLD_TTL_MS` and builds a hold with it, so it follows the constant
-rather than pinning the number. If you want a longer window for talking, the
-honest options are, in order of how much they touch:
+**They are coupled, and the process refuses to start on a bad pair.** The hold
+must outlive the offer by at least 15 seconds (`ACCEPT_ROUND_TRIP_MARGIN_MS`),
+because an offer that outlives its hold is the worst shape these two can take:
+`consumeHold` updates `WHERE status = 'ACTIVE' AND expires_at > now` and
+`releaseExpiredHolds` in `src/workers/cleanup.ts` marks anything past its expiry
+`EXPIRED_BY_SWEEP`, so a technician pressing **Accept** would see a live
+countdown and the reservation would fail with **nothing to retry**.
 
-1. **Accept promptly** — have the technician window open and in front of you
-   before Step 4. This is what the demo is written for.
-2. **Pass the TTLs at the one call site** — give `executeReassignment` a pair of
-   optional arguments that default to today's values, so only the demo path
-   supplies longer ones.
-3. **Put them in `src/infra/config.ts`** as env vars with today's values as
-   defaults. Cleanest, and the widest blast radius: both constants are asserted
-   against in the concurrency suite.
+Raise the offer alone and you get this instead of a broken demo:
 
-Say which and I will do it as its own change.
+```
+Invalid environment configuration. The process cannot start:
+  - HOLD_TTL_MS: OFFER_TTL_MS is 300000ms and HOLD_TTL_MS is 120000ms, but the
+    hold must be at least 315000ms (the offer plus a 15000ms margin for the
+    accept to land). ... Raise HOLD_TTL_MS or lower OFFER_TTL_MS.
+```
+
+The shipped defaults are deliberate — 45 seconds is right for a technician who
+is working, and two minutes stops a van being stranded by a dispatcher who
+closed their laptop — so they are unchanged. `tests/configTtlPair.test.ts`
+covers the rule, the wiring, and that the defaults satisfy their own
+constraint.
 
 **The dispatcher's banner is red.** Read it — it names the component and what
 the fallback is. `Crew on shift` degraded means the shift has lapsed; see above.

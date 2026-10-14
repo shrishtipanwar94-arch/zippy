@@ -29,7 +29,7 @@ const urlString = (label: string) =>
     { message: `${label} must be a valid URL` },
   );
 
-const envSchema = z.object({
+const baseEnvSchema = z.object({
   NODE_ENV: z.enum(['development', 'test', 'production']).default('development'),
   PORT: z.coerce.number().int().positive().max(65535).default(3000),
 
@@ -80,6 +80,20 @@ const envSchema = z.object({
   // measures what the partitioning costs in decision quality, and that
   // measurement is only meaningful if the threshold can be moved.
   SOLVER_ZONE_PARTITION_THRESHOLD: z.coerce.number().int().positive().default(400),
+
+  // THE RESERVATION'S TWO CLOCKS, and they are coupled.
+  //
+  // OFFER_TTL_MS is how long a technician's phone counts down before the offer
+  // expires. HOLD_TTL_MS is how long the van stays held while that happens.
+  // Defaults are the figures these were as module constants through Phases 11
+  // and 12 — 45 seconds for somebody to answer a phone, two minutes before a
+  // van is freed from a dispatcher who closed their laptop. Neither is measured.
+  //
+  // CONFIGURABLE BECAUSE A DEMO NEEDS A LONGER WINDOW THAN A BUSY BOARD DOES.
+  // Forty-five seconds is right when a technician is working and wrong when
+  // somebody is talking an audience through the screen. See DEMO.md.
+  OFFER_TTL_MS: z.coerce.number().int().positive().default(45_000),
+  HOLD_TTL_MS: z.coerce.number().int().positive().default(120_000),
 
   // HOW MUCH AN ESTIMATE MAY GROW BEFORE THE DRIVER IS ASKED AGAIN (Phase 15c).
   //
@@ -208,6 +222,53 @@ const envSchema = z.object({
   // through a checkout is not chased, short enough that a lost write is found
   // in one sweep rather than one day.
   RECONCILIATION_STALE_AFTER_MINUTES: z.coerce.number().int().positive().default(10),
+});
+
+// HOW MUCH LONGER THE HOLD MUST LIVE THAN THE OFFER.
+//
+// An offer that outlives its hold is the worst shape these two can take: the
+// technician's phone shows a live countdown, they press Accept, and the
+// reservation fails because the van was already let go. `consumeHold` updates
+// `WHERE status = 'ACTIVE' AND expires_at > now` and the cleanup sweep marks
+// anything past its expiry EXPIRED_BY_SWEEP, so there is no recovery — the
+// accept just loses.
+//
+// The margin covers the gap between the technician pressing Accept and
+// `consumeHold` running: the request leaving a phone on a bad connection, and
+// the three legs of the saga committing. Fifteen seconds is generous for that
+// and is a CHOSEN figure, not a measured one. The shipped defaults clear it
+// with room to spare — 120s against 45s + 15s.
+export const ACCEPT_ROUND_TRIP_MARGIN_MS = 15_000;
+
+// Exported so the startup rule can be tested without starting a process —
+// `loadConfig` exits on failure, which a test cannot catch. Plain numbers in,
+// a sentence or null out.
+export function ttlPairProblem(offerTtlMs: number, holdTtlMs: number): string | null {
+  const required = offerTtlMs + ACCEPT_ROUND_TRIP_MARGIN_MS;
+  if (holdTtlMs >= required) return null;
+
+  // BOTH NUMBERS AND THE TARGET, because the reader of this is somebody whose
+  // process will not start and who needs to know which value to change and to
+  // what — not merely that a rule exists.
+  return (
+    `OFFER_TTL_MS is ${offerTtlMs}ms and HOLD_TTL_MS is ${holdTtlMs}ms, but the ` +
+    `hold must be at least ${required}ms (the offer plus a ` +
+    `${ACCEPT_ROUND_TRIP_MARGIN_MS}ms margin for the accept to land). A hold ` +
+    `that expires before the offer it covers means a technician accepts a job ` +
+    `whose van has already been released, and the reservation fails with ` +
+    `nothing to retry. Raise HOLD_TTL_MS or lower OFFER_TTL_MS.`
+  );
+}
+
+// The cross-field rule lives here rather than inside either field, because it
+// is about the PAIR and Zod validates fields in isolation. It reports through
+// the same path every other problem does, so a bad pair refuses startup with
+// the same message shape as a missing DATABASE_URL.
+export const envSchema = baseEnvSchema.superRefine((env, ctx) => {
+  const problem = ttlPairProblem(env.OFFER_TTL_MS, env.HOLD_TTL_MS);
+  if (problem) {
+    ctx.addIssue({ code: 'custom', path: ['HOLD_TTL_MS'], message: problem });
+  }
 });
 
 function loadConfig() {

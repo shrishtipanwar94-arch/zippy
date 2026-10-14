@@ -24,11 +24,17 @@ import type { OfferStatus } from '@prisma/client';
 import { appendJobEvent } from '../intake/events.js';
 import { scheduleOfferExpiry } from '../workers/offerExpiry.js';
 import { runPublishingTransaction } from '../realtime/transaction.js';
+import { config } from '../infra/config.js';
 
 // How long a technician has to answer before the offer times out and the job
 // goes back to the solver. Short: a roadside job that sits waiting on an
 // unanswered phone is a job nobody is driving to. Not a measured figure.
-export const DEFAULT_OFFER_TTL_MS = 45 * 1000;
+//
+// READ FROM CONFIG rather than written here, so a demo can lengthen the window
+// without a code change (DEMO.md) — and so it cannot be lengthened past what
+// the hold covers, which config.ts refuses at startup. The name is kept because
+// sagaRecovery and the concurrency suite already import it.
+export const DEFAULT_OFFER_TTL_MS = config.OFFER_TTL_MS;
 
 export type ProposeOfferInput = {
   jobId: string;

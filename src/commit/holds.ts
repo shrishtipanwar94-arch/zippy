@@ -30,11 +30,16 @@ import { Prisma } from '@prisma/client';
 import type { PrismaClient } from '@prisma/client';
 import { appendJobEvent } from '../intake/events.js';
 import { runPublishingTransaction } from '../realtime/transaction.js';
+import { config } from '../infra/config.js';
 
 // How long a hold survives without being consumed or released. Long enough
 // for a technician to answer their phone, short enough that a unit is not
 // stranded by a dispatcher who closed their laptop. Not a measured figure.
-export const DEFAULT_HOLD_TTL_MS = 2 * 60 * 1000;
+//
+// READ FROM CONFIG, and the startup rule in config.ts guarantees this is at
+// least OFFER_TTL_MS plus a margin — an offer outliving its hold is the one
+// combination that makes an accept fail with nothing to retry.
+export const DEFAULT_HOLD_TTL_MS = config.HOLD_TTL_MS;
 
 export type HoldOutcome =
   | { outcome: 'HELD'; holdId: string }

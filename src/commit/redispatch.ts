@@ -507,6 +507,14 @@ export async function executeReassignment(
     unitId,
     technicianId,
     expectedUnitVersion: unit.version,
+    // BOTH CLOCKS, FROM CONFIG, PASSED EXPLICITLY. They would fall back to the
+    // same values if omitted, because the defaults in offers.ts and holds.ts
+    // now read the same config — but this is the one call site that turns a
+    // plan into a reservation, and the two TTLs that govern it are worth
+    // reading at it rather than inferring two modules away. config.ts refuses
+    // startup unless the hold outlives the offer by a margin.
+    offerTtlMs: config.OFFER_TTL_MS,
+    holdTtlMs: config.HOLD_TTL_MS,
     // Always null by the time we get here — the guard above returned for every
     // plan that named one. Passed explicitly rather than dropped so the call
     // still reads as "this saga has no third leg" rather than silently omitting
