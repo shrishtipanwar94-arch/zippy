@@ -223,8 +223,6 @@ const state = {
   // until Phase 22b's audit.
   actions: [],
 
-  fleetDashboard: null,
-
   // THE CALLOUT FEE'S CHECKOUT (Phase 22b). The server's answer to "is there
   // anything to pay, and can it be paid": READY, ALREADY_PAID, NOTHING_TO_PAY
   // or UNAVAILABLE. Null until asked, and asking is never on the path to
@@ -520,10 +518,6 @@ export function tickClock() {
 
 export function setOutbox(outbox) {
   state.outbox = outbox;
-}
-
-export function setFleetDashboard(dashboard) {
-  state.fleetDashboard = dashboard;
 }
 
 // A PAGE ASKING TO BE TOLD. The socket writes state and calls render(), which

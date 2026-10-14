@@ -488,11 +488,11 @@ consoleRouter.get('/queue', authenticate, requirePermission('read', 'job'), asyn
       lat: job.lat,
       lng: job.lng,
       registration: job.vehicle.registration,
-      // THE SAME WORDS THE FLEET DASHBOARD USES. `labelForFault` is what
-      // src/api/fleet.ts turns an incident's `topFault` into, so a dispatcher
-      // and a fleet manager reading about the same job read the same phrase.
-      // Null while intake is still asking — an unnamed fault is honest, a
-      // guessed one is not.
+      // ONE PHRASE PER FAULT, FOR EVERY SURFACE. `labelForFault` is the single
+      // place a fault code becomes English — the fleet dashboard read through
+      // it too, before that surface was cut — so no screen invents its own
+      // wording and no SCREAMING_CASE enum reaches a reader. Null while intake
+      // is still asking: an unnamed fault is honest, a guessed one is not.
       faultLabel: topFault !== null && isFaultCode(topFault) ? labelForFault(topFault) : null,
       locationLabel: describeLocation(job),
     };

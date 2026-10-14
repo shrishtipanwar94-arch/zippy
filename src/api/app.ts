@@ -10,7 +10,6 @@ import { healthRouter } from './health.js';
 import { authRouter } from './auth.js';
 import { jobsRouter } from './jobs.js';
 import { vehiclesRouter } from './vehicles.js';
-import { fleetRouter } from './fleet.js';
 import { intakeRouter } from './intake.js';
 import { solveRouter } from './solve.js';
 import { diagnosisRouter } from './diagnosis.js';
@@ -90,7 +89,6 @@ export function createApp(): Express {
   app.use(authRouter);
   app.use(jobsRouter);
   app.use(vehiclesRouter);
-  app.use(fleetRouter);
   app.use(intakeRouter);
   app.use(solveRouter);
   app.use(diagnosisRouter);
@@ -123,9 +121,11 @@ export function createApp(): Express {
   const publicDir = join(dirname(fileURLToPath(import.meta.url)), '../../public');
   app.use(express.static(publicDir));
 
-  // Extensionless URLs, because /driver reads better than /driver.html. The
-  // first three are the paths the Phase 4 check names; /fleet is Phase 21's.
-  for (const page of ['driver', 'technician', 'dispatcher', 'fleet']) {
+  // Extensionless URLs, because /driver reads better than /driver.html. These
+  // three are the paths the Phase 4 check names. /fleet was a fourth until the
+  // fleet manager's dashboard was cut — the tenancy it read through is still
+  // here, the surface that displayed it is not.
+  for (const page of ['driver', 'technician', 'dispatcher']) {
     app.get(`/${page}`, (_req, res) => {
       res.sendFile(join(publicDir, `${page}.html`));
     });

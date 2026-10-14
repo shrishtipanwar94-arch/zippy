@@ -318,12 +318,6 @@ export function declarePartsUsed(action) {
   });
 }
 
-// --- the fleet manager's dashboard (Phase 21) --------------------------------
-
-export function getFleetDashboard() {
-  return request('GET', '/fleet/dashboard');
-}
-
 export function submitDiagnosis(jobId, primaryComplaint, note) {
   return request('POST', `/jobs/${jobId}/diagnosis`, {
     symptoms: { primaryComplaint },

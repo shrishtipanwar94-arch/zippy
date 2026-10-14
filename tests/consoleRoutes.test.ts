@@ -546,9 +546,8 @@ describe('GET /queue', () => {
     // no highway detail still says which part of the city it is in.
     expect(own.locationLabel).toContain('Console Zone A');
     // The fixture's newest hypothesis tops out at EV_HV_FAULT, and the row
-    // carries the WORDED form — the same string src/api/fleet.ts puts in front
-    // of a fleet manager, which is the point of routing both through
-    // labelForFault rather than letting each surface invent a phrase.
+    // carries the WORDED form rather than the code — the point of routing every
+    // surface through labelForFault instead of letting each invent a phrase.
     expect(own.faultLabel).toBe(labelForFault('EV_HV_FAULT'));
   });
 
