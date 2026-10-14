@@ -16,10 +16,10 @@ they ought to.
 ## 0 — Before you open a browser
 
 ```bash
-docker compose up -d postgres redis     # OSRM is optional; see below
-bash scripts/demo-reset.sh              # DROPS THE DATABASE, then seeds the demo board
-npm run dev                             # window 1 — http://localhost:3000
-npm run dev:worker                      # window 2 — the offer-expiry timer lives here
+docker compose up -d postgres redis osrm   # osrm is optional — see below
+bash scripts/demo-reset.sh                 # DROPS THE DATABASE, then seeds the demo board
+npm run dev                                # window 1 — http://localhost:3000
+npm run dev:worker                         # window 2 — the offer-expiry timer lives here
 ```
 
 `demo-reset.sh` finishes by running `scripts/demo-dry-check.ts`, which prints
@@ -32,9 +32,12 @@ actually printed them:
   contending faults (to 80% mass): FLAT_BATTERY, FAILED_BATTERY
   required capabilities:           BATTERY_REPLACEMENT, JUMP_START
   needs a tow (so a workshop):     no
-  FEASIBLE  unit=demo-unit crew=demo-technician travel=1.7min covers=80% degraded=true
+  FEASIBLE  unit=demo-unit crew=demo-technician travel=1.0min covers=80% degraded=false
 READY — at least one crew can take this job. The demo will dispatch.
 ```
+
+(`degraded=true` there means OSRM is not running — see below. It does not stop
+the demo.)
 
 It also prints a one-line census of the board and every unit's capabilities;
 after a clean reset that census is one zone, one technician, one shift, one
@@ -46,10 +49,61 @@ it an offer never times out, which hides a real behaviour rather than breaking
 the demo — but the health loop is in there too, so the dispatcher's banner will
 be wrong.
 
-**Without OSRM** every travel time falls back to a straight-line estimate and is
-flagged degraded. The demo works; `degraded=true` in the dry check is expected
-and is not a fault. Start it with `docker compose up -d osrm` if you want real
-road times.
+### `degraded=true` in the dry check, and how to clear it
+
+That flag is about **routing, not health**. Every OSRM call in
+`src/infra/routing.ts` is wrapped: unreachable, non-200, bad code or timeout all
+fall back to a haversine estimate inflated by a road factor, and the result
+carries `degraded: true` rather than being silently substituted. With port 5001
+refusing, that is the only thing the flag means.
+
+```bash
+docker compose up -d osrm      # ~17s to answer; the extract is already built
+```
+
+Measured on this board, same job, same crew:
+
+| | travel estimate | flag |
+| --- | --- | --- |
+| OSRM down | 1.7 min (straight line × 1.4 road factor, 30 km/h) | `degraded=true` |
+| OSRM up | **1.0 min** (real route: 698.7 m, 62.1 s) | `degraded=false` |
+
+The demo dispatches either way. Starting OSRM is the difference between a real
+road time and a defensible guess, which matters if anybody asks how travel time
+is computed.
+
+If OSRM has never been built on this machine, run `scripts/setup-osrm.sh` once
+first — the container only *serves* a preprocessed extract, it does not build
+one.
+
+### What the health banner will show
+
+**A fresh reset board shows no banner at all.** The banner is invisible when
+everything is NORMAL, by design — a permanent green bar is furniture that stops
+being read. All seven components come up NORMAL: `CREW_ON_SHIFT` reads "1 of 1
+crewed units have a technician on shift", nothing is on a job, and there are no
+payments yet.
+
+**OSRM being down does not appear on the banner.** There is no routing component
+on the ladder — the seven are `AI_EXTRACTION`, `GPS`, `WEBSOCKET`, `SOLVER`,
+`PAYMENTS`, `CREW_ON_SHIFT` and `DISPATCH_CORE`. A permanently degraded routing
+layer therefore looks healthy on screen, which is a real gap and not something
+this demo papers over.
+
+**Two components will turn the banner amber if you leave the board sitting**,
+both only after the technician has accepted:
+
+| component | fires after | why, on this board |
+| --- | --- | --- |
+| `PAYMENTS` | **10 min** (`PAYMENT_PENDING_AFTER_MS`) | accepting creates a callout authorisation; with no reachable payment provider it stays `PENDING_AUTHORISATION`, and dispatch is never blocked on it |
+| `GPS` | **15 min** (`POSITION_STALE_AFTER_MS`) | the probe only looks at units on an active job, and nothing in this demo reports a new position after the seed stamps one |
+
+So: **run the demo within about ten minutes of the reset and the banner stays
+clean.** Past that, both messages are accurate reports about a board nobody is
+touching rather than faults to fix. `CREW_ON_SHIFT` will not degrade — the shift
+runs for eight hours.
+
+To get back to NORMAL after either: `bash scripts/demo-reset.sh`.
 
 ### The three windows
 
