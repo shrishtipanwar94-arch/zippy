@@ -113,8 +113,9 @@ To get back to NORMAL after either: `bash scripts/demo-reset.sh`.
 | Dispatcher | http://localhost:3000/dispatcher | `demo-dispatcher@zippy.internal` | the board |
 | Technician | http://localhost:3000/technician | `demo-tech@zippy.internal` | Ravi Kumar, in van DMO-V1 |
 
-Password for all three: `password-dev-only`. Every sign-in page arrives with
-both fields filled, so signing in is one click on **Sign in**.
+Password for all three: `password-dev-only`. **Each page pre-fills the MAIN
+seed's account, not the demo one** (`driver-metrocab-1@`, `dispatch-ops@`,
+`tech01@`), so replace the email with the one above before signing in.
 
 **Sign in to all three before you start**, and leave the technician window
 visible. The offer it has to answer lasts 45 seconds.
@@ -133,13 +134,24 @@ configured.
 
 In the **driver window**, a four-step stepper:
 
-1. **"What has happened?"** → under *What's wrong with the vehicle?* choose
-   **It will not start**. Press **Continue**.
-2. **"Which vehicle?"** → pick **KA01DM0001** (White Maruti Suzuki Swift). It is
-   the only one.
-3. **"Are you safe where you are?"** → tick nothing. Press **Continue**.
-4. **"Where are you?"** → under *Which best describes where the car is
-   standing?* choose **In a car park or driveway**. Press **Continue**.
+1. **"What has happened?"** opens on a FREE-TEXT box — that is the LLM path.
+   Press **"Skip — I'll answer questions"** to take the picker instead.
+2. **"What's wrong with the vehicle?"** → **It will not start**. The vehicle
+   dropdown below already reads **KA01DM0001** (White Maruti Suzuki Swift); it
+   is the only one.
+3. **"Are you safe where you are?"** → **"I am on my own" is already ticked**.
+   Leave it and press **Continue**. (That tick is why the job comes out
+   `ELEVATED` rather than `NORMAL`.)
+4. **"Where are you?"** → choose **In a car park or driveway**, type a landmark,
+   and press **Send for help**.
+
+   **DO NOT PRESS "Use my current location"** unless you are in Bengaluru. It
+   captures your real GPS, and intake correctly refuses anything outside the
+   service area — *"We do not cover where you are yet. The nearest place we work
+   is Bengaluru, about 1742 km away."* Worse, the captured fix lives in the
+   page's own state, so editing the coordinate boxes afterwards does not
+   override it; only a reload clears it, and a reload signs you out. The
+   coordinate boxes already default to the demo zone, so leave them alone.
 
 Then it asks follow-up questions — intake's entropy-driven questioning, not a
 fixed form, so it stops as soon as more answers cannot change who gets sent.
@@ -227,7 +239,15 @@ driver's situation to change.
 
 **Driver window.** Scroll to **Messages** and send:
 
-> `I have had to move into the traffic lane, cars are going past me`
+> `I am blocking moving traffic and it is not safe`
+
+**Use that sentence, not the one in WALKTHROUGH.md.** Messages are classified by
+`classifyMessageWithAi`, which falls back to the phrase list in
+`src/domain/messageClassifier.ts` when no model is configured. WALKTHROUGH's
+*"I have had to move into the traffic lane…"* is caught by the MODEL and matches
+**no phrase** — `"into the traffic lane"` does not contain `"in the lane"` — so
+with `LLM_API_KEY` unset it raises nothing at all and the demo dead-ends. The
+sentence above hits `blocking` and `not safe`, so it works either way.
 
 **Expect, within a second, on the driver's own screen:** a bordered amber card
 asking **"Are you blocking moving traffic?"** with a line underneath — *"This
