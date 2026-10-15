@@ -17,19 +17,28 @@
 // pause is structural rather than a check somebody has to remember. Only an
 // approval moves it back.
 //
+// ONE CURRENT ESTIMATE PER JOB, AND A REPEAT PRESS IS NOT A NEW ONE. The
+// estimate records what it was priced from (src/domain/pricedInputs.ts). A
+// press whose inputs match a standing estimate gets that estimate back; a
+// press whose inputs changed SUPERSEDES it, so the driver is only ever shown
+// one. "Only one" is a database fact — a unique index on `current_for_job_id`
+// — because two simultaneous presses both pass any check made in code.
+//
 // WHAT IS NOT HERE, deliberately: no payment, no ledger, no payouts, and no
 // contract coverage. The estimate is what the work costs; who ends up paying
 // which part of it is settlement, and settlement is a later stage.
 
-import type { Prisma, PrismaClient, Role } from '@prisma/client';
+import type { EstimateStatus, Prisma, PrismaClient, Role } from '@prisma/client';
 import { config } from '../infra/config.js';
 import { logger } from '../infra/logger.js';
+import { isUniqueViolation } from '../infra/prismaErrors.js';
 import { isFaultCode, labourCodeForFault, partSkusForFault } from '../domain/faults.js';
 import type { FaultCode } from '../domain/faults.js';
 import { resolveMinutes } from '../engine/durations.js';
 import { priceCallout, priceLabour, priceParts, priceTow, totalOf } from '../domain/pricing.js';
 import type { PricedLine } from '../domain/pricing.js';
 import { reapprovalDecision } from '../domain/estimateApproval.js';
+import { describePricedInputs } from '../domain/pricedInputs.js';
 import { applyCoverage } from '../domain/coverage.js';
 import { coverageTermsFor } from './settlement.js';
 import { calloutRate, labourRate, partRate, towRate } from '../pricing/rateCard.js';
@@ -59,13 +68,39 @@ export type BuildEstimateOutcome =
       // fresh answer, or something the existing approval already covers.
       approval: 'NEEDS_FIRST_APPROVAL' | 'NEEDS_REAPPROVAL' | 'COVERED';
       paused: boolean;
+      // The estimate this one replaced, if the job already had one.
+      supersededEstimateId: string | null;
+    }
+  // Nothing that feeds the price has changed since the current estimate, so
+  // the current estimate is the answer. A second press is not a second ask.
+  | {
+      outcome: 'UNCHANGED';
+      estimateId: string;
+      status: EstimateStatus;
+      totalPaise: number;
+      coveredPaise: number;
+      payablePaise: number;
     }
   // No pinned price list, or the list cannot price this fault at all.
   | { outcome: 'CANNOT_PRICE'; reason: string }
-  // One is already out with the driver. Two live estimates is two answers to
-  // wait for and no way to say which one the approval was about.
-  | { outcome: 'ALREADY_AWAITING'; estimateId: string }
+  // Another press on the same job issued a DIFFERENT estimate in the same
+  // instant. Rare — it needs two people pricing one job at once — and the
+  // answer is to look at what is now current rather than overwrite it blind.
+  | { outcome: 'RACED'; estimateId: string | null }
   | { outcome: 'NOT_FOUND' };
+
+// An estimate that still stands: out with the driver, or agreed. A REJECTED
+// one is not handed back — pressing again after a decline is asking the
+// driver again, and that is a new estimate.
+const STANDING_STATUSES: EstimateStatus[] = ['SENT', 'APPROVED'];
+
+type CurrentEstimate = {
+  id: string;
+  status: EstimateStatus;
+  pricedInputs: string | null;
+  totalPaise: number;
+  coveredPaise: number;
+};
 
 export async function buildEstimate(
   db: PrismaClient,
@@ -97,16 +132,24 @@ export async function buildEstimate(
     return { outcome: 'CANNOT_PRICE', reason: 'this job has no pinned price list' };
   }
 
-  const outstanding = await db.estimate.findFirst({
-    where: { jobId: job.id, status: 'SENT' },
-    select: { id: true },
-  });
-  if (outstanding) return { outcome: 'ALREADY_AWAITING', estimateId: outstanding.id };
-
   const topFault = job.faultHypotheses[0]?.topFault;
   if (!topFault || !isFaultCode(topFault)) {
     return { outcome: 'CANNOT_PRICE', reason: 'this job has no diagnosis to price' };
   }
+
+  const pricedInputs = describePricedInputs({
+    fault: topFault,
+    priceListId: job.priceListId,
+    onHighway: job.onHighway ?? false,
+    towKilometres: input.towKilometres,
+  });
+
+  // THE IDEMPOTENT ANSWER. Checked in code first because it is the common
+  // case — a second tap — and answering it needs no transaction at all. The
+  // unique index on `current_for_job_id` is what holds when two taps arrive
+  // together and both get past this line.
+  const current = await currentEstimateFor(db, job.id);
+  if (current && stillStands(current, pricedInputs)) return unchangedAnswer(current);
 
   const lines = await priceTheWork(db, {
     fault: topFault,
@@ -150,61 +193,78 @@ export async function buildEstimate(
   // little cheaper than we thought" helps nobody.
   const paused = decision.outcome !== 'COVERED';
 
-  const estimateId = await runPublishingTransaction(db, async (tx) => {
-    const estimate = await tx.estimate.create({
-      data: {
-        jobId: job.id,
-        priceListId: job.priceListId,
-        // COVERED estimates are APPROVED on arrival: they inherit the answer
-        // the driver already gave, and leaving them SENT would be asking a
-        // question nobody needs to answer.
-        status: paused ? 'SENT' : 'APPROVED',
-        subtotalPaise: totalPaise,
-        // Tax is a column this stage does not fill. GST is named as deliberate
-        // headroom in the phase brief and is not built.
-        taxPaise: 0,
-        totalPaise,
-        // Stored, not derived: `covered_services` has no version columns, so
-        // recomputing this later could produce a different answer than the one
-        // the driver was shown. An estimate is a financial document.
-        coveredPaise: coverage.coveredPaise,
-        lines: {
-          create: lines.map((line) => ({
-            kind: line.kind,
-            description: line.description,
-            quantity: line.quantity,
-            unitPricePaise: line.unitPricePaise,
-            amountPaise: line.amountPaise,
-            refId: line.refId,
-          })),
+  let estimateId: string;
+  try {
+    estimateId = await runPublishingTransaction(db, async (tx) => {
+      if (current) await supersede(tx, current.id);
+
+      const estimate = await tx.estimate.create({
+        data: {
+          jobId: job.id,
+          priceListId: job.priceListId,
+          // COVERED estimates are APPROVED on arrival: they inherit the answer
+          // the driver already gave, and leaving them SENT would be asking a
+          // question nobody needs to answer.
+          status: paused ? 'SENT' : 'APPROVED',
+          subtotalPaise: totalPaise,
+          // Tax is a column this stage does not fill. GST is named as deliberate
+          // headroom in the phase brief and is not built.
+          taxPaise: 0,
+          totalPaise,
+          // Stored, not derived: `covered_services` has no version columns, so
+          // recomputing this later could produce a different answer than the one
+          // the driver was shown. An estimate is a financial document.
+          coveredPaise: coverage.coveredPaise,
+          pricedInputs,
+          // The insert that loses a simultaneous press. Only one row per job
+          // may carry the job id here, so the second insert raises P2002 and
+          // its whole transaction — supersede included — rolls back.
+          currentForJobId: job.id,
+          lines: {
+            create: lines.map((line) => ({
+              kind: line.kind,
+              description: line.description,
+              quantity: line.quantity,
+              unitPricePaise: line.unitPricePaise,
+              amountPaise: line.amountPaise,
+              refId: line.refId,
+            })),
+          },
         },
-      },
-      select: { id: true },
+        select: { id: true },
+      });
+
+      if (paused) await pauseForApproval(tx, job.id);
+      // The job was paused on a question that has just been withdrawn, and the
+      // replacement needs no answer. Nothing is left to wait for.
+      if (!paused && current?.status === 'SENT') await resumeAfterWithdrawnAsk(tx, job.id);
+
+      await appendJobEvent(tx, {
+        jobId: job.id,
+        eventType: 'ESTIMATE_ISSUED',
+        payload: {
+          estimateId: estimate.id,
+          supersededEstimateId: current?.id ?? null,
+          totalPaise,
+          coveredPaise: coverage.coveredPaise,
+          payablePaise: coverage.payablePaise,
+          approvedPayablePaise,
+          approval: decision.outcome,
+          paused,
+          ...(decision.outcome === 'NEEDS_REAPPROVAL'
+            ? { allowancePaise: decision.allowancePaise, overByPaise: decision.overBy }
+            : {}),
+        },
+        actorRole: input.actor.role,
+        actorId: input.actor.id,
+      });
+
+      return estimate.id;
     });
-
-    if (paused) await pauseForApproval(tx, job.id);
-
-    await appendJobEvent(tx, {
-      jobId: job.id,
-      eventType: 'ESTIMATE_ISSUED',
-      payload: {
-        estimateId: estimate.id,
-        totalPaise,
-        coveredPaise: coverage.coveredPaise,
-        payablePaise: coverage.payablePaise,
-        approvedPayablePaise,
-        approval: decision.outcome,
-        paused,
-        ...(decision.outcome === 'NEEDS_REAPPROVAL'
-          ? { allowancePaise: decision.allowancePaise, overByPaise: decision.overBy }
-          : {}),
-      },
-      actorRole: input.actor.role,
-      actorId: input.actor.id,
-    });
-
-    return estimate.id;
-  });
+  } catch (error) {
+    if (!isUniqueViolation(error)) throw error;
+    return answerToLostRace(db, job.id, pricedInputs);
+  }
 
   return {
     outcome: 'ISSUED',
@@ -214,7 +274,63 @@ export async function buildEstimate(
     payablePaise: coverage.payablePaise,
     approval: decision.outcome,
     paused,
+    supersededEstimateId: current?.id ?? null,
   };
+}
+
+async function currentEstimateFor(db: PrismaClient, jobId: string): Promise<CurrentEstimate | null> {
+  return db.estimate.findUnique({
+    where: { currentForJobId: jobId },
+    select: { id: true, status: true, pricedInputs: true, totalPaise: true, coveredPaise: true },
+  });
+}
+
+function stillStands(current: CurrentEstimate, pricedInputs: string): boolean {
+  if (!STANDING_STATUSES.includes(current.status)) return false;
+  return current.pricedInputs === pricedInputs;
+}
+
+function unchangedAnswer(current: CurrentEstimate): BuildEstimateOutcome {
+  return {
+    outcome: 'UNCHANGED',
+    estimateId: current.id,
+    status: current.status,
+    totalPaise: current.totalPaise,
+    coveredPaise: current.coveredPaise,
+    payablePaise: current.totalPaise - current.coveredPaise,
+  };
+}
+
+// The other press committed first. If it priced the same thing, its estimate
+// is exactly what this press would have issued, so it is this press's answer
+// too — which is what makes a double tap produce one estimate, not an error.
+async function answerToLostRace(
+  db: PrismaClient,
+  jobId: string,
+  pricedInputs: string,
+): Promise<BuildEstimateOutcome> {
+  const winner = await currentEstimateFor(db, jobId);
+  if (winner && stillStands(winner, pricedInputs)) return unchangedAnswer(winner);
+  return { outcome: 'RACED', estimateId: winner?.id ?? null };
+}
+
+// The old estimate stays as a record — it is a financial document, and an
+// approval on it still counts toward what the driver has agreed to spend — but
+// it stops being the one anybody is shown or may answer.
+async function supersede(tx: Prisma.TransactionClient, estimateId: string): Promise<void> {
+  await tx.estimate.update({
+    where: { id: estimateId },
+    data: { currentForJobId: null, supersededAt: new Date() },
+  });
+}
+
+// Conditional on the job actually being paused, so a revision raised against
+// a job somebody has since cancelled cannot resurrect it.
+async function resumeAfterWithdrawnAsk(tx: Prisma.TransactionClient, jobId: string): Promise<void> {
+  await tx.job.updateMany({
+    where: { id: jobId, status: 'AWAITING_APPROVAL' },
+    data: { status: 'WORKING', version: { increment: 1 } },
+  });
 }
 
 // WORK STOPS HERE. Conditional on the job being somewhere work could be

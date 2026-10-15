@@ -70,6 +70,10 @@ async function jobStatus(jobId: string): Promise<string> {
   return job.status;
 }
 
+async function issuedEventCount(jobId: string): Promise<number> {
+  return prismaBase.jobEvent.count({ where: { jobId, eventType: 'ESTIMATE_ISSUED' } });
+}
+
 // A job at WORKING with a stated diagnosis, ready to be priced. Each test gets
 // its own so one approval cannot move the ground under another.
 async function freshJob(suffix: string, topFault: string): Promise<string> {
@@ -259,11 +263,63 @@ describe('generating an estimate after diagnosis', () => {
     expect(ladderMove('AWAITING_APPROVAL', 'COMPLETE').outcome).toBe('OFF_LADDER');
   });
 
-  it('refuses to raise a second estimate while one is unanswered', async () => {
+  // A SECOND PRESS IS NOT A SECOND ASK. Through the route, because the 200 vs
+  // 201 is part of the contract: nothing was created the second time.
+  it('answers a repeat press with the estimate that already stands', async () => {
     const jobId = await freshJob('double', 'FLAT_TYRE');
-    await buildEstimate(prismaBase, { jobId, actor });
-    const second = await buildEstimate(prismaBase, { jobId, actor });
-    expect(second.outcome).toBe('ALREADY_AWAITING');
+    await prismaBase.job.update({ where: { id: jobId }, data: { assignedTechnicianId: `${PREFIX}-tech` } });
+    // A DELTA, not a count: `job_events` is append-only and this job id is
+    // reused every run, so earlier runs' events are still there.
+    const issuedBefore = await issuedEventCount(jobId);
+
+    const first = await request(app)
+      .post(`/jobs/${jobId}/estimate`)
+      .set('Authorization', `Bearer ${technicianToken()}`)
+      .send({});
+    const second = await request(app)
+      .post(`/jobs/${jobId}/estimate`)
+      .set('Authorization', `Bearer ${technicianToken()}`)
+      .send({});
+
+    expect(first.status).toBe(201);
+    expect(second.status).toBe(200);
+    expect(second.body.outcome).toBe('UNCHANGED');
+    expect(second.body.estimateId).toBe(first.body.estimateId);
+    expect(await prismaBase.estimate.count({ where: { jobId } })).toBe(1);
+    // One card on the driver's timeline, not two.
+    expect((await issuedEventCount(jobId)) - issuedBefore).toBe(1);
+  });
+
+  it('supersedes the standing estimate when a priced input changes', async () => {
+    const jobId = await freshJob('retow', 'IMMOBILISED_UNKNOWN');
+    const first = await buildEstimate(prismaBase, { jobId, actor, towKilometres: 20 });
+    const again = await buildEstimate(prismaBase, { jobId, actor, towKilometres: 20 });
+    if (first.outcome !== 'ISSUED') throw new Error('expected an estimate');
+    expect(again.outcome).toBe('UNCHANGED');
+
+    const revised = await buildEstimate(prismaBase, { jobId, actor, towKilometres: 35 });
+    expect(revised.outcome).toBe('ISSUED');
+    if (revised.outcome !== 'ISSUED') return;
+    expect(revised.estimateId).not.toBe(first.estimateId);
+    expect(revised.supersededEstimateId).toBe(first.estimateId);
+
+    // The old one is kept as a record but is no longer current, and the
+    // driver's unanswered ask moved to the new one.
+    const old = await prismaBase.estimate.findUniqueOrThrow({
+      where: { id: first.estimateId },
+      select: { currentForJobId: true, supersededAt: true },
+    });
+    expect(old.currentForJobId).toBeNull();
+    expect(old.supersededAt).toBeInstanceOf(Date);
+    expect(await prismaBase.estimate.count({ where: { jobId, supersededAt: null } })).toBe(1);
+
+    // And it can no longer be answered.
+    const late = await respondToEstimate(prismaBase, {
+      estimateId: first.estimateId,
+      decision: 'APPROVE',
+      actor: driver,
+    });
+    expect(late.outcome).toBe('SUPERSEDED');
   });
 
   it('will not price a job with no pinned price list', async () => {
@@ -282,7 +338,7 @@ describe('generating an estimate after diagnosis', () => {
 
 describe('the re-approval loop', () => {
   it('carries a small overrun without asking again', async () => {
-    const jobId = await freshJob('small', 'FLAT_TYRE');
+    const jobId = await freshJob('small', 'KEY_FAILURE');
     const first = await buildEstimate(prismaBase, { jobId, actor });
     if (first.outcome !== 'ISSUED') throw new Error('expected an estimate');
 
@@ -293,7 +349,10 @@ describe('the re-approval loop', () => {
     });
     expect(await jobStatus(jobId)).toBe('WORKING');
 
-    // The same fault re-priced: identical total, comfortably inside 10%.
+    // Re-diagnosed as a puncture: ₹900 becomes ₹948, inside the 10% allowance.
+    await prismaBase.faultHypothesis.create({
+      data: { jobId, distribution: {}, requiredCapabilityCodes: [], entropy: 0.1, topFault: 'FLAT_TYRE' },
+    });
     const second = await buildEstimate(prismaBase, { jobId, actor });
     expect(second.outcome).toBe('ISSUED');
     if (second.outcome !== 'ISSUED') return;

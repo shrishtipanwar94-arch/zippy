@@ -50,6 +50,9 @@ export type RespondOutcome =
   // Somebody already answered this one — a second tap, or the driver in the
   // app while a dispatcher answers on the phone.
   | { outcome: 'ALREADY_ANSWERED'; status: string }
+  // The technician re-priced the job while this one was on screen. Answering
+  // a withdrawn estimate would approve a price nobody is offering any more.
+  | { outcome: 'SUPERSEDED' }
   | { outcome: 'NOT_FOUND' };
 
 export async function respondToEstimate(
@@ -71,16 +74,18 @@ export async function respondToEstimate(
     // THE ARBITER. A conditional update on the status we expect to be leaving,
     // the same shape holds.ts, offers.ts and eventPromotions.ts use. Two
     // answers to one estimate would otherwise both record an approval and both
-    // move the job.
+    // move the job. `supersededAt: null` in the same condition, so an answer
+    // racing a re-price loses cleanly instead of approving the old price.
     const claimed = await tx.estimate.updateMany({
-      where: { id: estimate.id, status: 'SENT' },
+      where: { id: estimate.id, status: 'SENT', supersededAt: null },
       data: { status: input.decision === 'APPROVE' ? 'APPROVED' : 'REJECTED' },
     });
     if (claimed.count === 0) {
       const current = await tx.estimate.findUnique({
         where: { id: estimate.id },
-        select: { status: true },
+        select: { status: true, supersededAt: true },
       });
+      if (current?.status === 'SENT' && current.supersededAt) return { outcome: 'SUPERSEDED' } as const;
       return { outcome: 'ALREADY_ANSWERED', status: current?.status ?? 'REJECTED' } as const;
     }
 

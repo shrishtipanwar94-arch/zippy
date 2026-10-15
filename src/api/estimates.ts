@@ -71,8 +71,14 @@ estimatesRouter.post(
       res.status(409).json({ error: 'cannot_price', reason: result.reason });
       return;
     }
-    if (result.outcome === 'ALREADY_AWAITING') {
-      res.status(409).json({ error: 'already_awaiting_approval', estimateId: result.estimateId });
+    if (result.outcome === 'RACED') {
+      res.status(409).json({ error: 'estimate_changed_concurrently', estimateId: result.estimateId });
+      return;
+    }
+    if (result.outcome === 'UNCHANGED') {
+      // 200, not 201: nothing was created. The press is answered with the
+      // estimate that already stands.
+      res.status(200).json(result);
       return;
     }
 
@@ -92,7 +98,7 @@ estimatesRouter.get(
     }
 
     const estimate = await prismaBase.estimate.findFirst({
-      where: { jobId },
+      where: { jobId, supersededAt: null },
       orderBy: { createdAt: 'desc' },
       select: {
         id: true,
@@ -195,6 +201,10 @@ estimatesRouter.post(
 
     if (result.outcome === 'NOT_FOUND') {
       res.status(404).json({ error: 'not_found' });
+      return;
+    }
+    if (result.outcome === 'SUPERSEDED') {
+      res.status(409).json({ error: 'estimate_superseded' });
       return;
     }
     if (result.outcome === 'ALREADY_ANSWERED') {

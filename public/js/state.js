@@ -151,6 +151,10 @@ const state = {
   // screen, and it must not survive a refetch of the board, which is why it
   // lives here rather than being derived from the server's copy.
   completionParts: {},
+  // The job whose "Send the driver a cost" request is on the wire, or null.
+  // In state rather than on the button because the card is rebuilt on every
+  // render, and a `disabled` set on the old button would vanish with it.
+  estimateInFlight: null,
   health: null,
   // The drill-through behind the health banner's payments line. `null` until an
   // operator asks for it — the banner is polled every fifteen seconds and
@@ -413,6 +417,10 @@ export function setRequestField(patch) {
 
 export function setCompletionParts(jobId, answer) {
   state.completionParts[jobId] = answer;
+}
+
+export function setEstimateInFlight(jobId) {
+  state.estimateInFlight = jobId;
 }
 
 export function setStuckPayments(payments) {

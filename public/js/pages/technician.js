@@ -24,6 +24,7 @@ import {
   setOutbox,
   setSession,
   setCompletionParts,
+  setEstimateInFlight,
   setVanCount,
   setVanStock,
   setWork,
@@ -263,13 +264,19 @@ document.querySelector('[data-panel="ladder"]').addEventListener('click', async 
 
   const estimateButton = clicked.target.closest('button[data-estimate]');
   if (estimateButton) {
+    const jobId = estimateButton.dataset.estimate;
+    if (getState().estimateInFlight === jobId) return;
+    setEstimateInFlight(jobId);
+    render();
     try {
-      await api.raiseEstimate(estimateButton.dataset.estimate);
+      await api.raiseEstimate(jobId);
       setError(null);
     } catch (error) {
       // A job with no pinned price list answers 409 rather than failing — see
       // src/api/estimates.ts. The technician is told why in a sentence.
       setError(error.message);
+    } finally {
+      setEstimateInFlight(null);
     }
     await refreshWork();
     return;

@@ -511,6 +511,9 @@ async function buildFixture(): Promise<void> {
   // One job per scenario, at WORKING with a flat-tyre diagnosis, ready to price.
   for (const spec of scenarios) {
     const id = jobIdFor(spec.scenario);
+    // This file owns its jobs' estimates. Without this, a rerun's press would
+    // be answered with last run's standing estimate instead of a fresh one.
+    await prismaBase.estimate.deleteMany({ where: { jobId: id } });
     await prismaBase.job.upsert({
       where: { id },
       update: {},

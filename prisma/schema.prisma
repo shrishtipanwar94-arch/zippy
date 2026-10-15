@@ -1434,6 +1434,15 @@ model Estimate {
   // total - covered and is deliberately NOT a column: two figures that must
   // sum to a third are two chances to disagree.
   coveredPaise  Int            @default(0) @map("covered_paise")
+  // WHAT WAS PRICED — diagnosis, parts, labour, tow distance and price list,
+  // as one canonical string. A second press whose inputs match is answered
+  // with this row instead of a new one. Null on rows from before it existed.
+  pricedInputs  String?        @map("priced_inputs")
+  // ONE CURRENT ESTIMATE PER JOB, enforced by the unique index. The current
+  // one carries its job id here; a superseded one carries NULL, and Postgres
+  // lets any number of rows share NULL under a unique index.
+  currentForJobId String?      @unique @map("current_for_job_id")
+  supersededAt  DateTime?      @map("superseded_at")
   createdAt     DateTime       @default(now()) @map("created_at")
   updatedAt     DateTime       @updatedAt @map("updated_at")
 

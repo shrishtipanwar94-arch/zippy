@@ -194,7 +194,7 @@ async function withContext(db: PrismaClient, job: OpenJob) {
 // to see the cost.
 async function latestEstimate(db: PrismaClient, jobId: string) {
   const estimate = await db.estimate.findFirst({
-    where: { jobId },
+    where: { jobId, supersededAt: null },
     orderBy: { createdAt: 'desc' },
     select: {
       status: true,

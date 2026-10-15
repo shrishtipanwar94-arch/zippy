@@ -183,7 +183,8 @@ driverRouter.get(
         select: { code: true, verifiedAt: true },
       }),
       prismaBase.estimate.findFirst({
-        where: { jobId: job.id },
+        // A superseded estimate is a record, not something the driver answers.
+        where: { jobId: job.id, supersededAt: null },
         orderBy: { createdAt: 'desc' },
         select: {
           id: true,

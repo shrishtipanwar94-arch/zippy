@@ -423,6 +423,13 @@ runs if someone remembered to start a database is not a proof.
   Handled by the saga machinery already in place: a destination change is
   exactly the `NO_CHANGE` vs `REASSIGNMENT_PROPOSED` branch `handleTrigger`
   already has.
+- **Estimate creation is idempotent per priced inputs, enforced at the DB
+  level.** A repeat press of "Send the driver a cost" with the same diagnosis,
+  parts, labour, tow km and price list (`estimates.priced_inputs`) returns the
+  standing estimate with 200; a changed input supersedes it. A unique index on
+  `estimates.current_for_job_id` allows one current estimate per job, so two
+  simultaneous presses cannot both insert — the loser's P2002 rolls back and it
+  answers with the winner's row (`tests/concurrency/estimates.test.ts`).
 
 Assumption relied on throughout: **READ COMMITTED**, Postgres's default. At
 that level a blocked UPDATE re-reads the row rather than failing; the guarantee

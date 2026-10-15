@@ -170,6 +170,10 @@ function jobCardMarkup(job) {
 // inside the card is what made that card 1,400px long.
 function diagnosisMarkup(job, state) {
   const offline = !state.outbox.online;
+  // Disabled while a press is still on the wire. The server already answers a
+  // repeat with the same estimate, so this is about not inviting the second
+  // tap, not about correctness.
+  const pricing = state.estimateInFlight === job.jobId;
 
   return `
     <section class="mb-4">
@@ -190,8 +194,8 @@ function diagnosisMarkup(job, state) {
            list and its current diagnosis, neither of which the phone holds, and
            a queued estimate would be priced against a fault the driver has
            already been quoted for. -->
-      <button class="btn btn-secondary-solid w-100 tech-action" data-estimate="${escapeText(job.jobId)}" ${offline ? 'disabled' : ''}>
-        Send the driver a cost
+      <button class="btn btn-secondary-solid w-100 tech-action" data-estimate="${escapeText(job.jobId)}" ${offline || pricing ? 'disabled' : ''}>
+        ${pricing ? 'Working out the cost…' : 'Send the driver a cost'}
       </button>
       ${
         offline
