@@ -82,7 +82,10 @@ export async function seedFleet(prisma: PrismaClient): Promise<void> {
 
       await prisma.unit.upsert({
         where: { code: unitId.toUpperCase() },
-        update: { kind: plan.kind, zoneId: home, status: 'AVAILABLE' },
+        // The position is reset too: a re-seed means "this is the fleet, at
+        // home". Without it, moving the seeded city left every existing unit
+        // at its old coordinates under a new zone id.
+        update: { kind: plan.kind, zoneId: home, status: 'AVAILABLE', lat: zone.lat + jitter, lng: zone.lng - jitter },
         create: {
           id: unitId,
           code: unitId.toUpperCase(),

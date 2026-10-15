@@ -348,9 +348,9 @@ async function buildFixture(): Promise<void> {
       id: `${PREFIX}-zone`,
       code: 'COV',
       name: 'Coverage Zone',
-      city: 'Bengaluru',
-      centroidLat: 12.9352,
-      centroidLng: 77.6245,
+      city: 'Delhi',
+      centroidLat: 28.6152,
+      centroidLng: 77.2095,
     },
   });
   await prismaBase.vehicleProfile.upsert({
@@ -450,7 +450,7 @@ async function buildFixture(): Promise<void> {
         driverId: `${PREFIX}-${who}-driver`,
         tenantId,
         profileId: `${PREFIX}-profile`,
-        registration: `KA01CV${who.slice(0, 4).toUpperCase()}`,
+        registration: `DL01CV${who.slice(0, 4).toUpperCase()}`,
         colour: 'Blue',
       },
     });
@@ -530,8 +530,8 @@ async function buildFixture(): Promise<void> {
         createdAt: CREATED_AT,
         assignedTechnicianId: technicianFor(spec.scenario),
         onHighway: false,
-        lat: 12.9352,
-        lng: 77.6245,
+        lat: 28.6152,
+        lng: 77.2095,
       },
     });
     await prismaBase.faultHypothesis.create({

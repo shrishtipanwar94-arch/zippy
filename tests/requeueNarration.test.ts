@@ -208,9 +208,9 @@ async function buildFixture(): Promise<void> {
       id: `${PREFIX}-zone`,
       code: 'RQZ',
       name: 'Requeue Zone',
-      city: 'Bengaluru',
-      centroidLat: 12.9352,
-      centroidLng: 77.6245,
+      city: 'Delhi',
+      centroidLat: 28.6152,
+      centroidLng: 77.2095,
     },
   });
   await prismaBase.vehicleProfile.upsert({
@@ -332,8 +332,8 @@ async function buildFixture(): Promise<void> {
       kind: 'VAN',
       zoneId: `${PREFIX}-zone`,
       status: 'AVAILABLE',
-      lat: 12.9352,
-      lng: 77.6245,
+      lat: 28.6152,
+      lng: 77.2095,
     },
   });
 
@@ -360,8 +360,8 @@ async function buildFixture(): Promise<void> {
       assignedUnitId: null,
       assignedTechnicianId: null,
       createdAt: new Date(Date.now() - JOB_AGE_MINUTES * 60_000),
-      lat: 12.9352,
-      lng: 77.6245,
+      lat: 28.6152,
+      lng: 77.2095,
     },
   });
 }

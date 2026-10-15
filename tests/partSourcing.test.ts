@@ -36,8 +36,8 @@ function distribution(weights: Partial<FaultDistribution>): FaultDistribution {
 // the right one to reason about parts with.
 const BATTERY_JOB: JobForDispatch = {
   id: 'job-1',
-  lat: 12.9352,
-  lng: 77.6245,
+  lat: 28.6152,
+  lng: 77.2095,
   faultDistribution: distribution({ FAILED_BATTERY: 1 }),
   createdAt: new Date('2026-06-01T09:00:00Z'),
   slaResponseMinutes: null,
@@ -55,8 +55,8 @@ function unit(overrides: Partial<UnitSnapshot> = {}): UnitSnapshot {
     zoneId: 'zone-1',
     currentTechnicianId: 'tech-1',
     capabilityCodes: ['BATTERY_REPLACEMENT'],
-    lat: 12.94,
-    lng: 77.63,
+    lat: 28.62,
+    lng: 77.215,
     kind: 'VAN',
     status: 'AVAILABLE',
     ...overrides,
@@ -72,10 +72,10 @@ function stock(overrides: Partial<PartStockSnapshot> = {}): PartStockSnapshot {
 }
 
 // Right next to the van, so a diversion through it costs almost nothing.
-const NEAR_DEPOT = { id: 'depot-near', code: 'DEP-NEAR', lat: 12.94, lng: 77.63 };
+const NEAR_DEPOT = { id: 'depot-near', code: 'DEP-NEAR', lat: 28.62, lng: 77.215 };
 // Roughly 45km away in a straight line, which at the fallback's 30km/h and 1.4
 // road factor is well past MAX_PART_SOURCING_DETOUR_MINUTES in each direction.
-const FAR_DEPOT = { id: 'depot-far', code: 'DEP-FAR', lat: 13.35, lng: 78.0 };
+const FAR_DEPOT = { id: 'depot-far', code: 'DEP-FAR', lat: 29.03, lng: 77.585 };
 
 function parts(overrides: Partial<PartsSnapshot> = {}): PartsSnapshot {
   return {

@@ -63,7 +63,7 @@ const baseEnvSchema = z.object({
   // Straight-line distance is always shorter than the road distance; this
   // multiplier is the fallback's stand-in for "roads are not straight lines."
   // 1.4 is a common rule-of-thumb detour factor for a mixed urban/highway
-  // network — not measured against Bengaluru specifically, and it is exactly
+  // network — not measured against Delhi specifically, and it is exactly
   // the kind of number that should move once real OSRM data is available to
   // check it against, which is the whole reason the fallback is marked
   // DEGRADED rather than trusted quietly.

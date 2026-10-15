@@ -46,7 +46,7 @@ function intake(body: Record<string, unknown>) {
     .set('Authorization', `Bearer ${driverToken()}`)
     .send({
       vehicleId: 'air-vehicle',
-      location: { lat: 12.9352, lng: 77.6245, roadPosition: 'PARKING' },
+      location: { lat: 28.6152, lng: 77.2095, roadPosition: 'PARKING' },
       ...body,
     });
 }
@@ -226,9 +226,9 @@ async function buildFixture(): Promise<void> {
       id: ZONE,
       code: 'AIRZ',
       name: 'AI Route Zone',
-      city: 'Bengaluru',
-      centroidLat: 12.9352,
-      centroidLng: 77.6245,
+      city: 'Delhi',
+      centroidLat: 28.6152,
+      centroidLng: 77.2095,
     },
   });
   await prismaBase.vehicleProfile.upsert({

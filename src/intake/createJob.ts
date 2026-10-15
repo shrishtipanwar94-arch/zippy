@@ -95,15 +95,15 @@ export type IntakeResult = {
 // `nearestZone` returns the closest zone and has no opinion about how far away
 // that is, which is correct for a nearest-neighbour function and was wrong as
 // an answer to this question. A driver in Delhi pressed "use my current
-// location", their browser reported a genuine fix 1,742km from the nearest
-// centroid, and the job was filed into zone-heb and queued as though somebody
-// could be sent to it. Nothing rejected it, nothing flagged it, and the map
+// location" while the zones were still in Bengaluru; their browser reported a
+// genuine fix 1,742km from the nearest centroid, and the job was filed into
+// zone-heb and queued as though somebody could be sent to it. Nothing rejected it, nothing flagged it, and the map
 // then framed itself across two states trying to contain it.
 //
 // THE COMPOUNDING FAILURE IS WORTH KNOWING ABOUT and is deliberately not fixed
 // here. OSRM snaps an off-graph coordinate to the nearest node in whatever
-// extract it was built with, so a Delhi coordinate came back as a five-minute
-// drive from a Bengaluru van — the routing layer had no way to say "that is
+// extract it was built with, so that Delhi coordinate came back as a
+// five-minute drive from a Bengaluru van — the routing layer had no way to say "that is
 // not on my map". Bounding the input is the fix; teaching the router to
 // distrust its own answers is not.
 async function resolveZoneId(tx: Prisma.TransactionClient, lat: number, lng: number): Promise<string> {

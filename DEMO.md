@@ -137,7 +137,7 @@ In the **driver window**, a four-step stepper:
 1. **"What has happened?"** opens on a FREE-TEXT box — that is the LLM path.
    Press **"Skip — I'll answer questions"** to take the picker instead.
 2. **"What's wrong with the vehicle?"** → **It will not start**. The vehicle
-   dropdown below already reads **KA01DM0001** (White Maruti Suzuki Swift); it
+   dropdown below already reads **DL01DM0001** (White Maruti Suzuki Swift); it
    is the only one.
 3. **"Are you safe where you are?"** → **"I am on my own" is already ticked**.
    Leave it and press **Continue**. (That tick is why the job comes out
@@ -145,10 +145,10 @@ In the **driver window**, a four-step stepper:
 4. **"Where are you?"** → choose **In a car park or driveway**, type a landmark,
    and press **Send for help**.
 
-   **DO NOT PRESS "Use my current location"** unless you are in Bengaluru. It
+   **DO NOT PRESS "Use my current location"** unless you are in Delhi. It
    captures your real GPS, and intake correctly refuses anything outside the
    service area — *"We do not cover where you are yet. The nearest place we work
-   is Bengaluru, about 1742 km away."* Worse, the captured fix lives in the
+   is Delhi, about N km away."* Worse, the captured fix lives in the
    page's own state, so editing the coordinate boxes afterwards does not
    override it; only a reload clears it, and a reload signs you out. The
    coordinate boxes already default to the demo zone, so leave them alone.
@@ -181,7 +181,7 @@ and the one van on the board is correctly rejected `CAPABILITY_MISSING`.
 - **Progress** shows the job's stage.
 
 **Expect, on the dispatcher:** the job appears in the **priority queue** with
-the plate `KA01DM0001`, a safety badge reading **NORMAL**, and its three sort
+the plate `DL01DM0001`, a safety badge reading **NORMAL**, and its three sort
 keys (safety, SLA consumption, age) on the row. It is `NORMAL` because the car
 is in a car park with nothing dangerous reported — safety triage returns no
 reason codes at all, which is what makes the escalation in Step 3 visible as a

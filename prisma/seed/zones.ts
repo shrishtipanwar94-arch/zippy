@@ -1,4 +1,7 @@
-// Six zones across one city — Bengaluru. Phase 6 seeds all zones inside a
+// Six zones across one city — Delhi. All inside the NCT on purpose: the
+// OSRM extract (scripts/setup-osrm.sh) is Geofabrik's India northern zone,
+// which stops at the Uttar Pradesh border, so a zone in Ghaziabad or Noida
+// would be routed on an almost empty road graph. Phase 6 seeds all zones inside a
 // single OSRM extract, so keeping them in one real city matters later. Each
 // zone carries a centroid (used to place units and workshops near it) and a
 // rough bounding box as its boundary.
@@ -15,12 +18,12 @@ type ZoneSeed = {
 // Real-ish centroids so road distances between zones are plausible when OSRM
 // arrives. Order is fixed — other seeders round-robin over ZONES by index.
 export const ZONES: ZoneSeed[] = [
-  { code: 'KOR', name: 'Koramangala', lat: 12.9352, lng: 77.6245 },
-  { code: 'IND', name: 'Indiranagar', lat: 12.9719, lng: 77.6412 },
-  { code: 'WHF', name: 'Whitefield', lat: 12.9698, lng: 77.7499 },
-  { code: 'JAY', name: 'Jayanagar', lat: 12.9299, lng: 77.5833 },
-  { code: 'HEB', name: 'Hebbal', lat: 13.0358, lng: 77.597 },
-  { code: 'ELC', name: 'Electronic City', lat: 12.8452, lng: 77.6602 },
+  { code: 'CNP', name: 'Connaught Place', lat: 28.6152, lng: 77.2095 },
+  { code: 'CHC', name: 'Chandni Chowk', lat: 28.6519, lng: 77.2262 },
+  { code: 'PVR', name: 'Preet Vihar', lat: 28.6417, lng: 77.295 },
+  { code: 'DHK', name: 'Dhaula Kuan', lat: 28.6099, lng: 77.1683 },
+  { code: 'MDT', name: 'Model Town', lat: 28.7158, lng: 77.182 },
+  { code: 'KLK', name: 'Kalkaji', lat: 28.5252, lng: 77.2452 },
 ];
 
 function boundingBox(lat: number, lng: number) {
@@ -40,7 +43,7 @@ export async function seedZones(prisma: PrismaClient): Promise<void> {
       where: { code: zone.code },
       update: {
         name: zone.name,
-        city: 'Bengaluru',
+        city: 'Delhi',
         centroidLat: zone.lat,
         centroidLng: zone.lng,
         boundary: boundingBox(zone.lat, zone.lng),
@@ -49,7 +52,7 @@ export async function seedZones(prisma: PrismaClient): Promise<void> {
         id: `zone-${zone.code.toLowerCase()}`,
         code: zone.code,
         name: zone.name,
-        city: 'Bengaluru',
+        city: 'Delhi',
         centroidLat: zone.lat,
         centroidLng: zone.lng,
         boundary: boundingBox(zone.lat, zone.lng),

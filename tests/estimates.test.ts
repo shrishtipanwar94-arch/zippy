@@ -93,8 +93,8 @@ async function freshJob(suffix: string, topFault: string): Promise<string> {
       safetyLevel: 'NORMAL',
       createdAt: CREATED_AT,
       onHighway: false,
-      lat: 12.9352,
-      lng: 77.6245,
+      lat: 28.6152,
+      lng: 77.2095,
     },
   });
   await prismaBase.faultHypothesis.deleteMany({ where: { jobId: id } });
@@ -599,9 +599,9 @@ async function buildFixture(): Promise<void> {
       id: `${PREFIX}-zone`,
       code: 'EST',
       name: 'Estimate Zone',
-      city: 'Bengaluru',
-      centroidLat: 12.9352,
-      centroidLng: 77.6245,
+      city: 'Delhi',
+      centroidLat: 28.6152,
+      centroidLng: 77.2095,
     },
   });
   await prismaBase.vehicleProfile.upsert({
@@ -642,7 +642,7 @@ async function buildFixture(): Promise<void> {
       driverId: `${PREFIX}-driver`,
       tenantId: TENANT,
       profileId: `${PREFIX}-profile`,
-      registration: 'KA01ES0001',
+      registration: 'DL01ES0001',
       colour: 'Silver',
     },
   });

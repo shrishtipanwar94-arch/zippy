@@ -123,8 +123,8 @@ const OPTION: DispatchOption = {
 function engineJob(overrides: Partial<JobForDispatch> = {}): JobForDispatch {
   return {
     id: `${P}-engine-job`,
-    lat: 12.9352,
-    lng: 77.6245,
+    lat: 28.6152,
+    lng: 77.2095,
     faultDistribution: distribution({ FLAT_BATTERY: 1 }),
     createdAt: DURING_CONTRACT,
     slaResponseMinutes: null,
@@ -201,15 +201,15 @@ function oneVanSnapshot(): DispatchSnapshot {
         zoneId: `${P}-z`,
         currentTechnicianId: `${P}-tech`,
         capabilityCodes: ['JUMP_START'],
-        lat: 12.9352,
-        lng: 77.6245,
+        lat: 28.6152,
+        lng: 77.2095,
         kind: 'VAN',
         status: 'AVAILABLE',
       },
     ],
     technicians: [{ id: `${P}-tech`, capabilityCodes: ['JUMP_START'] }],
     shifts: [{ technicianId: `${P}-tech`, ...ALL_DAY_SHIFT }],
-    zones: [{ id: `${P}-z`, centroidLat: 12.9352, centroidLng: 77.6245 }],
+    zones: [{ id: `${P}-z`, centroidLat: 28.6152, centroidLng: 77.2095 }],
   };
 }
 
@@ -412,7 +412,7 @@ describe('a vehicle belongs to exactly one tenant', () => {
       .send({
         driverId: `${P}-driver`,
         profileId: `${P}-profile`,
-        registration: 'KA-01-P20-0001',
+        registration: 'DL-01-P20-0001',
         colour: 'White',
       });
 
@@ -424,7 +424,7 @@ describe('a vehicle belongs to exactly one tenant', () => {
     expect(vehicle.tenantId).toBe(`${P}-fleet`);
     // Normalised on the way in, so a plate cannot be registered twice by
     // punctuation alone.
-    expect(vehicle.registration).toBe('KA01P200001');
+    expect(vehicle.registration).toBe('DL01P200001');
   });
 
   // THE PHASE'S SECOND NAMED TEST, in both of its forms.
@@ -437,7 +437,7 @@ describe('a vehicle belongs to exactly one tenant', () => {
         profileId: `${P}-profile`,
         // The same plate, punctuated differently — the check must see through
         // that, or it is not a check.
-        registration: 'ka01 p20 0001',
+        registration: 'dl01 p20 0001',
         colour: 'White',
       });
 
@@ -454,7 +454,7 @@ describe('a vehicle belongs to exactly one tenant', () => {
         // one tenant by its own column and to another through its driver.
         driverId: `${P}-other-driver`,
         profileId: `${P}-profile`,
-        registration: 'KA-01-P20-0002',
+        registration: 'DL-01-P20-0002',
         colour: 'Blue',
       });
 
@@ -469,7 +469,7 @@ describe('a vehicle belongs to exactly one tenant', () => {
       .send({
         driverId: `${P}-driver`,
         profileId: `${P}-profile`,
-        registration: 'KA-01-P20-0003',
+        registration: 'DL-01-P20-0003',
         colour: 'Red',
       });
     expect(response.status).toBe(403);
@@ -580,8 +580,8 @@ async function intakeJob() {
       vulnerablePassengers: false,
     },
     location: {
-      lat: 12.9352,
-      lng: 77.6245,
+      lat: 28.6152,
+      lng: 77.2095,
       headingDegrees: null,
       accuracyMetres: null,
       nearestExit: null,
@@ -621,7 +621,7 @@ async function clearFixture(): Promise<void> {
   // with no job behind it, so they genuinely can go — and they must, or the
   // second run registers a plate the first run already took.
   await prismaBase.vehicle.deleteMany({
-    where: { registration: { startsWith: 'KA01P200' } },
+    where: { registration: { startsWith: 'DL01P200' } },
   });
 }
 
@@ -635,9 +635,9 @@ async function buildFixture(): Promise<void> {
       id: `${P}-zone`,
       code: 'P20Z',
       name: 'Contracts Fixture Zone',
-      city: 'Bengaluru',
-      centroidLat: 12.9352,
-      centroidLng: 77.6245,
+      city: 'Delhi',
+      centroidLat: 28.6152,
+      centroidLng: 77.2095,
     },
   });
   await prismaBase.vehicleProfile.upsert({
@@ -745,7 +745,7 @@ async function buildFixture(): Promise<void> {
       driverId: `${P}-driver`,
       tenantId: `${P}-fleet`,
       profileId: `${P}-profile`,
-      registration: 'KA01P20INTAKE',
+      registration: 'DL01P20INTAKE',
       colour: 'Silver',
     },
   });

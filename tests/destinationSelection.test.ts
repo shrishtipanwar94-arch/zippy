@@ -24,8 +24,8 @@ function distribution(weights: Partial<FaultDistribution>): FaultDistribution {
 
 const TOW_JOB_BASE: Omit<JobForDispatch, 'vehicleMake' | 'vehicleEvClass'> = {
   id: 'job-1',
-  lat: 12.9352,
-  lng: 77.6245,
+  lat: 28.6152,
+  lng: 77.2095,
   faultDistribution: distribution({ IMMOBILISED_UNKNOWN: 1 }),
   createdAt: NOW,
   slaResponseMinutes: null,
@@ -56,8 +56,8 @@ function workshop(overrides: Partial<WorkshopSnapshot> = {}): WorkshopSnapshot {
     // Defaulted from the id so a fixture that overrides one gets a matching
     // name without every call site having to pass both.
     name: `Workshop ${overrides.id ?? 'ws-1'}`,
-    lat: 12.9352,
-    lng: 77.6245,
+    lat: 28.6152,
+    lng: 77.2095,
     active: true,
     evClass: null,
     authorisedBrands: ['MARUTI_SUZUKI'],
@@ -158,8 +158,8 @@ describe('resolveDestinationForJob — the ranking prefers a workshop likely to 
   // history and one with none (cold start, the prior). The nearer one is
   // ALSO the unreliable one — the case the phase brief's own P(accept) term
   // exists to catch.
-  const near = workshop({ id: 'ws-near', lat: 12.9397, lng: 77.629 }); // ~1km from the job
-  const farther = workshop({ id: 'ws-far', lat: 12.95, lng: 77.64 }); // ~3km from the job
+  const near = workshop({ id: 'ws-near', lat: 28.6197, lng: 77.214 }); // ~1km from the job
+  const farther = workshop({ id: 'ws-far', lat: 28.63, lng: 77.225 }); // ~3km from the job
 
   it('prefers the closer workshop when nothing distinguishes their acceptance history', async () => {
     const choice = await resolve(towJob(), snapshot([near, farther]));
@@ -293,7 +293,7 @@ describe('resolveDestinationForJob — the screening audit list', () => {
     const choice = await resolve(
       towJob(),
       snapshot([
-        workshop({ id: 'ws-ok', lat: 12.9352, lng: 77.6245 }),
+        workshop({ id: 'ws-ok', lat: 28.6152, lng: 77.2095 }),
         workshop({ id: 'ws-other-brand', authorisedBrands: ['HYUNDAI'] }),
       ]),
     );
@@ -326,7 +326,7 @@ describe('resolveDestinationForJob — the screening audit list', () => {
     // Five eligible workshops, a shortlist of four: the fifth cleared every
     // screen and was never priced, which must not read as a rejection.
     const eligible = [0, 1, 2, 3, 4].map((index) =>
-      workshop({ id: `ws-${index}`, lat: 12.9352 + index * 0.05, lng: 77.6245 }),
+      workshop({ id: `ws-${index}`, lat: 28.6152 + index * 0.05, lng: 77.2095 }),
     );
 
     const choice = await resolve(towJob(), snapshot(eligible));

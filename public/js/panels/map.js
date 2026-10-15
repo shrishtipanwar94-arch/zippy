@@ -22,7 +22,7 @@
 // blocked — this panel does nothing at all rather than throwing, because a
 // missing map must not take the rest of the console down with it.
 
-const BENGALURU = [12.9716, 77.5946];
+const DELHI = [28.6139, 77.209];
 const DEFAULT_ZOOM = 11;
 
 const SAFETY_COLOUR = {
@@ -51,7 +51,7 @@ export function render(state) {
 
   if (!map) {
     map = L.map(container, { zoomControl: true, attributionControl: true }).setView(
-      BENGALURU,
+      DELHI,
       DEFAULT_ZOOM,
     );
     L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
@@ -150,7 +150,7 @@ export function render(state) {
 
 // WHY THE MAP HAS TO FIT ITSELF, and why it must not do it often.
 //
-// The opening view was a hardcoded centre on Bengaluru at zoom 11, chosen
+// The opening view was a hardcoded centre on the city at zoom 11, chosen
 // before anything was ever plotted on it. That looked correct on a small
 // reseeded board by luck — the jobs happened to be near the centroid — and was
 // plainly broken on a real one, where every marker crushed into the top-left
@@ -194,7 +194,7 @@ function frameTheJobs() {
 
   const positions = [...markers.values()].map((marker) => marker.getLatLng());
   if (positions.length === 0) {
-    map.setView(BENGALURU, DEFAULT_ZOOM, { animate: false });
+    map.setView(DELHI, DEFAULT_ZOOM, { animate: false });
     return;
   }
 

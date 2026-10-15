@@ -115,9 +115,9 @@ export async function seedFixture(
       id: zoneId,
       code: prefix.toUpperCase().slice(0, 8),
       name: `${prefix} zone`,
-      city: 'Bengaluru',
-      centroidLat: 12.9352,
-      centroidLng: 77.6245,
+      city: 'Delhi',
+      centroidLat: 28.6152,
+      centroidLng: 77.2095,
     },
   });
 
@@ -196,8 +196,8 @@ export async function seedFixture(
         zoneId,
         status: 'AVAILABLE',
         currentTechnicianId: technicianIds[i]!,
-        lat: 12.9352,
-        lng: 77.6245,
+        lat: 28.6152,
+        lng: 77.2095,
       },
     });
     unitIds.push(`${prefix}-unit-${number}`);
@@ -214,8 +214,8 @@ export async function seedFixture(
         vehicleId: `${prefix}-vehicle`,
         zoneId,
         status: 'PLANNED',
-        lat: 12.9352,
-        lng: 77.6245,
+        lat: 28.6152,
+        lng: 77.2095,
       },
     });
     jobIds.push(`${prefix}-job-${number}`);

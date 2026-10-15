@@ -79,7 +79,7 @@ describe('delivering a fleet state-change notification', () => {
     expect(recipients).toEqual([`${PREFIX}-fm-a-user`, `${PREFIX}-fm-b-user`].sort());
 
     for (const notification of notifications) {
-      expect(notification.body).toContain('KA01FN0001');
+      expect(notification.body).toContain('DL01FN0001');
       expect(notification.coalesceKey).toBe(`job:${JOB_ID}:fleet-state-change`);
       expect(notification.title).toBe('Fleet update');
     }
@@ -141,9 +141,9 @@ async function buildFixture(): Promise<void> {
       id: `${PREFIX}-zone`,
       code: 'FLN',
       name: 'Fleet Notify Zone',
-      city: 'Bengaluru',
-      centroidLat: 12.9352,
-      centroidLng: 77.6245,
+      city: 'Delhi',
+      centroidLat: 28.6152,
+      centroidLng: 77.2095,
     },
   });
   await prismaBase.vehicleProfile.upsert({
@@ -198,13 +198,15 @@ async function buildFixture(): Promise<void> {
   });
   await prismaBase.vehicle.upsert({
     where: { id: `${PREFIX}-vehicle` },
-    update: {},
+    // The plate is asserted on below, so the fixture owns it outright rather
+    // than keeping whatever an earlier run of this file wrote.
+    update: { registration: 'DL01FN0001' },
     create: {
       id: `${PREFIX}-vehicle`,
       driverId: `${PREFIX}-driver`,
       tenantId: TENANT,
       profileId: `${PREFIX}-profile`,
-      registration: 'KA01FN0001',
+      registration: 'DL01FN0001',
       colour: 'White',
     },
   });
@@ -219,8 +221,8 @@ async function buildFixture(): Promise<void> {
       zoneId: `${PREFIX}-zone`,
       status: 'COMMITTED',
       safetyLevel: 'NORMAL',
-      lat: 12.9352,
-      lng: 77.6245,
+      lat: 28.6152,
+      lng: 77.2095,
     },
   });
 
@@ -244,13 +246,15 @@ async function buildFixture(): Promise<void> {
   });
   await prismaBase.vehicle.upsert({
     where: { id: `${PREFIX}-walkin-vehicle` },
-    update: {},
+    // The plate is asserted on below, so the fixture owns it outright rather
+    // than keeping whatever an earlier run of this file wrote.
+    update: { registration: 'DL01FN0002' },
     create: {
       id: `${PREFIX}-walkin-vehicle`,
       driverId: `${PREFIX}-walkin-driver`,
       tenantId: null,
       profileId: `${PREFIX}-profile`,
-      registration: 'KA01FN0002',
+      registration: 'DL01FN0002',
       colour: 'Blue',
     },
   });
@@ -265,8 +269,8 @@ async function buildFixture(): Promise<void> {
       zoneId: `${PREFIX}-zone`,
       status: 'COMMITTED',
       safetyLevel: 'NORMAL',
-      lat: 12.9352,
-      lng: 77.6245,
+      lat: 28.6152,
+      lng: 77.2095,
     },
   });
 

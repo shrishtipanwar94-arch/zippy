@@ -386,7 +386,7 @@ describe('safety triage', () => {
   // createIntakeJob uses — with the client stating NOTHING about safety.
   it('a highway road position triages ELEVATED with no safety input at all', () => {
     for (const roadPosition of ['SHOULDER', 'LANE'] as const) {
-      const location = locationSchema.parse({ lat: 12.9352, lng: 77.6245, roadPosition });
+      const location = locationSchema.parse({ lat: 28.6152, lng: 77.2095, roadPosition });
       const columns = locationColumns(location);
 
       const triage = triageSafety(
@@ -405,7 +405,7 @@ describe('safety triage', () => {
   it('an off-highway road position stays NORMAL on the same empty input', () => {
     for (const roadPosition of ['SERVICE_ROAD', 'PARKING'] as const) {
       const columns = locationColumns(
-        locationSchema.parse({ lat: 12.9352, lng: 77.6245, roadPosition }),
+        locationSchema.parse({ lat: 28.6152, lng: 77.2095, roadPosition }),
       );
 
       const triage = triageSafety(
@@ -425,7 +425,7 @@ describe('safety triage', () => {
   // missing fact — NO_TENANT and NO_OWNER filter to nothing rather than to
   // everything — and safety is where failing open is least acceptable.
   it('a report with no road position at all comes back ELEVATED', () => {
-    const location = locationSchema.parse({ lat: 12.9352, lng: 77.6245 });
+    const location = locationSchema.parse({ lat: 28.6152, lng: 77.2095 });
     expect(location.roadPosition).toBeNull();
 
     const triage = triageSafety(
@@ -464,7 +464,7 @@ describe('safety triage', () => {
     expect(() => safetyReportSchema.parse({ night: true })).toThrow();
   });
 
-  it('night is 21:00 to 06:00 in Bengaluru local time, not UTC', () => {
+  it('night is 21:00 to 06:00 in Delhi local time, not UTC', () => {
     // 09:00Z is 14:30 IST — the middle of the afternoon.
     expect(isNightAt(new Date('2026-06-01T09:00:00Z'))).toBe(false);
     // 18:00Z is 23:30 IST.
@@ -500,8 +500,8 @@ describe('location refinement', () => {
   it('derives the carriageway into the columns a job row stores', () => {
     const columns = locationColumns(
       locationSchema.parse({
-        lat: 12.9352,
-        lng: 77.6245,
+        lat: 28.6152,
+        lng: 77.2095,
         headingDegrees: 95,
         roadPosition: 'SHOULDER',
         kmMarker: 'KM 42',
@@ -518,17 +518,17 @@ describe('location refinement', () => {
 
   it('rejects coordinates and headings that cannot exist', () => {
     expect(() => locationSchema.parse({ lat: 91, lng: 77 })).toThrow();
-    expect(() => locationSchema.parse({ lat: 12.9, lng: 181 })).toThrow();
-    expect(() => locationSchema.parse({ lat: 12.9, lng: 77.6, headingDegrees: 360 })).toThrow();
+    expect(() => locationSchema.parse({ lat: 28.58, lng: 181 })).toThrow();
+    expect(() => locationSchema.parse({ lat: 28.58, lng: 77.185, headingDegrees: 360 })).toThrow();
   });
 
   it('measures real distances between the seeded zones', () => {
-    // Koramangala to Whitefield is about 14km as the crow flies.
-    const km = distanceKm(12.9352, 77.6245, 12.9698, 77.7499);
+    // Connaught Place to Preet Vihar is about 9km as the crow flies.
+    const km = distanceKm(28.6152, 77.2095, 28.6417, 77.295);
 
-    expect(km).toBeGreaterThan(10);
-    expect(km).toBeLessThan(18);
-    expect(distanceKm(12.9352, 77.6245, 12.9352, 77.6245)).toBeCloseTo(0, 6);
+    expect(km).toBeGreaterThan(7);
+    expect(km).toBeLessThan(11);
+    expect(distanceKm(28.6152, 77.2095, 28.6152, 77.2095)).toBeCloseTo(0, 6);
   });
 
   it('decides on-highway from the road position, not from the caller', () => {
@@ -542,44 +542,44 @@ describe('location refinement', () => {
   });
 
   it('is no longer a field a caller can set', () => {
-    expect(() => locationSchema.parse({ lat: 12.9, lng: 77.6, onHighway: true })).toThrow();
+    expect(() => locationSchema.parse({ lat: 28.58, lng: 77.185, onHighway: true })).toThrow();
   });
 
   it('assigns a breakdown to the nearest zone centroid', () => {
     const zones = [
-      { id: 'zone-kor', centroidLat: 12.9352, centroidLng: 77.6245 },
-      { id: 'zone-whf', centroidLat: 12.9698, centroidLng: 77.7499 },
-      { id: 'zone-heb', centroidLat: 13.0358, centroidLng: 77.597 },
+      { id: 'zone-cnp', centroidLat: 28.6152, centroidLng: 77.2095 },
+      { id: 'zone-pvr', centroidLat: 28.6417, centroidLng: 77.295 },
+      { id: 'zone-mdt', centroidLat: 28.7158, centroidLng: 77.182 },
     ];
 
-    expect(nearestZone(zones, 12.94, 77.63)?.id).toBe('zone-kor');
-    expect(nearestZone(zones, 12.97, 77.75)?.id).toBe('zone-whf');
-    expect(nearestZone([], 12.9, 77.6)).toBeNull();
+    expect(nearestZone(zones, 28.62, 77.215)?.id).toBe('zone-cnp');
+    expect(nearestZone(zones, 28.64, 77.3)?.id).toBe('zone-pvr');
+    expect(nearestZone([], 28.58, 77.185)).toBeNull();
   });
 
-  // NEAREST IS NOT THE SAME AS INSIDE, and treating it as such filed a real
-  // browser geolocation from Delhi into a Bengaluru zone. `nearestZone` is
-  // right to have no opinion about distance — it is a nearest-neighbour
-  // function — so the bound lives with the caller, and this is the number that
-  // decides whether a coordinate is somewhere we work.
+  // NEAREST IS NOT THE SAME AS INSIDE, and treating it as such once filed a
+  // real browser geolocation from another city into one of our zones.
+  // `nearestZone` is right to have no opinion about distance — it is a
+  // nearest-neighbour function — so the bound lives with the caller, and this
+  // is the number that decides whether a coordinate is somewhere we work.
   it('bounds the service area well outside the city and well inside the next one', () => {
-    // The NEAREST seeded centroid to Delhi is the northernmost one, Hebbal —
-    // which is the zone the job was actually filed into.
-    const hebbal = { lat: 13.0358, lng: 77.597 };
-    const koramangala = { lat: 12.9352, lng: 77.6245 };
-    const delhi = { lat: 28.69603, lng: 77.20699 };
+    // The NEAREST seeded centroid to Bengaluru is the southernmost one,
+    // Kalkaji — the zone such a job would be filed into without the bound.
+    const kalkaji = { lat: 28.5252, lng: 77.2452 };
+    const connaughtPlace = { lat: 28.6152, lng: 77.2095 };
+    const bengaluru = { lat: 12.9716, lng: 77.5946 };
 
     // The reported coordinate, and the figure the driver is now told.
-    expect(Math.round(distanceKm(delhi.lat, delhi.lng, hebbal.lat, hebbal.lng))).toBe(1742);
-    expect(distanceKm(delhi.lat, delhi.lng, hebbal.lat, hebbal.lng)).toBeGreaterThan(
+    expect(Math.round(distanceKm(bengaluru.lat, bengaluru.lng, kalkaji.lat, kalkaji.lng))).toBe(1730);
+    expect(distanceKm(bengaluru.lat, bengaluru.lng, kalkaji.lat, kalkaji.lng)).toBeGreaterThan(
       SERVICE_AREA_RADIUS_KM,
     );
 
-    // The seeded zone centroids span 22.3km corner to corner, so the whole
+    // The seeded zone centroids span 22.1km corner to corner, so the whole
     // metro plus a wide margin has to stay inside. Half a degree of latitude is
     // about 55km — a satellite town, and still us.
     expect(
-      distanceKm(koramangala.lat + 0.5, koramangala.lng, koramangala.lat, koramangala.lng),
+      distanceKm(connaughtPlace.lat + 0.5, connaughtPlace.lng, connaughtPlace.lat, connaughtPlace.lng),
     ).toBeLessThan(SERVICE_AREA_RADIUS_KM);
   });
 });

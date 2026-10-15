@@ -541,7 +541,7 @@ consoleRouter.get('/queue', authenticate, requirePermission('read', 'job'), asyn
 // of the city it is in.
 //
 // Deliberately NOT coordinates: a dispatcher reading a list is placing the job
-// in a city they know, and "12.9352, 77.6245" is not that. The map has the
+// in a city they know, and "28.6152, 77.2095" is not that. The map has the
 // numbers.
 function describeLocation(job: {
   landmark: string | null;

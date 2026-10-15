@@ -147,9 +147,9 @@ async function buildFixture(): Promise<void> {
       id: `${PREFIX}-zone`,
       code: 'CLS',
       name: 'Coalesce Zone',
-      city: 'Bengaluru',
-      centroidLat: 12.9352,
-      centroidLng: 77.6245,
+      city: 'Delhi',
+      centroidLat: 28.6152,
+      centroidLng: 77.2095,
     },
   });
   await prismaBase.vehicleProfile.upsert({
@@ -194,7 +194,7 @@ async function buildFixture(): Promise<void> {
       driverId: `${PREFIX}-driver`,
       tenantId: TENANT,
       profileId: `${PREFIX}-profile`,
-      registration: 'KA01CL0001',
+      registration: 'DL01CL0001',
       colour: 'White',
     },
   });
@@ -231,8 +231,8 @@ async function buildFixture(): Promise<void> {
       status: 'COMMITTED',
       safetyLevel: 'NORMAL',
       assignedTechnicianId: `${PREFIX}-tech`,
-      lat: 12.9352,
-      lng: 77.6245,
+      lat: 28.6152,
+      lng: 77.2095,
     },
   });
 

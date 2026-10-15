@@ -49,8 +49,8 @@ const VEHICLE = `${PREFIX}-vehicle-${RUN}`;
 const TECHNICIAN = `${PREFIX}-tech-${RUN}`;
 const UNIT = `${PREFIX}-unit-${RUN}`;
 
-// Koramangala, so the job lands inside a zone and OSRM has real roads for it.
-const CENTRE = { lat: 12.9352, lng: 77.6245 };
+// Connaught Place, so the job lands inside a zone and OSRM has real roads for it.
+const CENTRE = { lat: 28.6152, lng: 77.2095 };
 
 // What a "will not start / battery light" answer set needs, both of them:
 // requiredCapabilities covers 80% of the probability mass, and that mass is
@@ -305,7 +305,7 @@ async function buildFixture(): Promise<void> {
       id: ZONE,
       code: `DF${RUN.toString().slice(-6)}`,
       name: 'Demo Flow Zone',
-      city: 'Bengaluru',
+      city: 'Delhi',
       centroidLat: CENTRE.lat,
       centroidLng: CENTRE.lng,
     },
@@ -350,7 +350,7 @@ async function buildFixture(): Promise<void> {
       driverId: DRIVER,
       tenantId: TENANT,
       profileId: profile.id,
-      registration: `KA01DF${RUN.toString().slice(-4)}`,
+      registration: `DL01DF${RUN.toString().slice(-4)}`,
       colour: 'White',
     },
   });

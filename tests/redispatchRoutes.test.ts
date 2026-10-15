@@ -83,8 +83,8 @@ async function freshJob(assigned: { unitId: string; technicianId: string }): Pro
       vehicleId: `${PREFIX}-vehicle`,
       zoneId: `${PREFIX}-zone`,
       status: 'COMMITTED',
-      lat: 12.9352,
-      lng: 77.6245,
+      lat: 28.6152,
+      lng: 77.2095,
       assignedUnitId: assigned.unitId,
       assignedTechnicianId: assigned.technicianId,
     },
@@ -394,9 +394,9 @@ async function buildFixture(): Promise<void> {
       id: `${PREFIX}-zone`,
       code: 'RDRT',
       name: 'Redispatch Route Zone',
-      city: 'Bengaluru',
-      centroidLat: 12.9352,
-      centroidLng: 77.6245,
+      city: 'Delhi',
+      centroidLat: 28.6152,
+      centroidLng: 77.2095,
     },
   });
   await prismaBase.vehicleProfile.upsert({
@@ -495,8 +495,8 @@ async function crew(suffix: string, capabilities: string[]): Promise<void> {
       zoneId: `${PREFIX}-zone`,
       status: 'AVAILABLE',
       currentTechnicianId: `${PREFIX}-tech-${suffix}`,
-      lat: 12.9352,
-      lng: 77.6245,
+      lat: 28.6152,
+      lng: 77.2095,
     },
   });
   await prismaBase.technicianShift.upsert({

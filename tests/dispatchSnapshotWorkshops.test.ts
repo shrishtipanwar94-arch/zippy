@@ -119,9 +119,9 @@ async function buildFixture(): Promise<void> {
       id: `${PREFIX}-zone`,
       code: 'DSW',
       name: 'Dispatch Snapshot Workshops Zone',
-      city: 'Bengaluru',
-      centroidLat: 12.9352,
-      centroidLng: 77.6245,
+      city: 'Delhi',
+      centroidLat: 28.6152,
+      centroidLng: 77.2095,
     },
   });
 
@@ -133,8 +133,8 @@ async function buildFixture(): Promise<void> {
       code: `${PREFIX}-WS`,
       name: 'Dispatch Snapshot Workshops Fixture Workshop',
       zoneId: `${PREFIX}-zone`,
-      lat: 12.9352,
-      lng: 77.6245,
+      lat: 28.6152,
+      lng: 77.2095,
       active: true,
       authorisations: { create: { id: `${PREFIX}-wsauth`, brand: MAKE, level: 'STANDARD' } },
       hours: {
@@ -220,8 +220,8 @@ async function buildFixture(): Promise<void> {
       vehicleId: `${PREFIX}-vehicle`,
       zoneId: `${PREFIX}-zone`,
       status: 'RESOLVED',
-      lat: 12.9352,
-      lng: 77.6245,
+      lat: 28.6152,
+      lng: 77.2095,
     },
   });
 
@@ -302,8 +302,8 @@ async function buildFixture(): Promise<void> {
       zoneId: `${PREFIX}-zone`,
       status: 'AVAILABLE',
       currentTechnicianId: `${PREFIX}-tech`,
-      lat: 12.9352,
-      lng: 77.6245,
+      lat: 28.6152,
+      lng: 77.2095,
       capabilities: {
         create: [
           { id: `${PREFIX}-unitcap-flatbed`, capability: { connect: { code: 'FLATBED_LOADING' } } },
@@ -343,8 +343,8 @@ async function buildFixture(): Promise<void> {
         zoneId: `${PREFIX}-zone`,
         status: 'INTAKE',
         safetyLevel: 'NORMAL',
-        lat: 12.9352,
-        lng: 77.6245,
+        lat: 28.6152,
+        lng: 77.2095,
       },
     });
     await prismaBase.faultHypothesis.upsert({

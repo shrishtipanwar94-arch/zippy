@@ -187,7 +187,7 @@ export function triageSafety(context: SafetyContext): SafetyTriage {
   return { level, reasonCodes: triggered.map((rule) => rule.code) };
 }
 
-// Bengaluru is UTC+5:30 and does not observe daylight saving, so a fixed offset
+// Delhi is UTC+5:30 and does not observe daylight saving, so a fixed offset
 // is correct here rather than merely convenient. Night is taken as 21:00–06:00
 // local: dark enough that a driver on a shoulder is hard to see.
 const IST_OFFSET_MINUTES = 5 * 60 + 30;

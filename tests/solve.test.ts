@@ -32,8 +32,8 @@ function distribution(weights: Partial<FaultDistribution>): FaultDistribution {
 function job(id: string, overrides: Partial<JobForDispatch> = {}): JobForDispatch {
   return {
     id,
-    lat: 12.9352,
-    lng: 77.6245,
+    lat: 28.6152,
+    lng: 77.2095,
     faultDistribution: distribution({ FLAT_BATTERY: 1 }),
     createdAt: NOW,
     slaResponseMinutes: null,
@@ -60,15 +60,15 @@ describe('solve — one plan per weight vector, over a real assignment', () => {
             zoneId: 'z1',
             currentTechnicianId: 't1',
             capabilityCodes: ['JUMP_START'],
-            lat: 12.94,
-            lng: 77.63,
+            lat: 28.62,
+            lng: 77.215,
             kind: 'VAN',
             status: 'AVAILABLE',
           },
         ],
         technicians: [{ id: 't1', capabilityCodes: ['JUMP_START'] }],
         shifts: [{ technicianId: 't1', ...allDayShift }],
-        zones: [{ id: 'z1', centroidLat: 12.94, centroidLng: 77.63 }],
+        zones: [{ id: 'z1', centroidLat: 28.62, centroidLng: 77.215 }],
       },
       now: NOW,
       jobZone: new Map([['j1', 'z1']]),
@@ -92,13 +92,13 @@ describe('solve — one plan per weight vector, over a real assignment', () => {
   it('global assignment fulfils a job that a nearest-first pass would strand', async () => {
     const evJob = job('ev-job', {
       faultDistribution: distribution({ EV_HV_FAULT: 1 }),
-      lat: 12.99,
-      lng: 77.69,
+      lat: 28.67,
+      lng: 77.275,
     });
     const batteryJob = job('battery-job', {
       faultDistribution: distribution({ FLAT_BATTERY: 1 }),
-      lat: 12.9352,
-      lng: 77.6245,
+      lat: 28.6152,
+      lng: 77.2095,
     });
 
     const snapshot: DispatchSnapshot = {
@@ -110,8 +110,8 @@ describe('solve — one plan per weight vector, over a real assignment', () => {
           zoneId: 'z1',
           currentTechnicianId: 'ev-tech',
           capabilityCodes: ['JUMP_START', 'EV_HV_CERTIFICATION'],
-          lat: 12.9353,
-          lng: 77.6246,
+          lat: 28.6153,
+          lng: 77.2096,
           kind: 'VAN',
           status: 'AVAILABLE',
         },
@@ -121,8 +121,8 @@ describe('solve — one plan per weight vector, over a real assignment', () => {
           zoneId: 'z1',
           currentTechnicianId: 'basic-tech',
           capabilityCodes: ['JUMP_START'],
-          lat: 12.96,
-          lng: 77.65,
+          lat: 28.64,
+          lng: 77.235,
           kind: 'VAN',
           status: 'AVAILABLE',
         },
@@ -135,7 +135,7 @@ describe('solve — one plan per weight vector, over a real assignment', () => {
         { technicianId: 'ev-tech', ...allDayShift },
         { technicianId: 'basic-tech', ...allDayShift },
       ],
-      zones: [{ id: 'z1', centroidLat: 12.94, centroidLng: 77.63 }],
+      zones: [{ id: 'z1', centroidLat: 28.62, centroidLng: 77.215 }],
     };
 
     const outcome = await solve({
@@ -171,15 +171,15 @@ describe('solve — one plan per weight vector, over a real assignment', () => {
           zoneId: 'z1',
           currentTechnicianId: 't1',
           capabilityCodes: ['JUMP_START'],
-          lat: 12.94,
-          lng: 77.63,
+          lat: 28.62,
+          lng: 77.215,
           kind: 'VAN',
           status: 'AVAILABLE',
         },
       ],
       technicians: [{ id: 't1', capabilityCodes: ['JUMP_START'] }],
       shifts: [{ technicianId: 't1', ...allDayShift }],
-      zones: [{ id: 'z1', centroidLat: 12.94, centroidLng: 77.63 }],
+      zones: [{ id: 'z1', centroidLat: 28.62, centroidLng: 77.215 }],
     };
 
     const outcome = await solve({
@@ -211,8 +211,8 @@ describe('solve — one plan per weight vector, over a real assignment', () => {
           zoneId: 'z1',
           currentTechnicianId: 't1',
           capabilityCodes: ['JUMP_START'],
-          lat: 12.94,
-          lng: 77.63,
+          lat: 28.62,
+          lng: 77.215,
           kind: 'VAN',
           status: 'AVAILABLE',
         },
@@ -221,8 +221,8 @@ describe('solve — one plan per weight vector, over a real assignment', () => {
           zoneId: 'z1',
           currentTechnicianId: 't2',
           capabilityCodes: ['JUMP_START'],
-          lat: 12.95,
-          lng: 77.64,
+          lat: 28.63,
+          lng: 77.225,
           kind: 'VAN',
           status: 'AVAILABLE',
         },
@@ -235,7 +235,7 @@ describe('solve — one plan per weight vector, over a real assignment', () => {
         { technicianId: 't1', ...allDayShift },
         { technicianId: 't2', ...allDayShift },
       ],
-      zones: [{ id: 'z1', centroidLat: 12.94, centroidLng: 77.63 }],
+      zones: [{ id: 'z1', centroidLat: 28.62, centroidLng: 77.215 }],
     };
 
     const outcome = await solve({
@@ -263,15 +263,15 @@ describe('solve — one plan per weight vector, over a real assignment', () => {
           zoneId: 'z1',
           currentTechnicianId: 't1',
           capabilityCodes: ['JUMP_START'],
-          lat: 12.94,
-          lng: 77.63,
+          lat: 28.62,
+          lng: 77.215,
           kind: 'VAN',
           status: 'OFFLINE',
         },
       ],
       technicians: [{ id: 't1', capabilityCodes: ['JUMP_START'] }],
       shifts: [{ technicianId: 't1', ...allDayShift }],
-      zones: [{ id: 'z1', centroidLat: 12.94, centroidLng: 77.63 }],
+      zones: [{ id: 'z1', centroidLat: 28.62, centroidLng: 77.215 }],
     };
 
     const outcome = await solve({
@@ -303,7 +303,7 @@ describe('solve — one plan per weight vector, over a real assignment', () => {
 describe('solve — zone partitioning', () => {
   // Two zones side by side. The job sits in zone A but is physically much
   // closer to zone B's unit — the boundary case, constructed deliberately.
-  const boundaryJob = job('boundary-job', { lat: 12.9352, lng: 77.6245 });
+  const boundaryJob = job('boundary-job', { lat: 28.6152, lng: 77.2095 });
 
   const twoZoneSnapshot: DispatchSnapshot = {
     units: [
@@ -313,8 +313,8 @@ describe('solve — zone partitioning', () => {
         zoneId: 'zone-a',
         currentTechnicianId: 'tech-a',
         capabilityCodes: ['JUMP_START'],
-        lat: 12.99,
-        lng: 77.69,
+        lat: 28.67,
+        lng: 77.275,
         kind: 'VAN',
         status: 'AVAILABLE',
       },
@@ -324,8 +324,8 @@ describe('solve — zone partitioning', () => {
         zoneId: 'zone-b',
         currentTechnicianId: 'tech-b',
         capabilityCodes: ['JUMP_START'],
-        lat: 12.9353,
-        lng: 77.6246,
+        lat: 28.6153,
+        lng: 77.2096,
         kind: 'VAN',
         status: 'AVAILABLE',
       },
@@ -339,8 +339,8 @@ describe('solve — zone partitioning', () => {
       { technicianId: 'tech-b', ...allDayShift },
     ],
     zones: [
-      { id: 'zone-a', centroidLat: 12.94, centroidLng: 77.63 },
-      { id: 'zone-b', centroidLat: 12.93, centroidLng: 77.62 },
+      { id: 'zone-a', centroidLat: 28.62, centroidLng: 77.215 },
+      { id: 'zone-b', centroidLat: 28.61, centroidLng: 77.205 },
     ],
   };
 
@@ -408,7 +408,7 @@ describe('solve — zone partitioning', () => {
     // A second job in zone B, so both partitions have work. Each unit lives
     // in exactly one partition, which is what makes concatenating the plans
     // safe — this asserts that rather than trusting it.
-    const zoneBJob = job('zone-b-job', { lat: 12.9354, lng: 77.6247 });
+    const zoneBJob = job('zone-b-job', { lat: 28.6154, lng: 77.2097 });
 
     const outcome = await solve({
       jobs: [boundaryJob, zoneBJob],
@@ -463,15 +463,15 @@ describe('snapshot hashing', () => {
         zoneId: 'z1',
         currentTechnicianId: 't1',
         capabilityCodes: ['JUMP_START', 'TYRE_CHANGE'],
-        lat: 12.94,
-        lng: 77.63,
+        lat: 28.62,
+        lng: 77.215,
         kind: 'VAN',
         status: 'AVAILABLE',
       },
     ],
     technicians: [{ id: 't1', capabilityCodes: ['JUMP_START'] }],
     shifts: [{ technicianId: 't1', ...allDayShift }],
-    zones: [{ id: 'z1', centroidLat: 12.94, centroidLng: 77.63 }],
+    zones: [{ id: 'z1', centroidLat: 28.62, centroidLng: 77.215 }],
   };
 
   it('is stable for the same world', () => {
@@ -509,7 +509,7 @@ describe('snapshot hashing', () => {
   it('changes when a zone centroid moves', () => {
     const moved: DispatchSnapshot = {
       ...snapshot,
-      zones: [{ id: 'z1', centroidLat: 13.4, centroidLng: 78.1 }],
+      zones: [{ id: 'z1', centroidLat: 29.08, centroidLng: 77.685 }],
     };
     expect(hashSnapshot([job('j1')], moved)).not.toBe(hashSnapshot([job('j1')], snapshot));
   });
@@ -575,15 +575,15 @@ describe('the solver writes nothing', () => {
             zoneId: 'z1',
             currentTechnicianId: TECHNICIAN_ID,
             capabilityCodes: ['JUMP_START'],
-            lat: 12.94,
-            lng: 77.63,
+            lat: 28.62,
+            lng: 77.215,
             kind: 'VAN',
             status: 'AVAILABLE',
           },
         ],
         technicians: [{ id: TECHNICIAN_ID, capabilityCodes: ['JUMP_START'] }],
         shifts: [{ technicianId: TECHNICIAN_ID, ...allDayShift }],
-        zones: [{ id: 'z1', centroidLat: 12.94, centroidLng: 77.63 }],
+        zones: [{ id: 'z1', centroidLat: 28.62, centroidLng: 77.215 }],
       },
       now: NOW,
       jobZone: new Map([
@@ -613,15 +613,15 @@ describe('solve — the deadline (Phase 17)', () => {
         zoneId: 'z1',
         currentTechnicianId: 't1',
         capabilityCodes: ['JUMP_START'],
-        lat: 12.94,
-        lng: 77.63,
+        lat: 28.62,
+        lng: 77.215,
         kind: 'VAN' as const,
         status: 'AVAILABLE' as const,
       },
     ],
     technicians: [{ id: 't1', capabilityCodes: ['JUMP_START'] }],
     shifts: [{ technicianId: 't1', ...allDayShift }],
-    zones: [{ id: 'z1', centroidLat: 12.94, centroidLng: 77.63 }],
+    zones: [{ id: 'z1', centroidLat: 28.62, centroidLng: 77.215 }],
   };
 
   const jobZone = new Map([
@@ -695,8 +695,8 @@ describe('solve — the stage trace', () => {
         zoneId: 'z1',
         currentTechnicianId: 't1',
         capabilityCodes: ['JUMP_START'],
-        lat: 12.94,
-        lng: 77.63,
+        lat: 28.62,
+        lng: 77.215,
         kind: 'VAN',
         status: 'AVAILABLE',
       },
@@ -705,8 +705,8 @@ describe('solve — the stage trace', () => {
         zoneId: 'z1',
         currentTechnicianId: 't2',
         capabilityCodes: ['JUMP_START'],
-        lat: 12.95,
-        lng: 77.64,
+        lat: 28.63,
+        lng: 77.225,
         kind: 'VAN',
         status: 'AVAILABLE',
       },
@@ -719,7 +719,7 @@ describe('solve — the stage trace', () => {
       { technicianId: 't1', ...allDayShift },
       { technicianId: 't2', ...allDayShift },
     ],
-    zones: [{ id: 'z1', centroidLat: 12.94, centroidLng: 77.63 }],
+    zones: [{ id: 'z1', centroidLat: 28.62, centroidLng: 77.215 }],
   };
 
   const jobs = [job('risky', { safetyLevel: 'HIGH_RISK' }), job('ordinary')];

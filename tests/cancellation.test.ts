@@ -237,7 +237,7 @@ async function createJobFor(tenantId: string, vehicleSuffix: string) {
     tenantId,
     symptoms: { primaryComplaint: 'FLAT_TYRE', engineCranks: null, warningLights: [], unusualSound: null, vehicleMoves: null },
     safety: { trafficSpeedKph: null, blockingLiveLane: false, smokeOrBurningSmell: false, fuelSmell: false, overheating: false, driverAlone: false, vulnerablePassengers: false },
-    location: { lat: 12.9352, lng: 77.6245, headingDegrees: null, accuracyMetres: null, nearestExit: null, kmMarker: null, landmark: null, roadPosition: 'PARKING', parkingLevel: null },
+    location: { lat: 28.6152, lng: 77.2095, headingDegrees: null, accuracyMetres: null, nearestExit: null, kmMarker: null, landmark: null, roadPosition: 'PARKING', parkingLevel: null },
     actor: null,
     at: CREATED_AT,
   });
@@ -305,9 +305,9 @@ async function buildFixture(): Promise<void> {
       id: `${PREFIX}-zone`,
       code: 'CNL',
       name: 'Cancellation Zone',
-      city: 'Bengaluru',
-      centroidLat: 12.9352,
-      centroidLng: 77.6245,
+      city: 'Delhi',
+      centroidLat: 28.6152,
+      centroidLng: 77.2095,
     },
   });
   await prismaBase.vehicleProfile.upsert({
@@ -407,7 +407,7 @@ async function buildFixture(): Promise<void> {
         driverId: `${PREFIX}-${who}-driver`,
         tenantId: tenant.id,
         profileId: `${PREFIX}-profile`,
-        registration: `KA01CN${who.slice(0, 4).toUpperCase()}`,
+        registration: `DL01CN${who.slice(0, 4).toUpperCase()}`,
         colour: 'Grey',
       },
     });

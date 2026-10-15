@@ -36,11 +36,11 @@ because a second dispatch then has to happen.
 **That objective function exists, and it has been measured against
 alternatives rather than asserted.** `npm run eval` replays six seeded
 scenarios through the production engine against four policies. On the baseline
-scenario the inversion the project is built on shows up directly: `fifo` and
-`nearest-unit` post the fastest arrival (~36 min) while
-`capability-aware-global` resolves far more jobs (56/60 against 41–42) at a
-slower arrival (53 min). On **ambiguous-diagnosis** global resolves fewer jobs
-than nearest-unit and the report calls that a loss — see §15; `npm run
+scenario the inversion the project is built on shows up directly: the greedy
+policies post the fastest arrival (30–35 min) while
+`capability-aware-global` resolves far more jobs (57/60 against 38–42) at a
+slower arrival (42 min). On **ambiguous-diagnosis** global resolves fewer jobs
+than every greedy baseline and the report calls that a loss — see §15; `npm run
 eval:sweep` shows the same weak point recurring under load.
 
 Assignment is **global**: `src/engine/allocation.ts` solves the whole pending
@@ -734,9 +734,10 @@ ever had.
 
 - *Your evaluation says the global policy loses a scenario. Why ship it?*
   It loses exactly one on the baseline grid — **ambiguous-diagnosis**, on jobs
-  served: 19/60 against nearest-unit's 22/60. Its mean resolution there is 42
-  minutes faster and its first-visit rate 22 points higher; it loses because it
-  strands more (39 against 28) while chasing a crew who can cover the fault, and
+  served: 20/60 against 23/60 for every greedy baseline. Its mean resolution
+  there is 48 minutes faster than the fastest of them and its first-visit rate
+  17 points higher; it loses because it strands more (37 against 27) while
+  chasing a crew who can cover the fault, and
   the harness scores that scenario on throughput. `npm run eval:sweep` re-runs
   the whole grid under six perturbations and the same weak point recurs at
   volume ×2 and OBD-scarce — ambiguous-diagnosis is the scenario with the least
@@ -1476,7 +1477,7 @@ machine:
   and printing the scenarios where the proposed approach loses. Byte-identical
   stdout for a fixed seed (verified again at the Phase 22 checkpoint). It names
   the one scenario the proposed policy loses on jobs served (ambiguous-diagnosis,
-  19/60 against 22/60), and an earlier version surfaced a defect in which a job
+  20/60 against 23/60), and an earlier version surfaced a defect in which a job
   past its SLA window became permanently undispatchable.
 - Implemented **optimistic-concurrency unit holds and a three-leg reservation
   saga** with compensations in reverse order and crash recovery, proved against

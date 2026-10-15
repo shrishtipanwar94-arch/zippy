@@ -65,16 +65,16 @@ describe('the trigger list', () => {
 });
 
 describe('do not re-solve on every GPS ping', () => {
-  const roadside = { lat: 12.9352, lng: 77.6245 };
+  const roadside = { lat: 28.6152, lng: 77.2095 };
 
   it('ignores a move within GPS noise', () => {
     // ~11 metres north.
-    expect(isMaterialMove(roadside, { lat: 12.9353, lng: 77.6245 })).toBe(false);
+    expect(isMaterialMove(roadside, { lat: 28.6153, lng: 77.2095 })).toBe(false);
   });
 
   it('reacts to a move that could change the nearest unit', () => {
     // ~1.1km north.
-    expect(isMaterialMove(roadside, { lat: 12.9452, lng: 77.6245 })).toBe(true);
+    expect(isMaterialMove(roadside, { lat: 28.6252, lng: 77.2095 })).toBe(true);
   });
 
   it('has a threshold well above a consumer GPS fix', () => {

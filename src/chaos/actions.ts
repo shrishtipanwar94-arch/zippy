@@ -260,8 +260,8 @@ export async function injectJobs(db: PrismaClient, count: number): Promise<Chaos
       // graph, which would make every travel time identical and the load test
       // meaningless.
       location: {
-        lat: 12.93 + index * 0.002,
-        lng: 77.62 + index * 0.002,
+        lat: 28.61 + index * 0.002,
+        lng: 77.205 + index * 0.002,
         roadPosition: 'SHOULDER',
         headingDegrees: null,
         accuracyMetres: null,

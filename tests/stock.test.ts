@@ -393,9 +393,9 @@ async function buildFixture(): Promise<void> {
       id: `${PREFIX}-zone`,
       code: 'STK',
       name: 'Stock Zone',
-      city: 'Bengaluru',
-      centroidLat: 12.9352,
-      centroidLng: 77.6245,
+      city: 'Delhi',
+      centroidLat: 28.6152,
+      centroidLng: 77.2095,
     },
   });
 
@@ -436,8 +436,8 @@ async function buildFixture(): Promise<void> {
       zoneId: `${PREFIX}-zone`,
       status: 'OFFLINE',
       currentTechnicianId: `${PREFIX}-tech`,
-      lat: 12.94,
-      lng: 77.62,
+      lat: 28.62,
+      lng: 77.205,
     },
   });
 
@@ -498,7 +498,7 @@ async function buildFixture(): Promise<void> {
       driverId: `${PREFIX}-driver`,
       tenantId: TENANT,
       profileId: `${PREFIX}-profile`,
-      registration: 'KA01ST0001',
+      registration: 'DL01ST0001',
       colour: 'Blue',
     },
   });
@@ -519,8 +519,8 @@ async function buildFixture(): Promise<void> {
       safetyLevel: 'NORMAL',
       assignedUnitId: UNIT,
       assignedTechnicianId: `${PREFIX}-tech`,
-      lat: 12.9352,
-      lng: 77.6245,
+      lat: 28.6152,
+      lng: 77.2095,
       roadPosition: 'SERVICE_ROAD',
       createdAt: new Date('2026-08-01T09:00:00.000Z'),
     },

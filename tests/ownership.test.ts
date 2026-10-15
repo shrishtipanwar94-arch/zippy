@@ -38,9 +38,9 @@ async function buildFixture(): Promise<void> {
       id: 'own-zone',
       code: 'OWNZ',
       name: 'Ownership Zone',
-      city: 'Bengaluru',
-      centroidLat: 12.9,
-      centroidLng: 77.6,
+      city: 'Delhi',
+      centroidLat: 28.58,
+      centroidLng: 77.185,
     },
   });
   await prismaBase.vehicleProfile.create({
@@ -296,7 +296,7 @@ describe('GET /vehicles — the picker offers only what intake will accept', () 
         // through every other lens in the product — and still may not file on.
         vehicleId: 'own-veh-b',
         symptoms: { primaryComplaint: 'FLAT_TYRE' },
-        location: { lat: 12.9, lng: 77.6, roadPosition: 'PARKING' },
+        location: { lat: 28.58, lng: 77.185, roadPosition: 'PARKING' },
         safety: { driverAlone: true },
       });
 

@@ -32,7 +32,7 @@
 import { Queue } from 'bullmq';
 
 const TRIGGER_COUNT = 10;
-const ZONE_ID = process.env.ZONE_ID ?? 'zone-kor';
+const ZONE_ID = process.env.ZONE_ID ?? 'zone-cnp';
 const REDIS_URL = process.env.REDIS_URL ?? 'redis://localhost:6379';
 
 // Mirrors SOLVE_DEBOUNCE_MS in src/workers/solver.ts.

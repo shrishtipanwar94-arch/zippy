@@ -402,8 +402,8 @@ async function paymentAwaitingCustomer(name: string): Promise<{ jobId: string; p
       vulnerablePassengers: false,
     },
     location: {
-      lat: 12.9352,
-      lng: 77.6245,
+      lat: 28.6152,
+      lng: 77.2095,
       headingDegrees: null,
       accuracyMetres: null,
       nearestExit: null,
@@ -506,9 +506,9 @@ async function buildFixture(): Promise<void> {
       id: `${PREFIX}-zone`,
       code: 'RZW',
       name: 'Razorpay Webhook Zone',
-      city: 'Bengaluru',
-      centroidLat: 12.9352,
-      centroidLng: 77.6245,
+      city: 'Delhi',
+      centroidLat: 28.6152,
+      centroidLng: 77.2095,
     },
   });
   await prismaBase.vehicleProfile.upsert({
@@ -555,7 +555,7 @@ async function buildFixture(): Promise<void> {
       driverId: `${PREFIX}-driver`,
       tenantId: TENANT,
       profileId: `${PREFIX}-profile`,
-      registration: 'KA01RZW1',
+      registration: 'DL01RZW1',
       colour: 'Grey',
     },
   });

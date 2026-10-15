@@ -35,8 +35,8 @@ function distribution(weights: Partial<FaultDistribution>): FaultDistribution {
 function job(overrides: Partial<JobForDispatch> = {}): JobForDispatch {
   return {
     id: 'job-1',
-    lat: 12.9352,
-    lng: 77.6245,
+    lat: 28.6152,
+    lng: 77.2095,
     faultDistribution: distribution({ FLAT_BATTERY: 1 }),
     createdAt: NOW,
     slaResponseMinutes: null,
@@ -56,8 +56,8 @@ function unit(overrides: Partial<UnitSnapshot> = {}): UnitSnapshot {
     zoneId: 'zone-1',
     currentTechnicianId: 'tech-1',
     capabilityCodes: ['JUMP_START'],
-    lat: 12.94,
-    lng: 77.63,
+    lat: 28.62,
+    lng: 77.215,
     kind: 'VAN',
     status: 'AVAILABLE',
     ...overrides,
@@ -241,8 +241,8 @@ describe('ACCESS_RESTRICTION', () => {
     // travel time is set to 60 minutes — far beyond what 40km/h over 1.5km
     // would ever take, exactly the shape a genuine carriageway crossing
     // produces (Phase 6 measured 243x on real Bengaluru data).
-    const highwayJob = job({ onHighway: true, lat: 12.94, lng: 77.63 });
-    const nearbyUnit = unit({ lat: 12.9352, lng: 77.6245 });
+    const highwayJob = job({ onHighway: true, lat: 28.62, lng: 77.215 });
+    const nearbyUnit = unit({ lat: 28.6152, lng: 77.2095 });
     const strandedAcrossTheDivider = option({ estimatedTravelMinutes: 60 });
 
     const result = checkFeasibility(
@@ -256,8 +256,8 @@ describe('ACCESS_RESTRICTION', () => {
   });
 
   it('does not reject the same long travel time when the job is not on a highway', () => {
-    const localJob = job({ onHighway: false, lat: 12.94, lng: 77.63 });
-    const nearbyUnit = unit({ lat: 12.9352, lng: 77.6245 });
+    const localJob = job({ onHighway: false, lat: 28.62, lng: 77.215 });
+    const nearbyUnit = unit({ lat: 28.6152, lng: 77.2095 });
 
     const result = checkFeasibility(
       [option({ estimatedTravelMinutes: 60 })],

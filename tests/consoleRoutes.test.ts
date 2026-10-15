@@ -230,9 +230,9 @@ async function buildFixture(): Promise<void> {
         id: `${PREFIX}-zone-${suffix}`,
         code: `CNS${suffix.toUpperCase()}`,
         name: `Console Zone ${suffix.toUpperCase()}`,
-        city: 'Bengaluru',
-        centroidLat: 12.9352,
-        centroidLng: 77.6245,
+        city: 'Delhi',
+        centroidLat: 28.6152,
+        centroidLng: 77.2095,
       },
     });
   }
@@ -321,8 +321,8 @@ async function buildFixture(): Promise<void> {
         zoneId: `${PREFIX}-zone-a`,
         status: 'AVAILABLE',
         currentTechnicianId: `${PREFIX}-tech-${suffix}`,
-        lat: 12.9352,
-        lng: 77.6245,
+        lat: 28.6152,
+        lng: 77.2095,
       },
     });
   }
@@ -344,8 +344,8 @@ async function buildFixture(): Promise<void> {
         zoneId: zone,
         status: 'PLANNED',
         safetyLevel: id === jobA ? 'HIGH_RISK' : 'NORMAL',
-        lat: 12.9352,
-        lng: 77.6245,
+        lat: 28.6152,
+        lng: 77.2095,
       },
     });
     await prismaBase.jobEvent.create({
@@ -599,8 +599,8 @@ describe('GET /queue', () => {
     // busy the test database is.
     const own = response.body.jobs.find((job: { id: string }) => job.id === jobA);
     if (own) {
-      expect(own.lat).toBe(12.9352);
-      expect(own.lng).toBe(77.6245);
+      expect(own.lat).toBe(28.6152);
+      expect(own.lng).toBe(77.2095);
     }
   });
 });

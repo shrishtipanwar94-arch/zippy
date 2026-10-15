@@ -27,68 +27,69 @@ was pasted from the second run.
 
 | scenario | policy | resolved | stranded | 1st-visit | mean arrival | **mean resolution** | 2nd dispatch | SLA breach | stockout fails | utilisation | earnings Gini |
 | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
-| normal-day | fifo | 42/60 | 0 | 65.0% | 35.9 min | 59.9 min | 33.3% | 9 | 70 | 20.9% | 0.623 |
-| normal-day | nearest-unit | 41/60 | 0 | 63.3% | 37.3 min | 63.4 min | 30.0% | 14 | 97 | 20.2% | 0.612 |
-| normal-day | skill-aware | 40/60 | 0 | 61.7% | 38.1 min | 70.4 min | 33.3% | 14 | 105 | 21.6% | 0.600 |
-| normal-day | capability-aware-global | 56/60 | 1 | 94.9% | 53.1 min | 78.3 min | 5.1% | 19 | 10 | 15.7% | 0.648 |
-| monsoon-surge | fifo | 39/180 | 59 | 32.2% | 164.5 min | 202.3 min | 29.8% | 128 | 127 | 32.1% | 0.451 |
-| monsoon-surge | nearest-unit | 37/180 | 61 | 31.1% | 163.2 min | 208.1 min | 29.4% | 132 | 136 | 32.3% | 0.453 |
-| monsoon-surge | skill-aware | 36/180 | 62 | 30.5% | 143.2 min | 189.8 min | 36.4% | 125 | 149 | 32.2% | 0.456 |
-| monsoon-surge | capability-aware-global | 76/180 | 99 | 93.8% | 102.1 min | 131.1 min | 3.7% | 133 | 0 | 21.0% | 0.537 |
-| capability-scarcity | fifo | 19/23 | 0 | 60.9% | 35.9 min | 73.2 min | 39.1% | 3 | 50 | 11.7% | 0.710 |
-| capability-scarcity | nearest-unit | 18/23 | 0 | 69.6% | 29.4 min | 82.4 min | 30.4% | 4 | 124 | 9.8% | 0.615 |
-| capability-scarcity | skill-aware | 19/23 | 0 | 73.9% | 30.4 min | 85.3 min | 26.1% | 4 | 122 | 8.9% | 0.639 |
-| capability-scarcity | capability-aware-global | 22/23 | 0 | 95.7% | 45.1 min | 72.0 min | 4.3% | 6 | 0 | 6.7% | 0.734 |
-| ambiguous-diagnosis | fifo | 22/60 | 29 | 71.0% | 152.7 min | 173.6 min | 3.2% | 52 | 14 | 8.7% | 0.848 |
-| ambiguous-diagnosis | nearest-unit | 22/60 | 28 | 68.8% | 146.8 min | 156.1 min | 3.1% | 52 | 15 | 8.7% | 0.848 |
-| ambiguous-diagnosis | skill-aware | 22/60 | 28 | 68.8% | 146.8 min | 156.1 min | 3.1% | 52 | 15 | 8.7% | 0.848 |
-| ambiguous-diagnosis | capability-aware-global | 19/60 | 39 | 90.5% | 81.7 min | 114.6 min | 9.5% | 49 | 5 | 5.7% | 0.885 |
-| technician-dropout | fifo | 39/60 | 0 | 61.7% | 63.3 min | 82.6 min | 30.0% | 27 | 59 | 18.4% | 0.635 |
-| technician-dropout | nearest-unit | 41/60 | 0 | 63.3% | 50.3 min | 82.1 min | 31.7% | 19 | 74 | 17.7% | 0.654 |
-| technician-dropout | skill-aware | 39/60 | 0 | 60.0% | 54.2 min | 84.5 min | 31.7% | 23 | 81 | 18.6% | 0.645 |
-| technician-dropout | capability-aware-global | 54/60 | 3 | 94.7% | 62.4 min | 87.3 min | 5.3% | 19 | 5 | 14.3% | 0.691 |
-| parts-stockout | fifo | 21/60 | 5 | 32.7% | 93.0 min | 117.5 min | 20.0% | 45 | 54 | 15.4% | 0.740 |
-| parts-stockout | nearest-unit | 22/60 | 2 | 36.2% | 92.2 min | 114.7 min | 15.5% | 44 | 52 | 15.3% | 0.743 |
-| parts-stockout | skill-aware | 22/60 | 2 | 36.2% | 92.2 min | 114.7 min | 15.5% | 44 | 52 | 15.3% | 0.743 |
-| parts-stockout | capability-aware-global | 27/60 | 30 | 90.0% | 84.6 min | 119.5 min | 10.0% | 45 | 27 | 12.9% | 0.759 |
+| normal-day | fifo | 42/60 | 0 | 65.0% | 35.2 min | 58.1 min | 35.0% | 8 | 88 | 21.3% | 0.607 |
+| normal-day | nearest-unit | 41/60 | 0 | 65.0% | 31.9 min | 50.2 min | 35.0% | 7 | 111 | 20.0% | 0.613 |
+| normal-day | skill-aware | 38/60 | 0 | 56.7% | 29.8 min | 53.6 min | 41.7% | 7 | 122 | 21.4% | 0.596 |
+| normal-day | capability-aware-global | 57/60 | 0 | 95.0% | 42.1 min | 66.1 min | 5.0% | 11 | 9 | 15.9% | 0.625 |
+| monsoon-surge | fifo | 38/180 | 59 | 31.4% | 141.6 min | 182.5 min | 34.7% | 123 | 139 | 32.3% | 0.450 |
+| monsoon-surge | nearest-unit | 41/180 | 57 | 33.3% | 142.1 min | 186.4 min | 35.0% | 125 | 148 | 32.6% | 0.454 |
+| monsoon-surge | skill-aware | 39/180 | 58 | 32.0% | 144.3 min | 192.2 min | 35.2% | 126 | 148 | 32.4% | 0.453 |
+| monsoon-surge | capability-aware-global | 77/180 | 98 | 93.9% | 103.5 min | 132.8 min | 3.7% | 132 | 0 | 20.8% | 0.539 |
+| capability-scarcity | fifo | 19/23 | 0 | 65.2% | 32.7 min | 67.9 min | 34.8% | 2 | 48 | 11.5% | 0.704 |
+| capability-scarcity | nearest-unit | 19/23 | 0 | 69.6% | 26.0 min | 97.2 min | 30.4% | 3 | 111 | 10.1% | 0.612 |
+| capability-scarcity | skill-aware | 19/23 | 0 | 73.9% | 27.1 min | 83.7 min | 26.1% | 3 | 122 | 9.1% | 0.649 |
+| capability-scarcity | capability-aware-global | 22/23 | 0 | 95.7% | 43.5 min | 70.4 min | 4.3% | 6 | 0 | 6.5% | 0.708 |
+| ambiguous-diagnosis | fifo | 23/60 | 27 | 69.7% | 144.2 min | 152.8 min | 3.0% | 48 | 14 | 8.8% | 0.848 |
+| ambiguous-diagnosis | nearest-unit | 23/60 | 27 | 69.7% | 144.9 min | 165.5 min | 3.0% | 51 | 16 | 8.9% | 0.847 |
+| ambiguous-diagnosis | skill-aware | 23/60 | 27 | 69.7% | 144.9 min | 165.5 min | 3.0% | 51 | 16 | 8.9% | 0.847 |
+| ambiguous-diagnosis | capability-aware-global | 20/60 | 37 | 87.0% | 74.4 min | 104.9 min | 4.3% | 46 | 5 | 5.8% | 0.877 |
+| technician-dropout | fifo | 40/60 | 0 | 63.3% | 48.9 min | 69.8 min | 33.3% | 20 | 76 | 18.9% | 0.637 |
+| technician-dropout | nearest-unit | 41/60 | 0 | 63.3% | 44.2 min | 82.8 min | 33.3% | 18 | 81 | 18.0% | 0.661 |
+| technician-dropout | skill-aware | 39/60 | 0 | 61.7% | 50.0 min | 69.0 min | 35.0% | 23 | 88 | 18.2% | 0.646 |
+| technician-dropout | capability-aware-global | 55/60 | 2 | 94.8% | 62.9 min | 88.4 min | 5.2% | 21 | 6 | 14.9% | 0.674 |
+| parts-stockout | fifo | 20/60 | 4 | 30.4% | 91.1 min | 129.3 min | 19.6% | 47 | 52 | 15.3% | 0.742 |
+| parts-stockout | nearest-unit | 22/60 | 2 | 36.2% | 79.8 min | 103.2 min | 13.8% | 39 | 52 | 15.1% | 0.745 |
+| parts-stockout | skill-aware | 22/60 | 2 | 36.2% | 79.8 min | 103.2 min | 13.8% | 39 | 52 | 15.1% | 0.745 |
+| parts-stockout | capability-aware-global | 32/60 | 25 | 91.4% | 77.5 min | 115.6 min | 8.6% | 41 | 27 | 14.2% | 0.744 |
 
 ### How to read it, including where it loses
 
 **The headline.** `capability-aware-global` **resolves more jobs than any
 baseline in five of the six scenarios**, counted over every job in the scenario
-— +14 at normal-day (56/60 against 42), roughly twice as many at monsoon-surge
-(76/180 against 36–39), +13 at technician-dropout. That denominator is the whole
+— +15 at normal-day (57/60 against 42), roughly twice as many at monsoon-surge
+(77/180 against 38–41), +14 at technician-dropout. That denominator is the whole
 board, so the number cannot be flattered by declining hard work. The mechanism
 is first-visit resolution — global sends a crew who can close the fault on the
-first attempt 90–96% of the time against 30–74% for the greedy policies, though
+first attempt 87–96% of the time against 30–74% for the greedy policies, though
 that rate is taken only over the jobs it actually dispatched to, which excludes
 exactly the ones it strands (the `stranded` column, shown alongside and largest
-on the same scenarios). Second dispatches track it: 4–5% against 26–39% on
+on the same scenarios). Second dispatches track it: 4–5% against 26–42% on
 normal-day, monsoon-surge, capability-scarcity and technician-dropout. On parts
 it barely strands work for want of a component — `stockout fails` is 0 at
 monsoon-surge and capability-scarcity and no higher than 27 in any scenario,
-where the greedy policies run 50 to 149 everywhere except ambiguous-diagnosis.
+where the greedy policies run 48 to 148 everywhere except ambiguous-diagnosis.
 
 **Where it costs more, and why.** On the three scenarios where the fleet has
 slack — normal-day, technician-dropout, parts-stockout — global posts a *slower*
-mean time-to-resolution, by roughly 5 to 18 minutes against whichever baseline
-is fastest in that scenario (so the gap is not 2 minutes against fifo alone at
-parts-stockout — it is 4.8 against nearest-unit, which is faster there). Every
+mean time-to-resolution, by roughly 12 to 19 minutes against whichever baseline
+is fastest in that scenario (at parts-stockout global is actually faster than
+fifo; the 12.4-minute gap is against nearest-unit, which is faster there). Every
 mean in the table is taken over jobs that **finished**, and global finishes the
 slow, hard ones the greedy policies leave unresolved — so those long jobs land
 in global's average and never enter fifo's at all. Read `resolved` first: at
-normal-day, fifo's 59.9-minute mean is an average over the 42 easiest jobs of
-60; global's 78.3 is over 56.
+normal-day, fifo's 58.1-minute mean is an average over the 42 easiest jobs of
+60; global's 66.1 is over 57.
 
 **Where it wins the mean too.** Under real pressure the effect reverses.
-Monsoon-surge: 131.1 minutes against 190–208, resolving roughly twice as many
-jobs. Capability-scarcity: 72.0 against 73–85, and 22/23 resolved against 18–19.
+Monsoon-surge: 132.8 minutes against 182–192, resolving roughly twice as many
+jobs. Capability-scarcity is close: 70.4 against 68–97 — fifo's 67.9 is 2.5
+minutes faster, but over 19 resolved jobs to global's 22.
 
-**Where it loses outright.** Ambiguous-diagnosis, scored on jobs served: 19/60
-against nearest-unit's 22/60. Global's mean there is 42 minutes faster and its
-first-visit rate 22 points higher, but it strands more (39 against 28) and the
-harness scores that scenario on throughput, so it hands the scenario to
-nearest-unit and says so in `EVALUATION.md`. `npm run eval:sweep` re-runs the
+**Where it loses outright.** Ambiguous-diagnosis, scored on jobs served: 20/60
+against 23/60 for every greedy baseline. Global's mean there is 48 minutes
+faster than the fastest of them and its first-visit rate 17 points higher, but
+it strands more (37 against 27) and the harness scores that scenario on
+throughput, so it hands the scenario to fifo and says so in `EVALUATION.md`. `npm run eval:sweep` re-runs the
 whole grid under six perturbations and tests one narrow claim — global resolves
 at least as many jobs as every baseline, and none beats it on mean while
 resolving as many. It **holds** at volume ×3, half the technicians and half the
@@ -137,7 +138,7 @@ structured symptom picker and the system stays fully functional).
 ```bash
 cp .env.example .env          # fill in two JWT secrets; the LLM key is optional
 docker compose up -d          # postgres 16, redis 7, osrm
-./scripts/setup-osrm.sh       # ONCE: downloads and preprocesses the Bengaluru map
+./scripts/setup-osrm.sh       # ONCE: downloads and preprocesses the Delhi map
 npm install
 npm run db:migrate            # 16 migrations
 npm run db:seed               # 6 zones, 24 units, 31 technicians, uneven capabilities

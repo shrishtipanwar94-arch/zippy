@@ -64,7 +64,7 @@ not have to type anything else before Step 1.
 | --- | --- |
 | Postgres, Redis, OSRM | `docker compose up -d`, all three up |
 | database | reset, reseeded, Redis flushed |
-| fleet history | `scripts/demo-prep-beat9.ts` — three RESOLVED battery jobs on `KA01AB1001` |
+| fleet history | `scripts/demo-prep-beat9.ts` — three RESOLVED battery jobs on `DL01AB1001` |
 | workshop history | `scripts/simulate-200-offers.js` — 200 fabricated outcomes on `WS-KOR-A`, so the learned P(accept) is not running on its prior |
 | board | around twenty pending jobs, all raised in the last half hour, plus the resolved fleet history. **The safety-level split is not fixed** — see below |
 | action queue | empty when handed over; it grows an `ESCALATE_SLA_WINDOW_CLOSED` card per job as the board ages — see the note in Step 6 |
@@ -182,7 +182,7 @@ session, and the connection dot beside the wordmark goes green.
    fallback lights the same button — that is a working degraded path, not a
    failure. Either way, carry on.
 2. **"Which vehicle?"** — the dropdown lists number plates, not ids, and it
-   should hold exactly one: `KA01AB1001`. It used to offer `KA01AB1002` as
+   should hold exactly one: `DL01AB1001`. It used to offer `DL01AB1002` as
    well, which belongs to the other Metrocab driver and which intake then
    refused. **If you see two plates here, write it down** — that is a
    regression.
@@ -214,7 +214,7 @@ about nothing.
 
 - **Active incidents** in the strip at the top goes up by one.
 - A new row appears at the **top of the PRIORITY QUEUE** on the left, carrying
-  `KA01AB1001`, the believed fault in words, and how long it has waited.
+  `DL01AB1001`, the believed fault in words, and how long it has waited.
 - A run of rows appears at the top of the **INCIDENT TIMELINE** in the centre —
   `JOB_CREATED`, `INTAKE_*`, `HYPOTHESIS_*`.
 
@@ -590,37 +590,37 @@ Technicians 25–31 have no van, so they are never offered a job.
 
 | id | email | name | van | home zone |
 | --- | --- | --- | --- | --- |
-| `tech-01` | `tech01@zippy.internal` | Ravi Kumar | UNIT-01 | Koramangala |
-| `tech-02` | `tech02@zippy.internal` | Anil Shetty | UNIT-02 | Indiranagar |
-| `tech-03` | `tech03@zippy.internal` | Suresh Nayak | UNIT-03 | Whitefield |
-| `tech-04` | `tech04@zippy.internal` | Manjunath Rao | UNIT-10 | Jayanagar |
-| `tech-05` | `tech05@zippy.internal` | Imran Khan | UNIT-11 | Hebbal |
-| `tech-06` | `tech06@zippy.internal` | Deepak Reddy | UNIT-06 | Electronic City |
-| `tech-07` | `tech07@zippy.internal` | Vijay Gowda | UNIT-07 | Koramangala |
-| `tech-08` | `tech08@zippy.internal` | Prakash Hegde | UNIT-14 | Indiranagar |
-| `tech-09` | `tech09@zippy.internal` | Naveen Bhat | UNIT-09 | Whitefield |
-| `tech-10` | `tech10@zippy.internal` | Santosh Pai | UNIT-04 | Jayanagar |
-| `tech-11` | `tech11@zippy.internal` | Arun Menon | UNIT-05 | Hebbal |
-| `tech-12` | `tech12@zippy.internal` | Kiran Desai | UNIT-12 | Electronic City |
-| `tech-13` | `tech13@zippy.internal` | Ganesh Iyer | UNIT-13 | Koramangala |
-| `tech-14` | `tech14@zippy.internal` | Mahesh Patil | UNIT-08 | Indiranagar |
-| `tech-15` | `tech15@zippy.internal` | Rakesh Jain | UNIT-15 | Whitefield |
-| `tech-16` | `tech16@zippy.internal` | Sunil Verma | UNIT-16 | Jayanagar |
-| `tech-17` | `tech17@zippy.internal` | Harish Acharya | UNIT-17 | Hebbal |
-| `tech-18` | `tech18@zippy.internal` | Vinod Kamath | UNIT-18 | Electronic City |
-| `tech-19` | `tech19@zippy.internal` | Rajesh Prabhu | UNIT-19 | Koramangala |
-| `tech-20` | `tech20@zippy.internal` | Girish Rai | UNIT-20 | Indiranagar |
-| `tech-21` | `tech21@zippy.internal` | Basavaraj Patil | UNIT-21 | Whitefield |
-| `tech-22` | `tech22@zippy.internal` | Shivakumar Gowda | UNIT-22 | Jayanagar |
-| `tech-23` | `tech23@zippy.internal` | Nagaraj Bhat | UNIT-23 | Hebbal |
-| `tech-24` | `tech24@zippy.internal` | Yusuf Sheikh | UNIT-24 | Electronic City |
-| `tech-25` | `tech25@zippy.internal` | Praveen Kulkarni | — | Koramangala |
-| `tech-26` | `tech26@zippy.internal` | Dinesh Shenoy | — | Indiranagar |
-| `tech-27` | `tech27@zippy.internal` | Ashok Naik | — | Whitefield |
-| `tech-28` | `tech28@zippy.internal` | Lokesh Murthy | — | Jayanagar |
-| `tech-29` | `tech29@zippy.internal` | Farhan Ahmed | — | Hebbal |
-| `tech-30` | `tech30@zippy.internal` | Ramesh Poojary | — | Electronic City |
-| `tech-31` | `tech31@zippy.internal` | Srinivas Char | — | Koramangala |
+| `tech-01` | `tech01@zippy.internal` | Ravi Kumar | UNIT-01 | Connaught Place |
+| `tech-02` | `tech02@zippy.internal` | Anil Sharma | UNIT-02 | Chandni Chowk |
+| `tech-03` | `tech03@zippy.internal` | Suresh Yadav | UNIT-03 | Preet Vihar |
+| `tech-04` | `tech04@zippy.internal` | Manoj Chauhan | UNIT-10 | Dhaula Kuan |
+| `tech-05` | `tech05@zippy.internal` | Imran Khan | UNIT-11 | Model Town |
+| `tech-06` | `tech06@zippy.internal` | Deepak Rawat | UNIT-06 | Kalkaji |
+| `tech-07` | `tech07@zippy.internal` | Vijay Singh | UNIT-07 | Connaught Place |
+| `tech-08` | `tech08@zippy.internal` | Prakash Negi | UNIT-14 | Chandni Chowk |
+| `tech-09` | `tech09@zippy.internal` | Naveen Bhatia | UNIT-09 | Preet Vihar |
+| `tech-10` | `tech10@zippy.internal` | Santosh Gupta | UNIT-04 | Dhaula Kuan |
+| `tech-11` | `tech11@zippy.internal` | Arun Mehra | UNIT-05 | Model Town |
+| `tech-12` | `tech12@zippy.internal` | Kiran Bisht | UNIT-12 | Kalkaji |
+| `tech-13` | `tech13@zippy.internal` | Ganesh Pandey | UNIT-13 | Connaught Place |
+| `tech-14` | `tech14@zippy.internal` | Mahesh Tiwari | UNIT-08 | Chandni Chowk |
+| `tech-15` | `tech15@zippy.internal` | Rakesh Jain | UNIT-15 | Preet Vihar |
+| `tech-16` | `tech16@zippy.internal` | Sunil Verma | UNIT-16 | Dhaula Kuan |
+| `tech-17` | `tech17@zippy.internal` | Harish Dhillon | UNIT-17 | Model Town |
+| `tech-18` | `tech18@zippy.internal` | Vinod Saini | UNIT-18 | Kalkaji |
+| `tech-19` | `tech19@zippy.internal` | Rajesh Chaudhary | UNIT-19 | Connaught Place |
+| `tech-20` | `tech20@zippy.internal` | Girish Kapoor | UNIT-20 | Chandni Chowk |
+| `tech-21` | `tech21@zippy.internal` | Gurpreet Singh | UNIT-21 | Preet Vihar |
+| `tech-22` | `tech22@zippy.internal` | Shiv Kumar | UNIT-22 | Dhaula Kuan |
+| `tech-23` | `tech23@zippy.internal` | Naresh Rathi | UNIT-23 | Model Town |
+| `tech-24` | `tech24@zippy.internal` | Yusuf Sheikh | UNIT-24 | Kalkaji |
+| `tech-25` | `tech25@zippy.internal` | Praveen Tyagi | — | Connaught Place |
+| `tech-26` | `tech26@zippy.internal` | Dinesh Joshi | — | Chandni Chowk |
+| `tech-27` | `tech27@zippy.internal` | Ashok Bhardwaj | — | Preet Vihar |
+| `tech-28` | `tech28@zippy.internal` | Lokesh Dagar | — | Dhaula Kuan |
+| `tech-29` | `tech29@zippy.internal` | Farhan Ahmed | — | Model Town |
+| `tech-30` | `tech30@zippy.internal` | Ramesh Solanki | — | Kalkaji |
+| `tech-31` | `tech31@zippy.internal` | Satish Malik | — | Connaught Place |
 
 The two EV-certified technicians are `tech-01` and `tech-02`; the three who can
 programme keys are `tech-01`, `tech-02` and `tech-03`. That scarcity is
@@ -631,9 +631,9 @@ deliberate and it is what makes the plan cards disagree with each other.
 | role | email | page |
 | --- | --- | --- |
 | dispatcher | `dispatch-ops@zippy.internal` | `/dispatcher` |
-| driver, contract | `driver-metrocab-1@zippy.internal` (`KA01AB1001`) | `/driver` |
-| driver, contract | `driver-metrocab-2@zippy.internal` (`KA01AB1002`) | `/driver` |
-| driver, walk-in | `driver-walkin-1@zippy.internal` (`KA04GH4001`) | `/driver` |
+| driver, contract | `driver-metrocab-1@zippy.internal` (`DL01AB1001`) | `/driver` |
+| driver, contract | `driver-metrocab-2@zippy.internal` (`DL01AB1002`) | `/driver` |
+| driver, walk-in | `driver-walkin-1@zippy.internal` (`DL04GH4001`) | `/driver` |
 
 ---
 
@@ -684,14 +684,14 @@ Do not spend time writing these down again.
    It now raises `ESCALATE_NO_FEASIBLE_PLAN` with the rejection breakdown and
    writes a `NO_FEASIBLE_PLAN` event. One card per job, not one per trigger.
 6. **A coordinate anywhere on Earth used to be accepted.** `resolveZoneId` took
-   the nearest zone with no maximum distance, so a genuine browser fix in Delhi
-   was filed into a Bengaluru zone 1,742 km away and queued as servicable —
-   then OSRM snapped it onto the Bengaluru road graph and returned a five
-   minute drive. Intake now bounds it at 80 km and refuses in the driver's own
-   words: *"We do not cover where you are yet. The nearest place we work is
-   Bengaluru, about 1742 km away."*
+   the nearest zone with no maximum distance, so (back when the zones were in
+   Bengaluru) a genuine browser fix in Delhi was filed into a Bengaluru zone
+   1,742 km away and queued as servicable — then OSRM snapped it onto the
+   Bengaluru road graph and returned a five minute drive. Intake now bounds it
+   at 80 km and refuses in the driver's own words: *"We do not cover where you
+   are yet. The nearest place we work is Delhi, about 1730 km away."*
    **To check it yourself:** on the location step, open *Enter coordinates
-   manually* and type `28.696` / `77.207`.
+   manually* and type `12.972` / `77.595` (Bengaluru).
 7. **The dispatcher had no fleet-level signal for a staffing gap.** There is now
    a `Crew on shift` component on the health ladder — see Section 0.
 8. **A tow used to be dispatched into a dead end.** The saga's third leg is a

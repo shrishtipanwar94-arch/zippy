@@ -438,9 +438,9 @@ async function buildFixture(): Promise<void> {
       id: `${PREFIX}-zone`,
       code: 'TAC',
       name: 'Technician Action Zone',
-      city: 'Bengaluru',
-      centroidLat: 12.9352,
-      centroidLng: 77.6245,
+      city: 'Delhi',
+      centroidLat: 28.6152,
+      centroidLng: 77.2095,
     },
   });
   await prismaBase.vehicleProfile.upsert({
@@ -481,7 +481,7 @@ async function buildFixture(): Promise<void> {
       driverId: `${PREFIX}-driver`,
       tenantId: TENANT,
       profileId: `${PREFIX}-profile`,
-      registration: 'KA01TA0001',
+      registration: 'DL01TA0001',
       colour: 'Red',
     },
   });
@@ -519,8 +519,8 @@ async function buildFixture(): Promise<void> {
       kind: 'VAN',
       zoneId: `${PREFIX}-zone`,
       status: 'ON_JOB',
-      lat: 12.94,
-      lng: 77.62,
+      lat: 28.62,
+      lng: 77.205,
     },
   });
 
@@ -538,8 +538,8 @@ async function buildFixture(): Promise<void> {
         safetyLevel: 'NORMAL',
         assignedUnitId: `${PREFIX}-unit`,
         assignedTechnicianId: `${PREFIX}-tech`,
-        lat: 12.9352,
-        lng: 77.6245,
+        lat: 28.6152,
+        lng: 77.2095,
         roadPosition: 'SERVICE_ROAD',
       },
     });

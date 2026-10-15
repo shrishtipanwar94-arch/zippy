@@ -44,8 +44,8 @@ function distribution(weights: Partial<FaultDistribution>): FaultDistribution {
 function job(overrides: Partial<JobForDispatch> = {}): JobForDispatch {
   return {
     id: 'job-1',
-    lat: 12.9352,
-    lng: 77.6245,
+    lat: 28.6152,
+    lng: 77.2095,
     faultDistribution: distribution({ FLAT_BATTERY: 1 }),
     createdAt: NOW,
     slaResponseMinutes: null,

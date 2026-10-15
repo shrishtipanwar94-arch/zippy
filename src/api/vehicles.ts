@@ -32,7 +32,7 @@ export const vehiclesRouter = Router();
 // stranded driver knows, can read off their vehicle, or should ever be shown:
 // they know the number plate. The picker on the request screen is built from
 // this, so the id travels in a value attribute and the human reads
-// "KA04GH4001 · Maruti Swift".
+// "DL04GH4001 · Maruti Swift".
 //
 // A DRIVER SEES WHAT THEY MAY FILE AGAINST, AND NOTHING ELSE.
 //

@@ -77,10 +77,10 @@ const STOCKED_SKU = 'BAT-45AH';
 const SHIFT_STARTED_HOURS_AGO = 1;
 const SHIFT_ENDS_IN_HOURS = 8;
 
-// Koramangala — the same centroid the main seed's first zone uses, so the
-// coordinates fall inside the Bengaluru OSRM extract and real road travel
+// Connaught Place — the same centroid the main seed's first zone uses, so the
+// coordinates fall inside the Delhi OSRM extract and real road travel
 // times work when the container is up.
-const CENTRE = { lat: 12.9352, lng: 77.6245 };
+const CENTRE = { lat: 28.6152, lng: 77.2095 };
 
 // A job in any of these is over; anything else is still live. The same three
 // statuses `FINISHED_JOB_STATUSES` names in src/api/console.ts, src/api/driver.ts
@@ -129,10 +129,10 @@ async function seedZone(db: PrismaClient): Promise<void> {
       id: ZONE,
       code: 'DMO',
       name: 'Demo Zone',
-      city: 'Bengaluru',
+      city: 'Delhi',
       centroidLat: CENTRE.lat,
       centroidLng: CENTRE.lng,
-      boundary: { type: 'bbox', minLat: 12.9, maxLat: 12.97, minLng: 77.59, maxLng: 77.66 },
+      boundary: { type: 'bbox', minLat: 28.58, maxLat: 28.65, minLng: 77.175, maxLng: 77.245 },
     },
   });
 }
@@ -232,7 +232,7 @@ async function seedVehicle(db: PrismaClient): Promise<void> {
       driverId: DRIVER,
       tenantId: TENANT,
       profileId: profile.id,
-      registration: 'KA01DM0001',
+      registration: 'DL01DM0001',
       colour: 'White',
     },
   });

@@ -21,7 +21,7 @@ const NOW = new Date();
 const VEHICLE = 'vehicle-metrocab-1';
 const DRIVER = 'driver-metrocab-1';
 const TENANT = 'tenant-metrocab';
-const ZONE = 'zone-kor';
+const ZONE = 'zone-cnp';
 const SLA = 'sla-tenant-metrocab-standard'; // responseMinutes = 30
 
 // Three battery incidents this month. arriveMin < 30 meets the response
@@ -54,8 +54,8 @@ async function main(): Promise<void> {
         slaPolicyId: SLA,
         createdAt,
         resolvedAt,
-        lat: 12.9352,
-        lng: 77.6245,
+        lat: 28.6152,
+        lng: 77.2095,
       },
     });
 

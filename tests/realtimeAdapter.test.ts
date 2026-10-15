@@ -93,7 +93,7 @@ function intakeRequest() {
     tenantId: TENANT,
     symptoms: symptomPayloadSchema.parse({ primaryComplaint: 'FLAT_TYRE' }),
     safety: safetyReportSchema.parse({}),
-    location: locationSchema.parse({ lat: 12.9352, lng: 77.6245, roadPosition: 'PARKING' }),
+    location: locationSchema.parse({ lat: 28.6152, lng: 77.2095, roadPosition: 'PARKING' }),
     actor: { role: 'DRIVER', id: 'ra-driver-user' },
     at: new Date('2026-06-01T09:00:00Z'),
   };
@@ -122,9 +122,9 @@ async function buildFixture(): Promise<void> {
       id: ZONE,
       code: 'RAZ',
       name: 'Realtime Adapter Zone',
-      city: 'Bengaluru',
-      centroidLat: 12.9352,
-      centroidLng: 77.6245,
+      city: 'Delhi',
+      centroidLat: 28.6152,
+      centroidLng: 77.2095,
     },
   });
   await prismaBase.vehicleProfile.upsert({

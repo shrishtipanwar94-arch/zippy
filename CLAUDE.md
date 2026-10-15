@@ -102,8 +102,9 @@ rather than "add this capability".
 **A test fixture competes with the seeded fleet.** `buildDispatchSnapshot`
 reads the WHOLE fleet, not one zone, so all 24 seeded units are candidates for
 every job in every test. Distance does NOT isolate a fixture: OSRM snaps a
-coordinate to the nearest node in its graph, so with a Bengaluru-only extract a
-job 1500km away still comes back adjacent to a Bengaluru van. Isolate by
+coordinate to the nearest node in its graph, so with a single-city extract (Delhi
+now; it was Bengaluru when this was found) a job 1500km away still comes back
+adjacent to a local van. Isolate by
 required capabilities instead, and make two fixtures' requirement sets
 DISJOINT rather than merely rare — there is only one non-tow capability pair no
 seeded crew holds, so two files both reaching for "something scarce" will

@@ -25,8 +25,9 @@ let jobCounter = 0;
 // buildDispatchSnapshot reads the WHOLE fleet, so every other fixture in the
 // suite is a candidate for every job in this file. Distance does not isolate
 // it: OSRM snaps a coordinate to the nearest node in its graph, and with a
-// Bengaluru-only extract a Kolkata job and a Bengaluru van come back adjacent
-// — measured, a seeded `unit-02` beat a co-located fixture van.
+// single-city extract a job in another city and a local van come back
+// adjacent — measured (on the Bengaluru extract the seed used before the move
+// to Delhi), a seeded `unit-02` beat a co-located fixture van.
 //
 // So isolation is by REQUIRED CAPABILITIES, and it has to be disjoint from
 // every other fixture's, not merely rare. This file's jobs need
@@ -44,8 +45,8 @@ let jobCounter = 0;
 const EV_DISTRIBUTION = { BRAKE_FAILURE: 0.5, IMMOBILISED_UNKNOWN: 0.5 };
 const REQUIRED = ['BRAKE_REPAIR', 'FLATBED_LOADING'];
 
-const FIXTURE_LAT = 12.9352;
-const FIXTURE_LNG = 77.6245;
+const FIXTURE_LAT = 28.6152;
+const FIXTURE_LNG = 77.2095;
 
 async function freshJob(options: { assignedTo?: { unitId: string; technicianId: string } } = {}) {
   jobCounter += 1;
@@ -592,7 +593,7 @@ async function buildFixture(): Promise<void> {
       id: `${PREFIX}-zone`,
       code: 'RDZ',
       name: 'Redispatch Zone',
-      city: 'Bengaluru',
+      city: 'Delhi',
       centroidLat: FIXTURE_LAT,
       centroidLng: FIXTURE_LNG,
     },

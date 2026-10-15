@@ -109,17 +109,17 @@ function shiftId(technicianId: string, dayOffset: number): string {
 // is exactly the reassurance that sentence exists to give. docs/UI.md's own
 // example is "Ravi is on the way".
 //
-// Bengaluru-plausible and deliberately mixed across the languages actually
-// spoken in that workforce. Indexed by technician number, so the same seed
+// Delhi-plausible and deliberately mixed across the communities actually
+// found in that workforce. Indexed by technician number, so the same seed
 // always produces the same crew.
 const TECHNICIAN_NAMES = [
-  'Ravi Kumar', 'Anil Shetty', 'Suresh Nayak', 'Manjunath Rao', 'Imran Khan',
-  'Deepak Reddy', 'Vijay Gowda', 'Prakash Hegde', 'Naveen Bhat', 'Santosh Pai',
-  'Arun Menon', 'Kiran Desai', 'Ganesh Iyer', 'Mahesh Patil', 'Rakesh Jain',
-  'Sunil Verma', 'Harish Acharya', 'Vinod Kamath', 'Rajesh Prabhu', 'Girish Rai',
-  'Basavaraj Patil', 'Shivakumar Gowda', 'Nagaraj Bhat', 'Yusuf Sheikh', 'Praveen Kulkarni',
-  'Dinesh Shenoy', 'Ashok Naik', 'Lokesh Murthy', 'Farhan Ahmed', 'Ramesh Poojary',
-  'Srinivas Char',
+  'Ravi Kumar', 'Anil Sharma', 'Suresh Yadav', 'Manoj Chauhan', 'Imran Khan',
+  'Deepak Rawat', 'Vijay Singh', 'Prakash Negi', 'Naveen Bhatia', 'Santosh Gupta',
+  'Arun Mehra', 'Kiran Bisht', 'Ganesh Pandey', 'Mahesh Tiwari', 'Rakesh Jain',
+  'Sunil Verma', 'Harish Dhillon', 'Vinod Saini', 'Rajesh Chaudhary', 'Girish Kapoor',
+  'Gurpreet Singh', 'Shiv Kumar', 'Naresh Rathi', 'Yusuf Sheikh', 'Praveen Tyagi',
+  'Dinesh Joshi', 'Ashok Bhardwaj', 'Lokesh Dagar', 'Farhan Ahmed', 'Ramesh Solanki',
+  'Satish Malik',
 ];
 
 function technicianName(index: number): string {

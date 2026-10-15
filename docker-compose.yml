@@ -36,7 +36,7 @@ services:
   #
   # This service only SERVES a map that has already been preprocessed — it
   # does not download or build anything itself. Run scripts/setup-osrm.sh
-  # once first; that script downloads the OpenStreetMap extract for Bengaluru
+  # once first; that script downloads the OpenStreetMap road network for Delhi
   # (the city every seeded zone is in) and runs OSRM's extract/partition/
   # customise pipeline into ./osrm/data, which this container then serves.
   # `--algorithm mld` matches the partition+customise steps that pipeline
@@ -51,7 +51,7 @@ services:
   # whether the container is running.
   osrm:
     image: osrm/osrm-backend
-    command: ["osrm-routed", "--algorithm", "mld", "/data/bengaluru.osrm"]
+    command: ["osrm-routed", "--algorithm", "mld", "/data/delhi.osrm"]
     ports:
       - "5001:5000"
     volumes:

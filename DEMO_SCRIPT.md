@@ -85,7 +85,7 @@ server runs."
    won't start, no lights at all, engine doesn't turn over"* → **Continue**.
 2. Symptom picker ("What's wrong with the vehicle?") — the extractor pre-lights
    *"It will not start"*, leave it; **"Which vehicle?"** is now a dropdown of
-   the driver's own number plates (`KA04GH4001 · Grey Maruti Suzuki Swift`),
+   the driver's own number plates (`DL04GH4001 · Grey Maruti Suzuki Swift`),
    pre-selected — leave it. (Phase 22b: it used to be a text box you typed a
    database id into. If you want an aside, that is the "no key ever reaches a
    person" rule applied to a picker.) (With

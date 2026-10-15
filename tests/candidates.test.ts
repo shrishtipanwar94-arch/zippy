@@ -23,8 +23,8 @@ function distribution(weights: Partial<FaultDistribution>): FaultDistribution {
 function job(overrides: Partial<JobForDispatch> = {}): JobForDispatch {
   return {
     id: 'job-1',
-    lat: 12.9352,
-    lng: 77.6245,
+    lat: 28.6152,
+    lng: 77.2095,
     faultDistribution: distribution({ FLAT_BATTERY: 1 }),
     createdAt: new Date('2026-06-01T09:00:00Z'),
     slaResponseMinutes: null,
@@ -44,8 +44,8 @@ function unit(overrides: Partial<UnitSnapshot> = {}): UnitSnapshot {
     zoneId: 'zone-1',
     currentTechnicianId: null,
     capabilityCodes: [],
-    lat: 12.94,
-    lng: 77.63,
+    lat: 28.62,
+    lng: 77.215,
     kind: 'VAN',
     status: 'AVAILABLE',
     ...overrides,
@@ -89,7 +89,7 @@ describe('option count', () => {
         { unitId: 'unverified', sku: 'BAT-45AH', quantity: 2, confidence: 'UNVERIFIED' },
       ],
       valuePaiseBySku: { 'BAT-45AH': 480_000 },
-      depots: [{ id: 'depot-near', code: 'DEP-NEAR', lat: 12.94, lng: 77.63 }],
+      depots: [{ id: 'depot-near', code: 'DEP-NEAR', lat: 28.62, lng: 77.215 }],
     },
   });
 
@@ -257,7 +257,7 @@ describe('location fallback', () => {
     const fleet = snapshot({
       units: [unit({ id: 'u1', currentTechnicianId: 't1', zoneId: 'zone-x', lat: null, lng: null })],
       technicians: [technician({ id: 't1' })],
-      zones: [{ id: 'zone-x', centroidLat: 12.9, centroidLng: 77.6 }],
+      zones: [{ id: 'zone-x', centroidLat: 28.58, centroidLng: 77.185 }],
     });
 
     const options = await generateCandidates(job(), fleet);

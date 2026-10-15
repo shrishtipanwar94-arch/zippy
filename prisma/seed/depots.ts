@@ -19,9 +19,9 @@ type DepotSeed = { code: string; name: string; zoneCode: string; lat: number; ln
 // than a plausible cross-town run from a depot, and the three are far enough
 // apart that "the nearest one" is a real choice rather than a formality.
 export const DEPOTS: DepotSeed[] = [
-  { code: 'DEP-KOR', name: 'Koramangala depot', zoneCode: 'KOR', lat: 12.9312, lng: 77.6285 },
-  { code: 'DEP-WHF', name: 'Whitefield depot', zoneCode: 'WHF', lat: 12.9742, lng: 77.7462 },
-  { code: 'DEP-HEB', name: 'Hebbal depot', zoneCode: 'HEB', lat: 13.0391, lng: 77.5931 },
+  { code: 'DEP-CNP', name: 'Connaught Place depot', zoneCode: 'CNP', lat: 28.6112, lng: 77.2135 },
+  { code: 'DEP-PVR', name: 'Preet Vihar depot', zoneCode: 'PVR', lat: 28.6461, lng: 77.2913 },
+  { code: 'DEP-MDT', name: 'Model Town depot', zoneCode: 'MDT', lat: 28.7191, lng: 77.1781 },
 ];
 
 export async function seedDepots(prisma: PrismaClient): Promise<void> {

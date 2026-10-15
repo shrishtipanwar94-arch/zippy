@@ -470,9 +470,9 @@ async function buildFixture(): Promise<string> {
       id: `${PREFIX}-zone`,
       code: 'DSF',
       name: 'Driver Surface Zone',
-      city: 'Bengaluru',
-      centroidLat: 12.9352,
-      centroidLng: 77.6245,
+      city: 'Delhi',
+      centroidLat: 28.6152,
+      centroidLng: 77.2095,
     },
   });
   await prismaBase.vehicleProfile.upsert({
@@ -521,7 +521,7 @@ async function buildFixture(): Promise<string> {
       driverId: `${PREFIX}-driver`,
       tenantId: TENANT,
       profileId: `${PREFIX}-profile`,
-      registration: 'KA01DS0001',
+      registration: 'DL01DS0001',
       colour: 'White',
     },
   });
@@ -558,8 +558,8 @@ async function buildFixture(): Promise<string> {
       kind: 'VAN',
       zoneId: `${PREFIX}-zone`,
       status: 'ON_JOB',
-      lat: 12.94,
-      lng: 77.62,
+      lat: 28.62,
+      lng: 77.205,
     },
   });
 
@@ -576,8 +576,8 @@ async function buildFixture(): Promise<string> {
       safetyLevel: 'ELEVATED',
       assignedUnitId: `${PREFIX}-unit`,
       assignedTechnicianId: `${PREFIX}-tech`,
-      lat: 12.9352,
-      lng: 77.6245,
+      lat: 28.6152,
+      lng: 77.2095,
       roadPosition: 'SHOULDER',
     },
     select: { id: true },

@@ -33,9 +33,9 @@ async function buildFixture(): Promise<void> {
       id: 'p2-zone',
       code: 'P2Z',
       name: 'Fixture Zone',
-      city: 'Bengaluru',
-      centroidLat: 12.9,
-      centroidLng: 77.6,
+      city: 'Delhi',
+      centroidLat: 28.58,
+      centroidLng: 77.185,
     },
   });
   await prismaBase.vehicleProfile.create({

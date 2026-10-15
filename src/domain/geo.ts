@@ -50,14 +50,16 @@ export type ZoneCentroid = {
 //
 // `nearestZone` answers "which of our zones is closest", and for a long time
 // that was taken as an answer to "which zone is this job in". It is not: with
-// no upper bound the nearest zone to a coordinate in Delhi is a zone in
-// Bengaluru, 1,742km away, and intake filed one there — silently, into
-// zone-heb, where it sat in the queue looking exactly like a job somebody
-// could be sent to. Every earlier coordinate had come from a simulator that
-// only generates Bengaluru, so nothing had ever tested the assumption.
+// no upper bound the nearest zone to ANY coordinate is one of ours. When the
+// zones were in Bengaluru, a driver in Delhi was 1,742km from the nearest one
+// and intake filed the job there anyway — silently, into zone-heb, where it
+// sat in the queue looking exactly like a job somebody could be sent to. Every
+// earlier coordinate had come from a simulator that only generates points in
+// the seeded city, so nothing had ever tested the assumption. (The zones have
+// since moved to Delhi; the rule is the same in any city.)
 //
 // 80km, and the number is measured rather than picked. The seeded zone
-// centroids span 22.3km corner to corner, so 80 covers the metro and a wide
+// centroids span 22.1km corner to corner, so 80 covers the metro and a wide
 // margin of ring road and satellite towns around it while still being an order
 // of magnitude short of the next city. It is a SERVICE-AREA rule, not a
 // geometry one: a fleet that opens a second city adds zones, and this number

@@ -450,9 +450,9 @@ async function buildFixture(): Promise<void> {
       id: ZONE,
       code: 'RTZ',
       name: 'Realtime Zone',
-      city: 'Bengaluru',
-      centroidLat: 12.9352,
-      centroidLng: 77.6245,
+      city: 'Delhi',
+      centroidLat: 28.6152,
+      centroidLng: 77.2095,
     },
   });
   await prismaBase.vehicleProfile.upsert({
@@ -517,7 +517,7 @@ function intakeRequest() {
     tenantId: TENANT,
     symptoms: symptomPayloadSchema.parse({ primaryComplaint: 'FLAT_TYRE' }),
     safety: safetyReportSchema.parse({}),
-    location: locationSchema.parse({ lat: 12.9352, lng: 77.6245 }),
+    location: locationSchema.parse({ lat: 28.6152, lng: 77.2095 }),
     actor: { role: 'DRIVER', id: 'rt-driver-user' },
     at: new Date('2026-06-01T09:00:00Z'),
   };

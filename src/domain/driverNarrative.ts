@@ -20,7 +20,7 @@
 import type { JobStatus, SafetyLevel, UnitKind } from '@prisma/client';
 import type { FaultCode } from './faults.js';
 
-// Bengaluru is UTC+5:30 with no daylight saving, so a fixed offset is correct
+// Delhi is UTC+5:30 with no daylight saving, so a fixed offset is correct
 // rather than merely convenient — the same constant safety.ts reasons about
 // night with.
 const IST_OFFSET_MINUTES = 5 * 60 + 30;

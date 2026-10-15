@@ -39,15 +39,15 @@ type DriverSeed = {
 };
 
 const DRIVERS: DriverSeed[] = [
-  { id: 'metrocab-1', name: 'Lakshmi Rao', tenantId: 'tenant-metrocab', profileId: 'vp-innova', registration: 'KA01AB1001', colour: 'White', homeZoneIndex: 0 },
-  { id: 'metrocab-2', name: 'Sandeep Kulkarni', tenantId: 'tenant-metrocab', profileId: 'vp-nexon-ev', registration: 'KA01AB1002', colour: 'Blue', homeZoneIndex: 1 },
-  { id: 'city-1', name: 'Fatima Begum', tenantId: 'tenant-citylogistics', profileId: 'vp-xuv500', registration: 'KA02CD2001', colour: 'Silver', homeZoneIndex: 2 },
-  { id: 'quick-1', name: 'Joseph Mathew', tenantId: 'tenant-quickmove', profileId: 'vp-tiago', registration: 'KA03EF3001', colour: 'Red', homeZoneIndex: 3 },
-  { id: 'walkin-1', name: 'Priya Nair', tenantId: 'tenant-walkin', profileId: 'vp-swift', registration: 'KA04GH4001', colour: 'Grey', homeZoneIndex: 4 },
-  { id: 'walkin-2', name: 'Abhishek Jain', tenantId: 'tenant-walkin', profileId: 'vp-i20', registration: 'KA05IJ5001', colour: 'Black', homeZoneIndex: 5 },
+  { id: 'metrocab-1', name: 'Neha Sharma', tenantId: 'tenant-metrocab', profileId: 'vp-innova', registration: 'DL01AB1001', colour: 'White', homeZoneIndex: 0 },
+  { id: 'metrocab-2', name: 'Sandeep Malhotra', tenantId: 'tenant-metrocab', profileId: 'vp-nexon-ev', registration: 'DL01AB1002', colour: 'Blue', homeZoneIndex: 1 },
+  { id: 'city-1', name: 'Fatima Begum', tenantId: 'tenant-citylogistics', profileId: 'vp-xuv500', registration: 'DL02CD2001', colour: 'Silver', homeZoneIndex: 2 },
+  { id: 'quick-1', name: 'Joseph Masih', tenantId: 'tenant-quickmove', profileId: 'vp-tiago', registration: 'DL03EF3001', colour: 'Red', homeZoneIndex: 3 },
+  { id: 'walkin-1', name: 'Priya Arora', tenantId: 'tenant-walkin', profileId: 'vp-swift', registration: 'DL04GH4001', colour: 'Grey', homeZoneIndex: 4 },
+  { id: 'walkin-2', name: 'Abhishek Jain', tenantId: 'tenant-walkin', profileId: 'vp-i20', registration: 'DL05IJ5001', colour: 'Black', homeZoneIndex: 5 },
 ];
 
-const ZONE_CODES = ['kor', 'ind', 'whf', 'jay', 'heb', 'elc'];
+const ZONE_CODES = ['cnp', 'chc', 'pvr', 'dhk', 'mdt', 'klk'];
 
 export async function seedDrivers(prisma: PrismaClient): Promise<void> {
   for (const profile of PROFILES) {
@@ -105,9 +105,13 @@ export async function seedDrivers(prisma: PrismaClient): Promise<void> {
       });
     }
 
+    // Keyed on the id, not the registration: the id is the stable identity and
+    // the plate is an attribute of it. Keyed on the plate, re-registering the
+    // fleet (KA to DL plates, on the move to Delhi) tried to CREATE a second
+    // vehicle with an id that already existed.
     await prisma.vehicle.upsert({
-      where: { registration: driver.registration },
-      update: { colour: driver.colour, profileId: driver.profileId },
+      where: { id: `vehicle-${driver.id}` },
+      update: { colour: driver.colour, profileId: driver.profileId, registration: driver.registration },
       create: {
         id: `vehicle-${driver.id}`,
         driverId,

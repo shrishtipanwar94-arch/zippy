@@ -3,7 +3,7 @@
 //
 // TWO GROUPS. `haversine fallback` needs no infrastructure at all — it is
 // pure arithmetic and runs whether or not OSRM is up. `against a real OSRM`
-// needs the container actually serving the preprocessed Bengaluru map
+// needs the container actually serving the preprocessed Delhi map
 // (scripts/setup-osrm.sh, then `docker compose up -d osrm`) and skips itself
 // with a clear message if it is not reachable, the same shape as the
 // concurrency suite needing a real Postgres — a property about ACTUAL road
@@ -20,10 +20,10 @@ const UNREACHABLE = 'http://localhost:1';
 
 describe('haversine fallback — no infrastructure required', () => {
   it('estimates a plausible time from distance alone when OSRM cannot be reached', async () => {
-    // Koramangala to Indiranagar, roughly 5km apart.
+    // Connaught Place to Chandni Chowk, roughly 5km apart.
     const result = await travelTime(
-      { lat: 12.9352, lng: 77.6245 },
-      { lat: 12.9719, lng: 77.6412 },
+      { lat: 28.6152, lng: 77.2095 },
+      { lat: 28.6519, lng: 77.2262 },
       UNREACHABLE,
     );
 
@@ -34,8 +34,8 @@ describe('haversine fallback — no infrastructure required', () => {
 
   it('is flagged DEGRADED — never silently substituted for a real route', async () => {
     const result = await travelTime(
-      { lat: 12.9352, lng: 77.6245 },
-      { lat: 12.9719, lng: 77.6412 },
+      { lat: 28.6152, lng: 77.2095 },
+      { lat: 28.6519, lng: 77.2262 },
       UNREACHABLE,
     );
 
@@ -46,10 +46,10 @@ describe('haversine fallback — no infrastructure required', () => {
 
   it('falls back for an entire batch through travelTimeMatrix, one estimate per origin', async () => {
     const origins = [
-      { lat: 12.9352, lng: 77.6245 },
-      { lat: 12.9299, lng: 77.5833 },
+      { lat: 28.6152, lng: 77.2095 },
+      { lat: 28.6099, lng: 77.1683 },
     ];
-    const destination = { lat: 12.9719, lng: 77.6412 };
+    const destination = { lat: 28.6519, lng: 77.2262 };
 
     const results = await travelTimeMatrix(origins, destination, UNREACHABLE);
 
@@ -58,20 +58,20 @@ describe('haversine fallback — no infrastructure required', () => {
   });
 
   it('returns no estimates for no origins, without making a request', async () => {
-    const results = await travelTimeMatrix([], { lat: 12.9352, lng: 77.6245 });
+    const results = await travelTimeMatrix([], { lat: 28.6152, lng: 77.2095 });
     expect(results).toEqual([]);
   });
 
   it('scales with the configured road factor and assumed speed', async () => {
-    const from = { lat: 12.9352, lng: 77.6245 };
-    const to = { lat: 12.9719, lng: 77.6412 };
+    const from = { lat: 28.6152, lng: 77.2095 };
+    const to = { lat: 28.6519, lng: 77.2262 };
     const result = await travelTime(from, to, UNREACHABLE);
 
     // The fallback's own formula, recomputed independently — this is the one
     // test that would catch the road factor or speed constant being
     // accidentally applied in the wrong place (e.g. multiplying minutes
     // instead of kilometres).
-    const straightLineKmApprox = 5.4; // Koramangala-Indiranagar, roughly
+    const straightLineKmApprox = 5.4; // Connaught Place-Chandni Chowk, roughly
     const roughMinutes =
       ((straightLineKmApprox * config.ROUTING_FALLBACK_ROAD_FACTOR) / config.ROUTING_FALLBACK_SPEED_KMH) * 60;
     expect(result.minutes).toBeGreaterThan(roughMinutes * 0.5);
@@ -89,7 +89,7 @@ describe('haversine fallback — no infrastructure required', () => {
 let osrmAvailable = false;
 try {
   const response = await fetch(
-    `${config.OSRM_URL}/route/v1/driving/77.6245,12.9352;77.6412,12.9719?overview=false`,
+    `${config.OSRM_URL}/route/v1/driving/77.2095,28.6152;77.2262,28.6519?overview=false`,
   );
   const body = (await response.json()) as { code?: string };
   osrmAvailable = response.ok && body.code === 'Ok';
@@ -105,23 +105,26 @@ if (!osrmAvailable) {
 
 describe('against a real OSRM', () => {
   it.skipIf(!osrmAvailable)('returns a real road time, not degraded, for two connected points', async () => {
-    const result = await travelTime({ lat: 12.9352, lng: 77.6245 }, { lat: 12.9719, lng: 77.6412 });
+    const result = await travelTime({ lat: 28.6152, lng: 77.2095 }, { lat: 28.6519, lng: 77.2262 });
 
     expect(result.method).toBe('OSRM');
     expect(result.degraded).toBe(false);
     expect(result.minutes).toBeGreaterThan(0);
   });
 
-  // THE CHECK BLOCK'S OWN ASSERTION. Two real points on Bengaluru's Outer
-  // Ring Road, on opposite carriageways of the same divided stretch near
-  // Hebbal — one of the seeded zones. 19 metres apart in a straight line;
-  // found by querying Overpass for the two opposing one-way ways that make up
-  // this dual carriageway and taking a coordinate from each. Reaching the
+  // THE CHECK BLOCK'S OWN ASSERTION. Two real points on Delhi's Outer Ring
+  // Road, on opposite carriageways of the same divided stretch about 4km west
+  // of Model Town — one of the seeded zones. 14 metres apart in a straight
+  // line; found by scanning the extract for pairs of opposing one-way ways
+  // with the same name, keeping pairs where each point snaps to its own
+  // carriageway, and taking the one with the longest road detour (10 minutes).
+  // (Before the move to Delhi this test used two points on Bengaluru's Outer
+  // Ring Road, chosen the same way.) Reaching the
   // other carriageway means driving to wherever the road's median actually
   // opens, which haversine has no way to know exists at all.
-  const carriagewayA = { lat: 13.04217, lng: 77.5937768 };
-  const carriagewayB = { lat: 13.0420665, lng: 77.5936411 };
-  const STRAIGHT_LINE_KM = 0.019;
+  const carriagewayA = { lat: 28.7117346, lng: 77.1376656 };
+  const carriagewayB = { lat: 28.7116822, lng: 77.1378002 };
+  const STRAIGHT_LINE_KM = 0.014;
 
   it.skipIf(!osrmAvailable)(
     'a road time across a divided highway is far larger than the straight-line time would suggest',
@@ -131,7 +134,7 @@ describe('against a real OSRM', () => {
       expect(result.method).toBe('OSRM');
       const straightLineMinutesIfDirect = (STRAIGHT_LINE_KM / config.ROUTING_FALLBACK_SPEED_KMH) * 60;
       // The real road route is dramatically longer than even driving the
-      // 19m straight-line distance at a crawl — because it is not 19m by
+      // 14m straight-line distance at a crawl — because it is not 14m by
       // road at all; it is the length of the whole one-way stretch to the
       // nearest place to turn around.
       expect(result.minutes).toBeGreaterThan(straightLineMinutesIfDirect * 20);

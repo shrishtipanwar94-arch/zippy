@@ -44,8 +44,8 @@ async function freshJob(): Promise<string> {
       vehicleId: `${PREFIX}-vehicle`,
       zoneId: `${PREFIX}-zone`,
       status: 'PLANNED',
-      lat: 12.9352,
-      lng: 77.6245,
+      lat: 28.6152,
+      lng: 77.2095,
     },
   });
   return id;
@@ -93,8 +93,8 @@ async function freshUnit(
       zoneId: `${PREFIX}-zone`,
       status: 'AVAILABLE',
       currentTechnicianId: technicianId,
-      lat: 12.9352,
-      lng: 77.6245,
+      lat: 28.6152,
+      lng: 77.2095,
     },
     select: { version: true },
   });
@@ -678,9 +678,9 @@ async function buildFixture(): Promise<void> {
       id: `${PREFIX}-zone`,
       code: 'SAGAZ',
       name: 'Saga Zone',
-      city: 'Bengaluru',
-      centroidLat: 12.9352,
-      centroidLng: 77.6245,
+      city: 'Delhi',
+      centroidLat: 28.6152,
+      centroidLng: 77.2095,
     },
   });
   await prismaBase.vehicleProfile.upsert({
@@ -738,8 +738,8 @@ async function buildFixture(): Promise<void> {
       code: 'SAGA-WS-01',
       name: 'Saga Workshop',
       zoneId: `${PREFIX}-zone`,
-      lat: 12.9352,
-      lng: 77.6245,
+      lat: 28.6152,
+      lng: 77.2095,
     },
   });
 }

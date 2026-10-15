@@ -153,9 +153,9 @@ describe('the classifier flags and never decides', () => {
   });
 
   it('turns a shared location into the same kind of proposal a sentence would', () => {
-    const shared = locationShareClassification({ lat: 12.9, lng: 77.6 });
+    const shared = locationShareClassification({ lat: 28.58, lng: 77.185 });
     expect(shared.kind).toBe('LOCATION_CORRECTION');
-    expect(shared.proposedPayload).toMatchObject({ lat: 12.9, lng: 77.6 });
+    expect(shared.proposedPayload).toMatchObject({ lat: 28.58, lng: 77.185 });
   });
 });
 
@@ -542,9 +542,9 @@ async function buildFixture(): Promise<void> {
       id: `${PREFIX}-zone`,
       code: 'PRM',
       name: 'Promotion Zone',
-      city: 'Bengaluru',
-      centroidLat: 12.9352,
-      centroidLng: 77.6245,
+      city: 'Delhi',
+      centroidLat: 28.6152,
+      centroidLng: 77.2095,
     },
   });
   await prismaBase.vehicleProfile.upsert({
@@ -589,7 +589,7 @@ async function buildFixture(): Promise<void> {
       driverId: `${PREFIX}-driver`,
       tenantId: TENANT,
       profileId: `${PREFIX}-profile`,
-      registration: 'KA01PR0001',
+      registration: 'DL01PR0001',
       colour: 'Blue',
     },
   });
@@ -624,8 +624,8 @@ async function buildFixture(): Promise<void> {
     const base = {
       status: 'COMMITTED' as const,
       safetyLevel: 'NORMAL' as const,
-      lat: 12.9352,
-      lng: 77.6245,
+      lat: 28.6152,
+      lng: 77.2095,
       roadPosition: 'SHOULDER' as const,
       onHighway: true,
       assignedTechnicianId: `${PREFIX}-tech`,

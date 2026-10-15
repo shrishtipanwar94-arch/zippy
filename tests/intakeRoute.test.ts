@@ -39,7 +39,7 @@ function report(location: Record<string, unknown>) {
       vehicleId: 'ir-vehicle',
       symptoms: { primaryComplaint: 'FLAT_TYRE' },
       // NO `safety` key at all.
-      location: { lat: 12.9352, lng: 77.6245, ...location },
+      location: { lat: 28.6152, lng: 77.2095, ...location },
     });
 }
 
@@ -121,7 +121,7 @@ describe('POST /jobs/intake — safety derives from where the vehicle is', () =>
         vehicleId: 'ir-vehicle',
         symptoms: { primaryComplaint: 'FLAT_TYRE' },
         safety: { onHighway: true, night: true },
-        location: { lat: 12.9352, lng: 77.6245, roadPosition: 'PARKING' },
+        location: { lat: 28.6152, lng: 77.2095, roadPosition: 'PARKING' },
       });
 
     expect(response.status).toBe(400);
@@ -145,9 +145,9 @@ async function buildFixture(): Promise<void> {
       id: ZONE,
       code: 'IRZ',
       name: 'Intake Route Zone',
-      city: 'Bengaluru',
-      centroidLat: 12.9352,
-      centroidLng: 77.6245,
+      city: 'Delhi',
+      centroidLat: 28.6152,
+      centroidLng: 77.2095,
     },
   });
   await prismaBase.vehicleProfile.upsert({
