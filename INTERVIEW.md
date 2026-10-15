@@ -322,8 +322,8 @@ Only what the code actually exercises:
 ## 9. Concurrency
 
 **The testcontainers-backed suite is real and runs against a Postgres 16
-container the test starts** — `npm run test:concurrency`, 9 tests across 2
-files, ~17 seconds. Not the shared dev database, not mocks. A proof that only
+container the test starts** — `npm run test:concurrency`, 14 tests across 4
+files, ~66 seconds including container start. Not the shared dev database, not mocks. A proof that only
 runs if someone remembered to start a database is not a proof.
 
 - **Two dispatchers hold the same unit.** One statement does the check and the

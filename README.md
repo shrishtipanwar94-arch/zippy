@@ -144,9 +144,9 @@ npm run db:seed               # 6 zones, 24 units, 31 technicians, uneven capabi
 
 npm run eval                  # the table above, into EVALUATION.md
 npm run eval:ai               # the AI table above, into EVALUATION_AI.md
-npm test                      # 984 fast tests, then 12 concurrency tests against
+npm test                      # 991 fast tests, then 14 concurrency tests against
                               # a Postgres 16 container the suite starts itself
-                              # (981 if OSRM is not running — three routing
+                              # (988 if OSRM is not running — three routing
                               #  tests skip rather than assert a guess)
 ```
 
