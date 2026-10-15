@@ -1,6 +1,7 @@
 import { Redis } from 'ioredis';
 import { config } from './config.js';
 import { logger } from './logger.js';
+import { REDIS_ADDRESS_FAMILY } from './redisAddressFamily.js';
 
 /**
  * The single Redis connection for the process. Redis is cache and queues only —
@@ -19,6 +20,7 @@ export const redis =
   globalForRedis.redis ??
   new Redis(config.REDIS_URL, {
     maxRetriesPerRequest: 1,
+    family: REDIS_ADDRESS_FAMILY,
     retryStrategy: (attempt: number) => Math.min(attempt * 500, 5000),
   });
 

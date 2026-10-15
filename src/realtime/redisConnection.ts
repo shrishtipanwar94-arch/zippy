@@ -8,9 +8,10 @@
 import { Redis } from 'ioredis';
 import { config } from '../infra/config.js';
 import { logger } from '../infra/logger.js';
+import { REDIS_ADDRESS_FAMILY } from '../infra/redisAddressFamily.js';
 
 export function createRealtimeRedisConnection(label: string): Redis {
-  const connection = new Redis(config.REDIS_URL);
+  const connection = new Redis(config.REDIS_URL, { family: REDIS_ADDRESS_FAMILY });
 
   connection.on('error', (error: Error) => {
     logger.error({ err: error, connection: label }, 'realtime redis connection error');

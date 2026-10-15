@@ -1,0 +1,14 @@
+# What the app image never needs. Mostly size; .env is the one that matters —
+# secrets reach a container as platform variables, never baked into a layer.
+.env
+.env.*
+node_modules
+dist
+osrm
+tests
+evaluation
+shots
+devzippyshots
+requests
+*.log
+DECISIONS.log

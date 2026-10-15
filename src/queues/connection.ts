@@ -21,11 +21,13 @@
 import { Redis } from 'ioredis';
 import { config } from '../infra/config.js';
 import { logger } from '../infra/logger.js';
+import { REDIS_ADDRESS_FAMILY } from '../infra/redisAddressFamily.js';
 
 function createBullConnection(label: string): Redis {
   const connection = new Redis(config.REDIS_URL, {
     maxRetriesPerRequest: null,
     enableReadyCheck: true,
+    family: REDIS_ADDRESS_FAMILY,
   });
 
   connection.on('error', (error: Error) => {
