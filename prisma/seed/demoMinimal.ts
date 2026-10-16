@@ -33,6 +33,9 @@ async function main(): Promise<void> {
     `demo board ready: 1 zone, 1 dispatcher, 1 driver, ${summary.crewsReady} of ${DEMO_CREWS.length} crews refreshed\n` +
       `${crewLines.join('\n')}\n` +
       busyLine +
+      `  reference job: ${summary.referenceJob.created ? 'created' : 'already there'}, ` +
+      `${summary.referenceJob.status ?? 'none'}
+` +
       '  check it: npx tsx scripts/demo-dry-check.ts',
   );
 }

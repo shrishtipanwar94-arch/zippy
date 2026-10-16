@@ -21,7 +21,10 @@
 // ONE WORKSHOP, for the one fault that needs a tow (prisma/seed/demoWorkshop.ts).
 
 import type { PrismaClient } from '@prisma/client';
-import { DEV_PASSWORD_HASH } from './devPassword.js';
+import { DEV_PASSWORD_HASH, unusablePasswordHash } from './devPassword.js';
+import { seedDemoDriver } from './demoDrivers.js';
+import { ensureReferenceJob } from './demoReferenceJob.js';
+import type { ReferenceJobOutcome } from './demoReferenceJob.js';
 import { seedCapabilities } from './capabilities.js';
 import { seedParts } from './parts.js';
 import { seedPricing } from './pricing.js';
@@ -37,6 +40,7 @@ import {
   DEMO_DISPATCHER,
   DEMO_DRIVER,
   DEMO_DRIVER_LOCATION,
+  DEMO_REFERENCE_DRIVER,
   DEMO_TENANT_ID,
   DEMO_ZONE,
 } from '../../src/demo/demoCrews.js';
@@ -45,6 +49,7 @@ export type DemoBoardSummary = {
   crewsReady: number;
   // Unit codes left untouched because they are on a live job.
   busyUnitCodes: string[];
+  referenceJob: ReferenceJobOutcome;
 };
 
 async function seedZoneAndTenant(db: PrismaClient): Promise<void> {
@@ -89,62 +94,6 @@ async function seedZoneAndTenant(db: PrismaClient): Promise<void> {
   });
 }
 
-async function seedDriver(db: PrismaClient): Promise<void> {
-  const user = await db.user.upsert({
-    where: { email: DEMO_DRIVER.email },
-    update: { passwordHash: DEV_PASSWORD_HASH, name: DEMO_DRIVER.name },
-    create: {
-      id: DEMO_DRIVER.userId,
-      email: DEMO_DRIVER.email,
-      passwordHash: DEV_PASSWORD_HASH,
-      role: 'DRIVER',
-      name: DEMO_DRIVER.name,
-    },
-    select: { id: true },
-  });
-
-  const driver = await db.driver.upsert({
-    where: { userId: user.id },
-    update: {},
-    create: { id: DEMO_DRIVER.driverId, userId: user.id, tenantId: DEMO_TENANT_ID, homeZoneId: DEMO_ZONE.id },
-    select: { id: true },
-  });
-
-  // THE MEMBERSHIP IS WHAT PUTS A TENANT IN THE TOKEN, and `Driver.tenantId`
-  // is not. `resolveTenantBinding` (src/api/auth.ts) reads `user.memberships`
-  // at login; with none, every tenant-scoped read fails closed and the driver
-  // signs in to find they own no vehicles.
-  await db.tenantMembership.upsert({
-    where: { tenantId_userId: { tenantId: DEMO_TENANT_ID, userId: user.id } },
-    update: { role: 'DRIVER' },
-    create: { id: DEMO_DRIVER.membershipId, tenantId: DEMO_TENANT_ID, userId: user.id, role: 'DRIVER' },
-  });
-
-  // UPSERT ON THE PROFILE'S NATURAL KEY. The main seed may already hold a
-  // MARUTI_SUZUKI Swift 2018-2024, and `vehicle_profiles` is unique on
-  // (make, model, yearFrom, yearTo) — creating one by id would collide.
-  const profileKey = { make: 'MARUTI_SUZUKI', model: 'Swift', yearFrom: 2018, yearTo: 2024 };
-  const profile = await db.vehicleProfile.upsert({
-    where: { make_model_yearFrom_yearTo: profileKey },
-    update: {},
-    create: { id: DEMO_DRIVER.profileId, ...profileKey, bodyType: 'HATCHBACK', fuelType: 'PETROL', keyType: 'SMART' },
-    select: { id: true },
-  });
-
-  await db.vehicle.upsert({
-    where: { registration: DEMO_DRIVER.registration },
-    update: { profileId: profile.id },
-    create: {
-      id: DEMO_DRIVER.vehicleId,
-      driverId: driver.id,
-      tenantId: DEMO_TENANT_ID,
-      profileId: profile.id,
-      registration: DEMO_DRIVER.registration,
-      colour: 'White',
-    },
-  });
-}
-
 async function findBusyUnitCodes(db: PrismaClient): Promise<Set<string>> {
   const existing = await db.unit.findMany({
     where: { code: { in: DEMO_CREWS.map((crew) => crew.unitCode) } },
@@ -171,7 +120,9 @@ export async function ensureDemoBoard(db: PrismaClient, now: Date = new Date()):
   await seedLedgerAccounts(db);
 
   await seedZoneAndTenant(db);
-  await seedDriver(db);
+  await seedDemoDriver(db, DEMO_DRIVER, DEV_PASSWORD_HASH);
+  // The reference job's driver: real, but nobody can sign in as them.
+  await seedDemoDriver(db, DEMO_REFERENCE_DRIVER, unusablePasswordHash());
   await seedDemoWorkshop(db);
 
   for (const crew of DEMO_CREWS) {
@@ -183,5 +134,9 @@ export async function ensureDemoBoard(db: PrismaClient, now: Date = new Date()):
   const refreshedTechnicians = await refreshDemoShifts(db, now);
   await refreshDemoStock(db, now);
 
-  return { crewsReady: refreshedTechnicians.length, busyUnitCodes: [...busyUnitCodes] };
+  // LAST, once the crews are on shift and stocked: the reference job runs the
+  // real dispatch path, which needs a board that can actually take a job.
+  const referenceJob = await ensureReferenceJob(db);
+
+  return { crewsReady: refreshedTechnicians.length, busyUnitCodes: [...busyUnitCodes], referenceJob };
 }
