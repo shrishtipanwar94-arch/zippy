@@ -18,6 +18,7 @@ import { openDemoDatabase } from './helpers/demoDatabase.js';
 import { ensureDemoBoard } from '../prisma/seed/demoBoard.js';
 import { refreshDemoShifts } from '../src/demo/refreshDemoShifts.js';
 import { freeStuckDemoVans } from '../src/demo/freeDemoVans.js';
+import { retireStaleDemoJobs } from '../src/demo/retireStaleDemoJobs.js';
 import {
   DEMO_CREWS,
   DEMO_DISPATCHER,
@@ -179,5 +180,49 @@ describe('freeStuckDemoVans', () => {
     // Put D back for the next run of this file; the job is removed in afterAll.
     await db.job.update({ where: { id: RUNNING_JOB_ID }, data: { status: 'CANCELLED' } });
     await db.unit.update({ where: { id: working.unitId }, data: { status: 'AVAILABLE' } });
+  });
+});
+
+describe('retireStaleDemoJobs', () => {
+  it('retires a demo job left unassigned for over an hour, and nothing else', async () => {
+    // Retiring writes a JobEvent, and job_events is append-only, so these two
+    // rows stay behind as CANCELLED — harmless on a database nobody else reads.
+    const oldJobId = `demoboard-stale-${RUN}`;
+    const freshJobId = `demoboard-fresh-${RUN}`;
+    const now = new Date();
+    for (const [id, ageMinutes] of [[oldJobId, 90], [freshJobId, 5]] as const) {
+      await db.job.create({
+        data: {
+          id,
+          tenantId: 'demo-tenant',
+          driverId: DEMO_DRIVER.driverId,
+          vehicleId: DEMO_DRIVER.vehicleId,
+          zoneId: DEMO_ZONE.id,
+          status: 'PLANNED',
+          createdAt: new Date(now.getTime() - ageMinutes * 60_000),
+        },
+      });
+    }
+
+    const retired = await retireStaleDemoJobs(db, now);
+
+    expect(retired).toContain(oldJobId);
+    expect(retired).not.toContain(freshJobId);
+    const statuses = await db.job.findMany({
+      where: { id: { in: [oldJobId, freshJobId] } },
+      select: { id: true, status: true },
+    });
+    expect(statuses.find((job) => job.id === oldJobId)?.status).toBe('CANCELLED');
+    expect(statuses.find((job) => job.id === freshJobId)?.status).toBe('PLANNED');
+
+    // The reference job is never touched, however old it is.
+    const reference = await db.job.findFirstOrThrow({
+      where: { vehicle: { registration: DEMO_REFERENCE_DRIVER.registration } },
+      select: { status: true },
+    });
+    expect(reference.status).toBe('RESOLVED');
+
+    // Leave the fresh one out of every later run's board.
+    await db.job.update({ where: { id: freshJobId }, data: { status: 'CANCELLED' } });
   });
 });

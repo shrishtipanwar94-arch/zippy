@@ -21,6 +21,7 @@ import { prismaBase } from '../infra/prismaBase.js';
 import { refreshDemoShifts } from '../demo/refreshDemoShifts.js';
 import { refreshDemoStock } from '../demo/refreshDemoStock.js';
 import { freeStuckDemoVans } from '../demo/freeDemoVans.js';
+import { retireStaleDemoJobs } from '../demo/retireStaleDemoJobs.js';
 
 export const DEMO_REFRESH_SCHEDULER_ID = 'demo-refresh';
 export const DEMO_REFRESH_JOB_NAME = 'demo-refresh';
@@ -43,12 +44,15 @@ export async function runDemoRefresh(): Promise<string> {
   // Free stuck vans FIRST, so a van this frees is also put back on shift and
   // re-counted by the two calls after it.
   const freed = await freeStuckDemoVans(prismaBase);
+  // And clear any demo job left unfinished for over an hour, so the next demo
+  // opens on two jobs (src/demo/retireStaleDemoJobs.ts).
+  const retired = await retireStaleDemoJobs(prismaBase);
   const technicians = await refreshDemoShifts(prismaBase);
   const units = await refreshDemoStock(prismaBase);
   return (
     `demo refresh: ${technicians.length} shifts reopened, ${units.length} vans re-counted, ` +
     `${freed.offersTimedOut} stale offers timed out, ${freed.holdsReleased} stale holds released, ` +
-    `vans freed: ${freed.vansFreed.join(', ') || 'none'}`
+    `vans freed: ${freed.vansFreed.join(', ') || 'none'}, stale demo jobs retired: ${retired.length}`
   );
 }
 
