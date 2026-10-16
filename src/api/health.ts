@@ -3,6 +3,7 @@ import { prisma } from '../infra/db.js';
 import { redis } from '../infra/redis.js';
 import { prismaBase } from '../infra/prismaBase.js';
 import { readSystemHealth } from '../health/state.js';
+import { config } from '../infra/config.js';
 
 /**
  * GET /health actually checks the dependencies it claims to check: a real
@@ -69,6 +70,17 @@ healthRouter.get('/health', async (_req, res) => {
     mode: ladder?.mode ?? null,
     message: ladder?.message ?? null,
     components: ladder?.components ?? [],
+    // WHERE TRAVEL TIMES COME FROM (see chooseRoutingMode in config.ts). Not a
+    // ladder component, because it is a deployment decision rather than
+    // something that breaks — but an operator reading an ETA should be able to
+    // tell a road route from a straight-line estimate, so it is stated here.
+    routing: {
+      mode: config.routingMode,
+      detail:
+        config.routingMode === 'HAVERSINE'
+          ? 'straight-line distance x road factor; no road network, one-way streets not modelled'
+          : 'road routes from self-hosted OSRM, falling back to straight-line if it is unreachable',
+    },
     uptime: Math.floor((Date.now() - processStartedAt) / 1000),
   });
 });

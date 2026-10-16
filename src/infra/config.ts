@@ -59,6 +59,10 @@ const baseEnvSchema = z.object({
   // OSRM is unreachable, so every value below has a safe default and nothing
   // here is required.
   OSRM_URL: urlString('OSRM_URL').default('http://localhost:5001'),
+  // WHERE TRAVEL TIME COMES FROM. Unset means the default for the environment
+  // (see `chooseRoutingMode` below): HAVERSINE in production, OSRM everywhere
+  // else. Declaring it overrides that either way.
+  ROUTING_MODE: z.enum(['OSRM', 'HAVERSINE']).optional(),
   OSRM_TIMEOUT_MS: z.coerce.number().int().positive().default(2_000),
   // Straight-line distance is always shorter than the road distance; this
   // multiplier is the fallback's stand-in for "roads are not straight lines."
@@ -247,6 +251,27 @@ const baseEnvSchema = z.object({
 // with room to spare — 120s against 45s + 15s.
 export const ACCEPT_ROUND_TRIP_MARGIN_MS = 15_000;
 
+// HAVERSINE IS THE PRODUCTION DEFAULT, AND THAT IS A DECISION, NOT A FALLBACK.
+//
+// The deployed demo runs without an OSRM service: one fewer always-on
+// container to pay for, and the Delhi graph it served was the largest image
+// in the deployment. Haversine is still local and deterministic, so
+// invariant 10 holds — no decision ever waits on a network call. What is lost
+// is road shape: one-way streets and dividers are invisible to a straight
+// line, which is why development and the test suites keep OSRM.
+//
+// Explicit rather than "OSRM, failing over": with no OSRM to reach, every
+// routing call would time out first and then degrade, adding OSRM_TIMEOUT_MS
+// to each one and logging a warning nobody can act on. /health states which
+// mode is running, so the choice is visible to an operator (invariant 8).
+export type RoutingMode = 'OSRM' | 'HAVERSINE';
+
+export function chooseRoutingMode(declared: RoutingMode | undefined, nodeEnv: string): RoutingMode {
+  if (declared) return declared;
+  if (nodeEnv === 'production') return 'HAVERSINE';
+  return 'OSRM';
+}
+
 // Exported so the startup rule can be tested without starting a process —
 // `loadConfig` exits on failure, which a test cannot catch. Plain numbers in,
 // a sentence or null out.
@@ -297,6 +322,7 @@ function loadConfig() {
     isProduction: env.NODE_ENV === 'production',
     isTest: env.NODE_ENV === 'test',
     demoMode: env.DEMO_MODE === 'true',
+    routingMode: chooseRoutingMode(env.ROUTING_MODE, env.NODE_ENV),
     corsOrigins: env.CORS_ORIGINS.split(',')
       .map((origin) => origin.trim())
       .filter((origin) => origin.length > 0),

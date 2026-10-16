@@ -76,6 +76,7 @@ async function main(): Promise<void> {
   print(`  contending faults:      ${contendingFaults(distribution).join(', ')}`);
   print(`  required capabilities:  ${requiredCapabilities(distribution).join(', ')}`);
   print(`  needs a tow:            ${faultsNeedTow(distribution) ? 'YES' : 'no'}`);
+  print(`  routing mode:           ${config.routingMode}`);
 
   const { snapshot } = await buildDispatchSnapshot(prismaBase);
   const zone = snapshot.zones.find((candidate) => candidate.id === DEMO_ZONE.id);

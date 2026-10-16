@@ -32,6 +32,11 @@
 // and converts it to OSRM's order in exactly one place (`osrmCoordinate`),
 // never inline at a call site.
 //
+// HAVERSINE MODE: with ROUTING_MODE=HAVERSINE (the production default, see
+// chooseRoutingMode in config.ts) OSRM is never asked at all, and every
+// estimate is the same haversine figure the fallback below produces, still
+// flagged `degraded: true` because it still is not a road route.
+//
 // FALLBACK: if OSRM is unreachable or fails, this returns a haversine-based
 // estimate instead of throwing — a routing hiccup must not take down intake
 // or candidate generation. But it is never silently substituted: every result
@@ -137,6 +142,10 @@ export async function travelTime(
   to: LatLng,
   baseUrl: BaseUrl = config.OSRM_URL,
 ): Promise<TravelTimeEstimate> {
+  // ROUTING_MODE=HAVERSINE (the production default): there is no OSRM to ask,
+  // so do not wait OSRM_TIMEOUT_MS to find that out. See chooseRoutingMode.
+  if (config.routingMode === 'HAVERSINE') return haversineFallback(from, to);
+
   try {
     const url =
       `${baseUrl}/route/v1/driving/${osrmCoordinate(from)};${osrmCoordinate(to)}` + '?overview=false';
@@ -170,6 +179,7 @@ export async function travelTimeMatrix(
   baseUrl: BaseUrl = config.OSRM_URL,
 ): Promise<TravelTimeEstimate[]> {
   if (origins.length === 0) return [];
+  if (config.routingMode === 'HAVERSINE') return haversineTravelTimes(origins, destination);
 
   try {
     // The destination is appended as the LAST coordinate; `sources` names

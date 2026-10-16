@@ -46,6 +46,13 @@ describe('GET /health', () => {
     }
   });
 
+  it('states which routing mode is running', async () => {
+    const res = await request(app).get('/health');
+
+    // The suite runs with NODE_ENV=test and no ROUTING_MODE, so OSRM.
+    expect(res.body.routing).toMatchObject({ mode: 'OSRM', detail: expect.any(String) });
+  });
+
   it('echoes an incoming x-request-id back on the response', async () => {
     const res = await request(app).get('/health').set('x-request-id', 'test-req-123');
     expect(res.headers['x-request-id']).toBe('test-req-123');
