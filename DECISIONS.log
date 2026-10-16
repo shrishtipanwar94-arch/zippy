@@ -1286,3 +1286,132 @@ and give it a check that fails if the solver stops making the intended choice.
 "Your demo picked the wrong van — what did you change?" The seed, not the cost
 function: the far crew's wider coverage really was worth more at 4 km, so the
 fixture was wrong, not the engine.
+
+## Phase 27 — a six-act demo on the live board, without a wipe / 2026-10-17 / (this commit)
+
+### Built
+- `src/demo/demoCrews.ts` reworked: crew B a flatbed with ALL_CAPABILITIES and
+  ALL_PARTS (derived from src/domain/faults.ts); A van JUMP_START only; C
+  flatbed, every skill, no stock, ~3.3 km; D flatbed, everything, ~7.4 km;
+  `canSignIn` (B only); `DEMO_WORKSHOP`; `DEMO_REFERENCE_DRIVER`.
+- `src/demo/faultScenarios.ts` — one answer set per reachable fault (11; the
+  classifier never makes KEY_FAILURE the top fault).
+- `src/demo/demoScope.ts` — `demoJobWhere/UnitWhere/TechnicianWhere/
+  DepotWhere/WorkshopWhere`, applied in `buildDispatchSnapshot` and GET /jobs,
+  /queue, /events, /actions, /capabilities/scarcity, /degraded/payments.
+- `src/demo/demoDispatch.ts` (`dispatchAfterIntake`, `redispatchAfterRefusal`),
+  new trigger `INTAKE_COMPLETED`, `handleTrigger({ excludeTechnicianIds })`,
+  `src/commit/excludeCrews.ts` `withoutTechnicians`; hooks in the intake
+  routes, the offer respond route and the offer-expiry worker.
+- `prisma/seed/demoReferenceJob.ts` `ensureReferenceJob`,
+  `prisma/seed/demoDrivers.ts`, `prisma/seed/demoWorkshop.ts`.
+- `src/demo/freeDemoVans.ts` (`freeStuckDemoVans`,
+  `freeDemoVansAfterCompletion`), `src/demo/retireStaleDemoJobs.ts`,
+  `src/demo/retireDemoJob.ts`; all run from `src/workers/demoRefresh.ts`.
+- GET /login/accounts, `public/js/loginHints.js`, `public/js/pages/home.js`,
+  `unusablePasswordHash`.
+- `src/ai/usageLimits.ts` `checkAssistantAllowance`, config
+  `AI_HOURLY_LIMIT_PER_IP` / `AI_DAILY_CALL_CAP`, `cappedResponse` on the
+  describe route, driver screen shows the server's sentence.
+- `scripts/demoJourney.ts` + dry check part 2 (real routes, every fault).
+- Tests: demoScope, loginAccounts, demoDispatch, aiUsageLimits; demoBoard on
+  its own database (`tests/helpers/demoDatabase.ts`) — idempotency with the
+  reference job, cleanup spares a running van, stale-job retirement.
+
+### Decisions
+Decision: hide the full seed by filter in demo mode, never delete. Why: the
+brief forbids wiping the live database. Alternative: park seeded vans OFFLINE.
+Why not: rewrites 24 rows and has to be undone; depots and workshops have no
+"off" state at all. Tradeoff: every dispatcher read and the snapshot gained a
+`...demo*Where()` spread that is `{}` outside demo mode.
+
+Decision: B a flatbed with everything. Why: the tow fault rejects vans; cost
+ignores kind; the driver screen never reports a basement. Tradeoff: B now
+holds every scarce capability pair, so on the shared zippy_test it stole
+another suite's job — the demo tests moved to their own database.
+
+Decision: the reference job ends RESOLVED on D after B declined. Why: an
+in-progress job holds a van, and on A, C or D that spoils act 2's candidate
+table or act 6's requeue target. Alternative: an EN_ROUTE job on C. Why not:
+C would show "unit is on a job" instead of PART_UNAVAILABLE for every live job.
+
+Decision: new trigger INTAKE_COMPLETED fired only in demo mode, card still
+executed by a human. Why: a reported job had no path to an offer at all.
+Alternative: auto-execute. Why not: the reservation stays a human step.
+
+Decision: exclude the refusing technician from the re-plan after a refusal,
+as a snapshot transform in src/commit. Why: otherwise the solver re-picks
+them. Alternative: a rejection code in the engine. Why not: engine is
+off-limits and "do not ask them again" is job history, a commit concern.
+Tradeoff: the excluded crew vanishes from that job's candidate table instead
+of showing as rejected.
+
+Decision: stop on the tow rather than fake a workshop acceptance. Why: the
+existing DESTINATION_UNCONFIRMABLE guard is correct — the product has no
+workshop counterparty — and demoing an acceptance nobody gives would be a lie.
+
+Decision: free demo vans after completion in demo mode only. Why: completion
+never frees a van anywhere in the product; fixing that globally is a product
+change outside the brief. Tradeoff: the bug stays for every other mode.
+
+Decision: AI ceiling counted in Redis, failing closed. Why: counters are
+cache-like (invariant 1); failing open could drain the key. Tradeoff: a Redis
+outage costs every driver the assistant (they still get the picker).
+
+### Concurrency
+Scenario: the demo refresh frees or re-shifts a van while a dispatcher
+reserves it. What races: freeStuckDemoVans' AVAILABLE write vs a new hold.
+Why dangerous: two jobs on one van (invariant 7). How handled: busy check
+first (live job or unexpired ACTIVE hold), then a conditional update
+`WHERE status IN ('HELD','ON_JOB')`. Assumption relied on: a hold taken after
+the busy read sets the unit HELD, which the conditional update then still
+overwrites — the read-then-write window is narrow but real. Accepted for the
+demo board.
+
+Scenario: B declines while the offer-expiry worker times the same offer out.
+What races: two re-plans for one job. How handled: advanceSaga returns
+REQUEUED to both callers, so both may fire redispatchAfterRefusal; requestAction
+then raises a second card — harmless but untidy. Not deduplicated.
+
+### Weaknesses introduced
+- Product-wide, found here: completion never frees a van (demo works around).
+- Tows remain undispatchable; the dry check reports them as a known limitation.
+- No price range before the estimate (act 1 asked for one).
+- Act 6's card names D, but D has no login, so the act stops at the card.
+- Live still runs Razorpay test keys unless the user deletes them (step 1).
+- Retiring demo jobs is a demo-only CANCELLED path; there is still no product
+  cancellation route.
+- Double re-plan cards possible when decline and expiry race (above).
+- None of the six acts walked in a browser on the deployed site.
+
+### Concepts now genuinely in use
+Feature-flagged read scoping ({}-or-clause), snapshot transforms in the commit
+layer, per-job exclusion on re-plan, isolated test databases, fail-closed rate
+limiting, driving the real HTTP surface in-process for an acceptance check.
+
+### What broke
+- The dry check first showed the seeded depots made C feasible everywhere;
+  only the snapshot filter restored PART_UNAVAILABLE (measured: 11 FEASIBLE vs
+  9 PART_UNAVAILABLE + 2 feasible).
+- redispatch's "starts a real saga" failed: B (every capability) stole its job
+  from the shared zippy_test — demo tests moved to zippy_test_demo.
+- The first end-to-end tow run failed at Execute: DESTINATION_UNCONFIRMABLE.
+  Investigated, kept as a documented limit.
+- Walking acts 3-5 showed B's van stuck ON_JOB after completion: the product
+  never frees a van on COMPLETE.
+- The dry check never exited (in-process app's Redis/queue handles); then
+  orphaned node processes from stopped tasks kept running on Windows and
+  slowed later runs. Fixed with closeConnections + an unref'd exit backstop;
+  orphans killed. Real run time: 9 s.
+- Two test runs reported exit 1 with every test green and took 10+ minutes;
+  not reproduced on rerun, likely the orphans above.
+
+### Interview angle
+"How do you demo on a production database you are not allowed to wipe?" Scope
+every read the demo touches with a flag-controlled clause that is a no-op when
+off, so hiding is a filter and undo is one variable.
+
+"Your demo needed the solver to pick one crew for everything — did you tune
+the engine?" No: the seed gives B every skill and part and the others a
+visible flaw, and a dry check drives the real routes for all eleven faults and
+fails if B ever loses.
