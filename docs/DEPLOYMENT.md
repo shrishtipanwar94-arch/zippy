@@ -27,7 +27,7 @@ deployment. Railway's templates default to newer majors — the first deploy of
 this project came up on Postgres 18 and Redis 8.2. A major version cannot be
 changed in place (a data directory written by 18 will not start under 16), so
 the fix is a fresh service on the right image, done during the cutover:
-see [LIVE-CUTOVER.md](LIVE-CUTOVER.md), step 4.
+see the appendix of [LIVE-CUTOVER.md](LIVE-CUTOVER.md) (written, not yet rehearsed).
 
 | service | image to use |
 | --- | --- |
