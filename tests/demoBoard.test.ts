@@ -14,13 +14,21 @@
 // THE DEMO CREWS COMPETE WITH OTHER SUITES' FIXTURES while this file runs —
 // buildDispatchSnapshot reads the whole fleet. They hold no BRAKE_REPAIR and no
 // EV_HV_CERTIFICATION, so they cannot serve the two scarce-pair fixtures
-// (tests/redispatch*.test.ts), and afterAll takes them off the board again so
-// the window is this file's runtime, not forever.
+// (tests/redispatch*.test.ts), and afterAll takes the IDLE ones off the board
+// again so the window is this file's runtime, not forever.
+//
+// THEY CAN STILL WIN ANOTHER SUITE'S JOB, legitimately: tests/demoFlow.test.ts
+// runs a real dispatch near Connaught Place, and once chose crew B and held its
+// van. This file's first afterAll then forced every demo van OFFLINE, including
+// that HELD one, and demoFlow's accept failed — this file breaking the exact
+// rule it exists to pin. So afterAll now leaves busy vans alone, and the test
+// picks its crews from whichever are idle rather than assuming B and A.
 
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { prismaBase } from '../src/infra/prismaBase.js';
 import { ensureDemoBoard } from '../prisma/seed/demoBoard.js';
 import { refreshDemoShifts } from '../src/demo/refreshDemoShifts.js';
+import { findIdleDemoCrews } from '../src/demo/idleDemoCrews.js';
 import {
   DEMO_CREWS,
   DEMO_DISPATCHER,
@@ -66,10 +74,14 @@ beforeAll(async () => {
 
 afterAll(async () => {
   await prismaBase.job.deleteMany({ where: { id: BUSY_JOB_ID } });
-  // Off the board between runs: no shift, and OFFLINE. The next run of this
-  // file brings them back through ensureDemoBoard.
-  await prismaBase.technicianShift.deleteMany({ where: { technicianId: { in: DEMO_TECHNICIAN_IDS } } });
-  await prismaBase.unit.updateMany({ where: { id: { in: DEMO_UNIT_IDS } }, data: { status: 'OFFLINE' } });
+  // Off the board between runs — no shift, and OFFLINE — but only the idle
+  // crews: a van another suite is mid-way through reserving stays as it is.
+  // The next run of this file brings them back through ensureDemoBoard.
+  const idle = await findIdleDemoCrews(prismaBase);
+  const idleTechnicianIds = idle.map((entry) => entry.technicianId);
+  const idleUnitIds = idle.map((entry) => entry.unitId);
+  await prismaBase.technicianShift.deleteMany({ where: { technicianId: { in: idleTechnicianIds } } });
+  await prismaBase.unit.updateMany({ where: { id: { in: idleUnitIds } }, data: { status: 'OFFLINE' } });
 });
 
 describe('ensureDemoBoard', () => {
@@ -94,8 +106,12 @@ describe('ensureDemoBoard', () => {
 
 describe('refreshDemoShifts', () => {
   it('skips a van with a live job and refreshes every other demo crew', async () => {
-    const busyCrew = DEMO_CREWS.find((crew) => crew.label === 'B')!;
-    const idleCrew = DEMO_CREWS.find((crew) => crew.label === 'A')!;
+    // Two crews nobody else is using right now — see the header for why this
+    // cannot simply be B and A.
+    const idle = await findIdleDemoCrews(prismaBase);
+    expect(idle.length).toBeGreaterThanOrEqual(2);
+    const busyCrew = idle[0]!.crew;
+    const idleCrew = idle[1]!.crew;
 
     // A COMMITTED job on crew B's van, written directly. Dated in the past so
     // it never occupies a "newest fifty" slot another suite is asserting on.

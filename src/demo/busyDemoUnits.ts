@@ -10,8 +10,14 @@
 // because a re-seed landed between them.
 //
 // "Busy" is either of two things, because a van is committed before its job
-// is: an unfinished job assigned to it, or an ACTIVE hold (a technician's
-// phone is counting down an offer for it right now).
+// is: an unfinished job assigned to it, or an ACTIVE hold that has not yet
+// expired (a technician's phone is counting down an offer for it right now).
+//
+// AN EXPIRED HOLD IS NOT BUSY, even while it still reads ACTIVE. `consumeHold`
+// only consumes `WHERE status = 'ACTIVE' AND expires_at > now`, so past its
+// expiry nobody can complete it; the cleanup sweep just has not flipped it to
+// EXPIRED yet. Counting it would freeze a demo van for as long as the sweep
+// was down — found in the shared test database, where no sweep runs at all.
 
 import type { PrismaClient } from '@prisma/client';
 
@@ -19,13 +25,17 @@ import type { PrismaClient } from '@prisma/client';
 // and src/api/driver.ts. A job in any of these is over; anything else is live.
 const FINISHED_JOB_STATUSES = ['RESOLVED', 'CANCELLED', 'UNSERVICEABLE'] as const;
 
-export async function findBusyUnitIds(db: PrismaClient, unitIds: string[]): Promise<Set<string>> {
+export async function findBusyUnitIds(
+  db: PrismaClient,
+  unitIds: string[],
+  now: Date = new Date(),
+): Promise<Set<string>> {
   const liveJobs = await db.job.findMany({
     where: { assignedUnitId: { in: unitIds }, status: { notIn: [...FINISHED_JOB_STATUSES] } },
     select: { assignedUnitId: true },
   });
   const activeHolds = await db.unitHold.findMany({
-    where: { unitId: { in: unitIds }, status: 'ACTIVE' },
+    where: { unitId: { in: unitIds }, status: 'ACTIVE', expiresAt: { gt: now } },
     select: { unitId: true },
   });
 
