@@ -106,7 +106,15 @@ export async function processOfferExpiry(job: Job<{ offerId: string }>): Promise
       const state = await advanceSaga(prismaBase, offer.dispatchOfferId);
       // DEMO_MODE: the timeout unwound the reservation, so re-plan the job
       // without the technician who let it lapse. A no-op outside demo mode.
-      if (state === 'REQUEUED') await redispatchAfterRefusal(prismaBase, offer.jobId);
+      //
+      // ONLY IF THIS RUN TIMED THE OFFER OUT. This job fires for every offer at
+      // its deadline, including one already declined — and advanceSaga on a
+      // saga that already unwound just reports REQUEUED again. Re-planning on
+      // that put a second dispatch card on every declined job, 45 s later.
+      // Found walking act 6 in a browser.
+      if (state === 'REQUEUED' && result.outcome === 'RECORDED') {
+        await redispatchAfterRefusal(prismaBase, offer.jobId);
+      }
     }
 
     await job.log(`offer ${job.data.offerId}: ${result.outcome} (${result.status})`);
