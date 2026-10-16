@@ -261,6 +261,34 @@ describe('commit authorises the callout fee only', () => {
     ).toBe(1);
   });
 
+  // ASKING AGAIN IS NOT A NEW EVENT. The driver's screen asks on every refresh
+  // and refreshes on every pushed job event, so an event per ask was a loop:
+  // 2,521 PAYMENT_AUTHORISATION_PENDING events on one job in six minutes with
+  // Razorpay test keys. Both shapes of "still pending" are pinned: a gateway
+  // that cannot be reached (no order), and Razorpay waiting for the driver to
+  // pay the same order.
+  it('writes the pending event once, however many times it is asked again', async () => {
+    const unreachable = await createJobFor(WALKIN, 'walkin-vehicle');
+    for (let ask = 0; ask < 3; ask++) {
+      await authoriseCallout(prismaBase, { jobId: unreachable.jobId, provider: new FailingStubProvider('UNREACHABLE') });
+    }
+    expect(
+      await prismaBase.jobEvent.count({ where: { jobId: unreachable.jobId, eventType: 'PAYMENT_AUTHORISATION_PENDING' } }),
+    ).toBe(1);
+
+    const awaitingDriver = {
+      name: 'awaiting-customer',
+      authorise: async () => ({ outcome: 'AWAITING_CUSTOMER' as const, orderRef: 'order_demo_same', reason: 'waiting for the driver' }),
+    } as unknown as PaymentProvider;
+    const waiting = await createJobFor(WALKIN, 'walkin-vehicle');
+    for (let ask = 0; ask < 3; ask++) {
+      await authoriseCallout(prismaBase, { jobId: waiting.jobId, provider: awaitingDriver });
+    }
+    expect(
+      await prismaBase.jobEvent.count({ where: { jobId: waiting.jobId, eventType: 'PAYMENT_AUTHORISATION_PENDING' } }),
+    ).toBe(1);
+  });
+
   it('is recovered later by the retry sweep', async () => {
     const { jobId } = await createJobFor(WALKIN, 'walkin-vehicle');
     await authoriseCallout(prismaBase, { jobId, provider: new FailingStubProvider('UNREACHABLE') });

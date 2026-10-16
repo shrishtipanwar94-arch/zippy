@@ -255,8 +255,24 @@ async function flagPendingAuthorisation(
     outcome: string;
     orderRef?: string | null;
   },
-): Promise<void> {
-  await runPublishingTransaction(db, async (tx) => {
+): Promise<boolean> {
+  const flagged = await runPublishingTransaction(db, async (tx) => {
+    // ONLY A TRANSITION IS AN EVENT. Asking again about an order that is still
+    // waiting for the driver changes nothing, and must write nothing: the
+    // driver's screen asks on every refresh, every job event is pushed to that
+    // screen, and the screen refreshes on every push — so an event per ask was
+    // a loop. Found walking the demo with Razorpay test keys: 2,521
+    // PAYMENT_AUTHORISATION_PENDING events on one job in six minutes, about
+    // seven a second, from one open driver page. The stub provider never takes
+    // this branch, which is why no test saw it.
+    const before = await tx.payment.findUnique({
+      where: { id: input.paymentId },
+      select: { status: true, gatewayOrderRef: true },
+    });
+    const alreadyPending = before?.status === 'PENDING_AUTHORISATION';
+    const sameOrder = !input.orderRef || input.orderRef === before?.gatewayOrderRef;
+    if (alreadyPending && sameOrder) return false;
+
     await tx.payment.update({
       where: { id: input.paymentId },
       data: {
@@ -275,12 +291,15 @@ async function flagPendingAuthorisation(
       eventType: 'PAYMENT_AUTHORISATION_PENDING',
       payload: { paymentId: input.paymentId, reason: input.reason },
     });
+    return true;
   });
+  if (!flagged) return false;
 
   logger.warn(
     { jobId: input.jobId, paymentId: input.paymentId, reason: input.reason },
     'callout authorisation failed; the job dispatches anyway',
   );
+  return true;
 }
 
 // The wrapper every dispatch-path caller should use. A failure to authorise
