@@ -128,7 +128,12 @@ function renderAssistantNote(panel, request) {
   const note = panel.querySelector('[data-field="ai-note"]');
   const degraded = panel.querySelector('[data-field="ai-degraded"]');
 
-  if (degraded) degraded.hidden = !request.aiDegraded;
+  if (degraded) {
+    degraded.hidden = !request.aiDegraded;
+    // The server's own sentence when it gave one (e.g. the daily cap); the
+    // HTML's generic one otherwise.
+    if (request.aiNotice) degraded.textContent = request.aiNotice;
+  }
   if (!note) return;
 
   note.hidden = !request.extracted;

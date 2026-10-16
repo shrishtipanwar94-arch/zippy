@@ -248,7 +248,9 @@ document.querySelector('[data-action="describe"]').addEventListener('click', asy
   try {
     const read = await api.describeSymptoms(text);
     if (read.degraded) {
-      setRequestField({ describing: false, aiDegraded: true, step: 'symptoms', rawText: text });
+      // `message` is set when the server refused the call (the spending
+      // ceiling); it replaces the generic "unavailable" sentence.
+      setRequestField({ describing: false, aiDegraded: true, aiNotice: read.message ?? null, step: 'symptoms', rawText: text });
     } else {
       setRequestField({
         describing: false,

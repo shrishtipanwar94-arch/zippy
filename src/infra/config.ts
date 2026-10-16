@@ -183,6 +183,15 @@ const baseEnvSchema = z.object({
   // a slow answer is worth less than a fast picker: past this we give up and
   // degrade rather than hold the screen.
   LLM_TIMEOUT_MS: z.coerce.number().int().positive().default(8_000),
+  // A CEILING ON WHAT A PUBLIC LINK CAN SPEND (src/ai/usageLimits.ts),
+  // enforced in production only. Per caller IP per hour, and for the whole
+  // deployment per UTC day. Past either, the driver is told plainly and gets
+  // the question picker — the same path as the model being down — so a capped
+  // assistant never blocks a request for help. Chosen figures, not measured:
+  // twenty is far more than one person reporting one breakdown needs, and
+  // three hundred keeps a free-tier key inside its daily allowance.
+  AI_HOURLY_LIMIT_PER_IP: z.coerce.number().int().positive().default(20),
+  AI_DAILY_CALL_CAP: z.coerce.number().int().positive().default(300),
 
   // RAZORPAY (Phase 22b) — TEST MODE ONLY, and the schema is where that is
   // enforced rather than a comment somebody can ignore.

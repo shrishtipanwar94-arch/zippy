@@ -127,6 +127,7 @@ const state = {
     // Drives the banner — a degraded state nobody can see is not a degraded
     // state, it is a bug (invariant 8).
     aiDegraded: false,
+    aiNotice: null,
     // The id of the AiExtraction row this request is answering, sent back at
     // intake so "the driver confirmed what the model read" is a fact in the
     // database rather than an inference from two timestamps.

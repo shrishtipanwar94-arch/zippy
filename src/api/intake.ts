@@ -30,7 +30,9 @@ import { safetyReportSchema } from '../domain/safety.js';
 import { locationSchema } from '../domain/location.js';
 import { createIntakeJob } from '../intake/createJob.js';
 import { extractSymptoms } from '../ai/extractSymptoms.js';
-import { recordOutcomeHealth } from '../ai/health.js';
+import { recordAiHealth, recordOutcomeHealth } from '../ai/health.js';
+import { checkAssistantAllowance, redisUsageCounter } from '../ai/usageLimits.js';
+import { config } from '../infra/config.js';
 import { storeExtraction } from '../ai/store.js';
 import { buildHypothesisView } from '../domain/hypothesisView.js';
 import { logger } from '../infra/logger.js';
@@ -99,12 +101,49 @@ function sendIntakeError(error: unknown, res: import('express').Response): boole
 // A DEGRADED ANSWER IS STILL A 200. "The model is unavailable, use the picker"
 // is a successful answer to "what can you read from this", and turning it into
 // a 5xx would make every client treat a working degraded path as a broken one.
+// A refused assistant call, shaped exactly like the model-down answer below so
+// the driver's screen treats both the same way: on to the question picker.
+export function cappedResponse(reason: string, message: string) {
+  return {
+    degraded: true,
+    reason,
+    message,
+    extractionId: null,
+    symptoms: null,
+    safety: null,
+    hypothesis: null,
+  };
+}
+
 intakeRouter.post(
   '/jobs/intake/describe',
   authenticate,
   requirePermission('create', 'job'),
   async (req, res) => {
     const body = describeSchema.parse(req.body);
+
+    // THE SPENDING CEILING (src/ai/usageLimits.ts), production only. Refused
+    // calls answer in the same degraded shape as a model that is down, so the
+    // driver's screen moves straight on to the question picker.
+    if (config.isProduction) {
+      const allowance = await checkAssistantAllowance({
+        ip: req.ip ?? 'unknown',
+        now: new Date(),
+        counter: redisUsageCounter,
+        hourlyLimitPerIp: config.AI_HOURLY_LIMIT_PER_IP,
+        dailyCap: config.AI_DAILY_CALL_CAP,
+      });
+      if (!allowance.allowed) {
+        // The daily cap is the deployment's state, so an operator sees it on
+        // the ladder (invariant 8). One visitor's hourly limit is not.
+        if (allowance.reason === 'DAILY_CAP_REACHED') {
+          await recordAiHealth(prismaBase, 'DEGRADED', 'daily assistant call cap reached');
+        }
+        res.json(cappedResponse(allowance.reason, allowance.message));
+        return;
+      }
+    }
+
     const outcome = await extractSymptoms(body.text);
 
     // The health row moves on every attempt, so an operator watching the
