@@ -102,7 +102,9 @@ describe('ensureDemoBoard', () => {
     expect(afterFirst.technicianCapabilities).toBe(grantedLinks);
     expect(afterFirst.unitCapabilities).toBe(grantedLinks);
     expect(afterFirst.stockLines).toBe(stockedLines);
-  });
+    // A full seed run — every lookup table and five password hashes — takes a
+    // few seconds; vitest's default 5 s is too tight for running it twice.
+  }, 30_000);
 });
 
 describe('refreshDemoShifts', () => {
