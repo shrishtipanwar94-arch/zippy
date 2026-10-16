@@ -24,6 +24,8 @@
 // deleted or changed here — step 1 moves a job only by the saga's own path.
 
 import type { PrismaClient } from '@prisma/client';
+import { config } from '../infra/config.js';
+import { logger } from '../infra/logger.js';
 import { timeoutOffer } from '../commit/offers.js';
 import { advanceSaga } from '../commit/saga.js';
 import { releaseHold } from '../commit/holds.js';
@@ -94,4 +96,23 @@ export async function freeStuckDemoVans(db: PrismaClient, now: Date = new Date()
     if (freed.count > 0) vansFreed.push(unit.code);
   }
   return { offersTimedOut, holdsReleased, vansFreed };
+}
+
+// RIGHT AFTER A JOB IS COMPLETED, in DEMO_MODE only.
+//
+// Completing a job does not put its van back to AVAILABLE anywhere in the
+// product — the only code that ever sets a unit AVAILABLE is releasing a crew
+// during a reassignment. On the demo board that means crew B stays ON_JOB
+// after every finished job, and the next job the presenter reports goes to D
+// until the fifteen-minute refresh catches up. Running the same clean-up the
+// moment a job completes closes that for the demo. (The product-wide gap is
+// recorded in DECISIONS.log; fixing it for every deployment is out of scope.)
+// Never throws: a completed job must not turn into an error on the phone.
+export async function freeDemoVansAfterCompletion(db: PrismaClient): Promise<void> {
+  if (!config.demoMode) return;
+  try {
+    await freeStuckDemoVans(db);
+  } catch (error) {
+    logger.error({ err: error }, 'demo van clean-up after completion failed');
+  }
 }

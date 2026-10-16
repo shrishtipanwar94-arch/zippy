@@ -24,6 +24,7 @@ import { Router } from 'express';
 import { z } from 'zod';
 import { prismaBase } from '../infra/prismaBase.js';
 import { redispatchAfterRefusal } from '../demo/demoDispatch.js';
+import { freeDemoVansAfterCompletion } from '../demo/freeDemoVans.js';
 import { recordUnitPositionQuietly } from '../commit/unitPosition.js';
 import { setDuty } from '../commit/technicianDuty.js';
 import { authenticate, requirePermission } from './middleware/authenticate.js';
@@ -250,6 +251,9 @@ technicianRouter.post(
     // capture is money to chase, not a reason to refuse to finish a job.
     if (result.outcome === 'APPLIED' && body.step === 'COMPLETE') {
       await captureOnCompletionQuietly(prismaBase, jobId);
+      // DEMO_MODE: free the van now rather than at the next refresh; see
+      // src/demo/freeDemoVans.ts for why completion alone does not.
+      await freeDemoVansAfterCompletion(prismaBase);
       // AND THE BOOKS. The capture moves the money; this records who earned
       // what. Separate calls because they fail independently — a gateway being
       // down does not mean the technician did not earn their share, and the
