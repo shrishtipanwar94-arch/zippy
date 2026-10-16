@@ -12,6 +12,13 @@ case "${ZIPPY_PROCESS:-web}" in
     # apply the same migration is a problem Prisma's advisory lock survives,
     # but running it from exactly one place means nobody has to know that.
     npx prisma migrate deploy
+    # THE DEMO BOARD, after migrations and before serving (DEMO_MODE only).
+    # Idempotent, so it runs on every boot. If it fails, `set -e` stops the
+    # boot: a deploy that cannot build its board should show as a failed
+    # deploy, not as a site with an empty board.
+    if [ "${DEMO_MODE:-false}" = "true" ]; then
+      npx tsx prisma/seed/demoMinimal.ts
+    fi
     exec node dist/index.js
     ;;
   worker)

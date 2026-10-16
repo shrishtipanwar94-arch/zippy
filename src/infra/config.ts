@@ -95,6 +95,13 @@ const baseEnvSchema = z.object({
   OFFER_TTL_MS: z.coerce.number().int().positive().default(45_000),
   HOLD_TTL_MS: z.coerce.number().int().positive().default(120_000),
 
+  // THE DEPLOYED DEMO BOARD. When 'true', the web process runs ensureDemoBoard
+  // after migrations on every boot (scripts/start-process.sh) and the worker
+  // keeps the demo crews' shifts and stock current every fifteen minutes
+  // (src/workers/demoRefresh.ts). Off by default, so the main seed, the tests
+  // and local development never see any of it.
+  DEMO_MODE: z.enum(['true', 'false']).default('false'),
+
   // HOW MUCH AN ESTIMATE MAY GROW BEFORE THE DRIVER IS ASKED AGAIN (Phase 15c).
   //
   // In basis points of the already-approved total — 1000 bps is 10% — because
@@ -289,6 +296,7 @@ function loadConfig() {
     ...env,
     isProduction: env.NODE_ENV === 'production',
     isTest: env.NODE_ENV === 'test',
+    demoMode: env.DEMO_MODE === 'true',
     corsOrigins: env.CORS_ORIGINS.split(',')
       .map((origin) => origin.trim())
       .filter((origin) => origin.length > 0),

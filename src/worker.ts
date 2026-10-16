@@ -7,6 +7,7 @@ import { startWorkers, stopWorkers } from './workers/runWorkers.js';
 import { recoverSagas } from './commit/sagaRecovery.js';
 import { startHealthLoop, stopHealthLoop } from './health/loop.js';
 import { installConfiguredPaymentProvider } from './payments/selectProvider.js';
+import { runDemoRefresh } from './workers/demoRefresh.js';
 
 /**
  * The worker process. It exists from Phase 0 — as its own process, not a
@@ -41,6 +42,19 @@ installConfiguredPaymentProvider();
 const recovered = await recoverSagas(prismaBase);
 if (recovered.length > 0) {
   logger.warn({ recovered }, 'recovered sagas stranded by a previous process');
+}
+
+// THE DEMO BOARD, ONCE NOW AND THEN EVERY FIFTEEN MINUTES (DEMO_MODE only).
+// Run directly here rather than waiting for the scheduler's first tick, so a
+// worker that restarts after a long outage puts the crews back on shift before
+// anybody can open the board. A failure is logged, not fatal: the real queues
+// matter more than the demo fixture, and the next tick will try again.
+if (config.demoMode) {
+  try {
+    logger.info(await runDemoRefresh());
+  } catch (error) {
+    logger.error({ err: error }, 'demo refresh on boot failed; the scheduled refresh will retry');
+  }
 }
 
 await startWorkers();
