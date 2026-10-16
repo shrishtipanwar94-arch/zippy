@@ -8,6 +8,7 @@ import { recoverSagas } from './commit/sagaRecovery.js';
 import { startHealthLoop, stopHealthLoop } from './health/loop.js';
 import { installConfiguredPaymentProvider } from './payments/selectProvider.js';
 import { runDemoRefresh } from './workers/demoRefresh.js';
+import { waitForMigrations } from './infra/waitForMigrations.js';
 
 /**
  * The worker process. It exists from Phase 0 — as its own process, not a
@@ -36,6 +37,11 @@ logger.info({ env: config.NODE_ENV }, 'worker process starting');
 // the web process, and a provider installed in only one of them would have the
 // two disagreeing about where money lives.
 installConfiguredPaymentProvider();
+
+// FIRST, BEFORE ANY QUERY: the web process may still be migrating. See
+// src/infra/waitForMigrations.ts for the crash this prevents. Throwing here
+// exits the process non-zero, and the platform restarts it.
+await waitForMigrations(prismaBase);
 
 // Unscoped on purpose: recovery is a fleet-wide sweep with no requesting
 // user, so there is no tenant to scope it to.
