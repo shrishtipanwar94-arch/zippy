@@ -19,6 +19,13 @@ One Railway project, one public origin, four services:
 so the two can never run different versions of the engine against one
 database. Only `web` has a public domain.
 
+**A push to `master` deploys both**, through a GitHub deployment trigger on
+each service. Those triggers did not exist at first: the services were created
+from the CLI before Railway's GitHub app had been granted the private repo, so
+pushes silently deployed nothing until the triggers were added on 2026-10-17.
+If a push ever fails to produce a deploy, check
+`railway api 'query{project(id:"<id>"){deploymentTriggers{edges{node{branch serviceId}}}}}'`.
+
 ### Versions are pinned to what the tests run against
 
 PostgreSQL **16** and Redis **7**: `docker-compose.yml` (`postgres:16`,
