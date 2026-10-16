@@ -18,6 +18,8 @@ import { Router } from 'express';
 import { z } from 'zod';
 import { prismaBase } from '../infra/prismaBase.js';
 import { demoJobWhere, demoTechnicianWhere, demoUnitWhere } from '../demo/demoScope.js';
+import { DEMO_ZONE } from '../demo/demoCrews.js';
+import { config } from '../infra/config.js';
 import { authenticate, requirePermission } from './middleware/authenticate.js';
 import { summarise, byUrgency } from '../domain/scarcity.js';
 import { sentenceFor } from '../domain/jobStory.js';
@@ -93,8 +95,18 @@ consoleRouter.get(
     // actually in the table rather than from a hardcoded list that drifts as
     // phases add event types.
     const [types, zones] = await Promise.all([
-      prismaBase.jobEvent.groupBy({ by: ['eventType'], _count: true }),
-      prismaBase.zone.findMany({ select: { id: true, name: true }, orderBy: { name: 'asc' } }),
+      // DEMO_MODE: options from the demo board only — otherwise the dropdowns
+      // list every zone and event type in the hidden full seed, with counts.
+      prismaBase.jobEvent.groupBy({
+        by: ['eventType'],
+        where: config.demoMode ? { job: demoJobWhere() } : {},
+        _count: true,
+      }),
+      prismaBase.zone.findMany({
+        where: config.demoMode ? { code: DEMO_ZONE.code } : {},
+        select: { id: true, name: true },
+        orderBy: { name: 'asc' },
+      }),
     ]);
 
     res.json({
