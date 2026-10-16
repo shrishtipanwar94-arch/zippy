@@ -235,7 +235,15 @@ driverRouter.get(
         status: job.status,
         helperName: helper?.name ?? null,
         arrivingAt,
-        replanning: replanning > 0,
+        // ONLY WHILE A CREW IS BEING REPLACED. The sentence is "your technician
+        // found the problem is not what we first thought" — true of a job that
+        // has a crew and an open reassignment, false of one nobody has been sent
+        // to yet. An unassigned job's card means "we are finding a crew", and
+        // reading it as a replan told a driver whose car no technician had seen
+        // that a technician had changed the diagnosis. Found walking the demo:
+        // every freshly reported job showed it, the moment its dispatch card
+        // was raised.
+        replanning: replanning > 0 && job.assignedUnitId !== null,
         sourcingPart,
         intakeComplete,
       }),
