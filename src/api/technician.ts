@@ -23,6 +23,7 @@
 import { Router } from 'express';
 import { z } from 'zod';
 import { prismaBase } from '../infra/prismaBase.js';
+import { redispatchAfterRefusal } from '../demo/demoDispatch.js';
 import { recordUnitPositionQuietly } from '../commit/unitPosition.js';
 import { setDuty } from '../commit/technicianDuty.js';
 import { authenticate, requirePermission } from './middleware/authenticate.js';
@@ -155,6 +156,13 @@ technicianRouter.post(
       // invariant — a stranded driver does not wait for a card to clear, so a
       // failed authorisation flags itself and the job commits regardless.
       await authoriseCalloutQuietly(prismaBase, offer.jobId);
+    }
+
+    // DEMO_MODE: a decline unwound the reservation, so re-plan the job without
+    // this technician and put a fresh dispatch card in front of the
+    // dispatcher. A no-op outside demo mode; see src/demo/demoDispatch.ts.
+    if (state === 'REQUEUED') {
+      await redispatchAfterRefusal(prismaBase, offer.jobId);
     }
 
     res.json({ offerId: offer.id, jobId: offer.jobId, sagaState: state });

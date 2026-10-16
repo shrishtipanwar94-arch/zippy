@@ -21,6 +21,7 @@ import { Router } from 'express';
 import { z } from 'zod';
 import { prisma } from '../infra/db.js';
 import { prismaBase } from '../infra/prismaBase.js';
+import { dispatchAfterIntake } from '../demo/demoDispatch.js';
 import { visibleJobId } from './visibleJob.js';
 import { authenticate, requirePermission } from './middleware/authenticate.js';
 import { vehicleFilingFilter } from '../auth/permissions.js';
@@ -208,6 +209,9 @@ intakeRouter.post('/jobs/intake', authenticate, requirePermission('create', 'job
       actor: { role: auth.role, id: auth.userId },
       at: new Date(),
     });
+    // DEMO_MODE: a job whose first answer already settled the diagnosis is
+    // ready to dispatch now. A no-op outside demo mode (src/demo/demoDispatch.ts).
+    if (result.next.done) await dispatchAfterIntake(prismaBase, result.jobId);
     res.status(201).json(result);
   } catch (error) {
     if (!sendIntakeError(error, res)) throw error;
@@ -253,6 +257,9 @@ intakeRouter.post('/jobs/:id/answers', authenticate, requirePermission('create',
       actor: { role: auth.role, id: auth.userId },
       at: new Date(),
     });
+    // DEMO_MODE: the last answer finished intake, so the job is ready to
+    // dispatch. A no-op outside demo mode (src/demo/demoDispatch.ts).
+    if (result.next.done) await dispatchAfterIntake(prismaBase, jobId);
     res.status(201).json(result);
   } catch (error) {
     if (!sendIntakeError(error, res)) throw error;

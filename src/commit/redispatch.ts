@@ -38,6 +38,7 @@ import { startSaga } from './saga.js';
 import { appendJobEvent } from '../intake/events.js';
 import { notifyDriverOfReplan, notifyFleetManagerOfStateChange } from '../workers/notification.js';
 import { runPublishingTransaction } from '../realtime/transaction.js';
+import { withoutTechnicians } from './excludeCrews.js';
 
 export type RedispatchOutcome =
   | { outcome: 'ESCALATED'; actionRequestId: string; reason: string }
@@ -58,6 +59,9 @@ export type HandleTriggerInput = {
   trigger: ReplanTrigger;
   detail?: string;
   actor?: { role: string; id: string | null };
+  // Technicians this job must not go back to — the ones who just declined it
+  // or let it time out. See src/commit/excludeCrews.ts.
+  excludeTechnicianIds?: string[];
 };
 
 // How many times this job has already been reassigned. Counted from the
@@ -115,7 +119,7 @@ export async function handleTrigger(
 
   const outcome = await solve({
     jobs,
-    snapshot,
+    snapshot: withoutTechnicians(snapshot, input.excludeTechnicianIds ?? []),
     now: new Date(),
     jobZone,
     zonePartitionThreshold: config.SOLVER_ZONE_PARTITION_THRESHOLD,

@@ -24,6 +24,7 @@ import { runIdempotently } from '../queues/idempotent.js';
 import { prismaBase } from '../infra/prismaBase.js';
 import { timeoutOffer } from '../commit/offers.js';
 import { advanceSaga } from '../commit/saga.js';
+import { redispatchAfterRefusal } from '../demo/demoDispatch.js';
 import { recordAcceptanceOutcome } from '../commit/destinationAcceptance.js';
 
 // A HYPHEN, NOT A COLON. BullMQ rejects a custom job id containing `:` — it
@@ -69,7 +70,7 @@ export async function processOfferExpiry(job: Job<{ offerId: string }>): Promise
     // landed first is not undone by this.
     const offer = await prismaBase.technicianOffer.findUnique({
       where: { id: job.data.offerId },
-      select: { dispatchOfferId: true },
+      select: { dispatchOfferId: true, jobId: true },
     });
     if (offer?.dispatchOfferId) {
       // THE THIRD LEG SHARES THIS DEADLINE (Phase 22) — startSaga gives a
@@ -102,7 +103,10 @@ export async function processOfferExpiry(job: Job<{ offerId: string }>): Promise
         }
       }
 
-      await advanceSaga(prismaBase, offer.dispatchOfferId);
+      const state = await advanceSaga(prismaBase, offer.dispatchOfferId);
+      // DEMO_MODE: the timeout unwound the reservation, so re-plan the job
+      // without the technician who let it lapse. A no-op outside demo mode.
+      if (state === 'REQUEUED') await redispatchAfterRefusal(prismaBase, offer.jobId);
     }
 
     await job.log(`offer ${job.data.offerId}: ${result.outcome} (${result.status})`);

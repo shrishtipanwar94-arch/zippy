@@ -31,6 +31,13 @@ export const REPLAN_TRIGGERS = [
   // dangerous jobs were the only ones with no route to a crew at all.
   'SAFETY_LEVEL_CONFIRMED',
   'JOB_CANCELLED',
+  // INTAKE FINISHED, SO THE JOB IS READY TO DISPATCH. The same gap as the one
+  // above, for every job: reserving a crew happens only by executing a
+  // reassignment, and nothing raised one for a job nobody had touched since
+  // the driver reported it. Fired only in DEMO_MODE today
+  // (src/demo/demoDispatch.ts), where the demo needs every reported job to
+  // reach a crew; outside it the system behaves exactly as before.
+  'INTAKE_COMPLETED',
 ] as const;
 
 // NO SLA TRIGGER, AND THAT IS NOW A CONCLUSION RATHER THAN A DEFERRAL.
