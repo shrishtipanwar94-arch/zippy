@@ -18,8 +18,7 @@
 // here would drift from src/domain/faults.ts, and the first sign would be a
 // demo crew silently failing CAPABILITY_MISSING.
 //
-// NO WORKSHOP, ON PURPOSE. A destination is only needed when the contending
-// faults need a tow, and a flat battery is fixed at the roadside.
+// ONE WORKSHOP, for the one fault that needs a tow (prisma/seed/demoWorkshop.ts).
 
 import type { PrismaClient } from '@prisma/client';
 import { DEV_PASSWORD_HASH } from './devPassword.js';
@@ -29,6 +28,7 @@ import { seedPricing } from './pricing.js';
 import { seedIntakeQuestions } from './intakeQuestions.js';
 import { seedLedgerAccounts } from './ledgerAccounts.js';
 import { seedDemoCrew } from './demoCrewRows.js';
+import { seedDemoWorkshop } from './demoWorkshop.js';
 import { findBusyUnitIds } from '../../src/demo/busyDemoUnits.js';
 import { refreshDemoShifts } from '../../src/demo/refreshDemoShifts.js';
 import { refreshDemoStock } from '../../src/demo/refreshDemoStock.js';
@@ -172,6 +172,7 @@ export async function ensureDemoBoard(db: PrismaClient, now: Date = new Date()):
 
   await seedZoneAndTenant(db);
   await seedDriver(db);
+  await seedDemoWorkshop(db);
 
   for (const crew of DEMO_CREWS) {
     await seedDemoCrew(db, crew, busyUnitCodes, now);

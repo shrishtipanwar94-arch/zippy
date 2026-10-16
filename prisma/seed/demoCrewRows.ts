@@ -50,7 +50,15 @@ async function seedUnit(db: PrismaClient, crew: DemoCrew, technicianId: string, 
   const home = { lat: crew.lat, lng: crew.lng, lastLocationAt: now };
   const unit = await db.unit.upsert({
     where: { code: crew.unitCode },
-    update: { status: 'AVAILABLE', zoneId: DEMO_ZONE.id, currentTechnicianId: technicianId, ...home },
+    // The kind is updated too: it is part of what the crew IS (a van cannot
+    // tow), and a board seeded by an earlier version must not keep the old one.
+    update: {
+      status: 'AVAILABLE',
+      kind: crew.unitKind,
+      zoneId: DEMO_ZONE.id,
+      currentTechnicianId: technicianId,
+      ...home,
+    },
     create: {
       id: crew.unitId,
       code: crew.unitCode,

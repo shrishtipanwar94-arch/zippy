@@ -1,23 +1,35 @@
 // THE DEMO BOARD'S CAST — who is on it, where they stand, what they can do.
 //
-// Plain data with no database access, shared by two callers that run in
-// different processes: prisma/seed/demoBoard.ts writes these rows when the web
-// process boots, and src/demo/refreshDemoShifts.ts keeps their shifts current
-// from the worker. Both have to agree on exactly which rows are demo rows, so
-// that list lives once, here, in src/ where the compiled worker can import it.
+// Plain data with no database access, shared by callers in different
+// processes: prisma/seed/demoBoard.ts writes these rows when the web process
+// boots, src/demo/refreshDemoShifts.ts keeps them current from the worker, and
+// src/demo/demoScope.ts hides everything that is NOT on this list while
+// DEMO_MODE is on. All three have to agree on exactly which rows are demo rows,
+// so that list lives once, here, in src/ where the compiled worker can import it.
 //
-// WHY FOUR CREWS AND NOT ONE. With a single van the solver has nothing to
-// decide: the van is feasible or it is not. Four crews, each wrong in a
-// different way, put a real choice on screen for a flat battery (the demo's
-// job needs JUMP_START and BATTERY_REPLACEMENT, and no tow):
+// ONE CREW WINS EVERYTHING, THREE LOSE FOR A REASON YOU CAN SEE. Crew B can do
+// every fault the driver screen can report and carries every part, so whatever
+// the driver reports, B is the answer — and only B has a login, so the demo
+// always lands on the one technician screen the presenter has open. The other
+// three are on the board so the dispatcher's candidate table has something to
+// say:
 //
-//   A  nearest, but can only jump-start         -> rejected CAPABILITY_MISSING
-//   B  a little further, can do both, battery on board -> the one that wins
-//   C  a tow crew with both skills, no battery  -> rejected PART_UNAVAILABLE
-//   D  far away, can do everything, stocked     -> feasible, but costs more
+//   A  nearest, but can only jump-start          -> CAPABILITY_MISSING
+//   B  everything, every part, a flatbed so it can tow too      -> chosen
+//   C  every skill, NO stock, a little further   -> PART_UNAVAILABLE where a
+//      part is needed; loses on distance where none is
+//   D  everything, every part, far away          -> feasible, costs more
 //
-// scripts/demo-dry-check.ts runs the real engine against this board and exits
-// non-zero if B is not the crew the solver chooses.
+// B AND D ARE FLATBEDS because one fault (IMMOBILISED_UNKNOWN) needs a tow, and
+// feasibility rejects a van for any tow job (VEHICLE_TYPE_INCOMPATIBLE). Nothing
+// in the cost function looks at the vehicle kind, and the driver screen never
+// reports a basement (the one place a flatbed is barred), so a flatbed loses
+// nothing on the other faults.
+//
+// scripts/demo-dry-check.ts runs the real engine for every fault type and exits
+// non-zero if B is not the crew chosen.
+
+import { FAULT_CODES, capabilitiesForFault, partSkusForFault } from '../domain/faults.js';
 
 export type DemoUnitKind = 'VAN' | 'FLATBED_TOW';
 
@@ -39,12 +51,36 @@ export type DemoCrew = {
   // intersects the two — a skill only counts if the van carries the kit for it.
   capabilities: string[];
   stockedSkus: string[];
+  // Only B can be signed in to. A, C and D are real technicians on the board,
+  // but their accounts get a password nobody knows and are never listed.
+  canSignIn: boolean;
 };
 
+// Every capability and every part any fault needs, read from the same tables
+// dispatch and estimates use (src/domain/faults.ts), so a fault added there is
+// automatically covered by crew B rather than silently lost to it.
+function everyCapability(): string[] {
+  const codes = new Set<string>();
+  for (const fault of FAULT_CODES) {
+    for (const code of capabilitiesForFault(fault)) codes.add(code);
+  }
+  return [...codes].sort();
+}
+
+function everyPart(): string[] {
+  const skus = new Set<string>();
+  for (const fault of FAULT_CODES) {
+    for (const sku of partSkusForFault(fault)) skus.add(sku);
+  }
+  return [...skus].sort();
+}
+
+export const ALL_CAPABILITIES: string[] = everyCapability();
+export const ALL_PARTS: string[] = everyPart();
+
 // WHERE THE DRIVER IS. The driver form's coordinate boxes default to exactly
-// this point (public/driver.html), and DEMO.md tells the presenter to leave
-// them alone — so "closest to the driver" is measured from here.
-// Connaught Place, the same centroid the main seed's first zone uses.
+// this point (public/driver.html), so "closest to the driver" is measured from
+// here. Connaught Place, the same centroid the main seed's first zone uses.
 export const DEMO_DRIVER_LOCATION = { lat: 28.6152, lng: 77.2095 };
 
 export const DEMO_ZONE = {
@@ -52,7 +88,7 @@ export const DEMO_ZONE = {
   code: 'DMO',
   name: 'Demo Zone',
   // Wide enough to take in Hauz Khas to the south, where crew D waits.
-  boundary: { type: 'bbox', minLat: 28.54, maxLat: 28.65, minLng: 77.175, maxLng: 77.245 },
+  boundary: { type: 'bbox', minLat: 28.54, maxLat: 28.65, minLng: 77.175, maxLng: 77.26 },
 };
 
 export const DEMO_TENANT_ID = 'demo-tenant';
@@ -74,6 +110,18 @@ export const DEMO_DRIVER = {
   registration: 'DL01DM0001',
 };
 
+// THE ONE DESTINATION ON THE BOARD, for the tow fault. Open around the clock and
+// authorised for the demo car's brand, so a tow job is never refused for
+// opening hours during an evening demo.
+export const DEMO_WORKSHOP = {
+  id: 'demo-workshop',
+  code: 'WS-DMO',
+  name: 'Karol Bagh Auto Works',
+  lat: 28.6517,
+  lng: 77.1907,
+  brands: ['MARUTI_SUZUKI', 'HYUNDAI', 'TATA'],
+};
+
 // Distances are straight-line from DEMO_DRIVER_LOCATION.
 export const DEMO_CREWS: DemoCrew[] = [
   {
@@ -92,10 +140,11 @@ export const DEMO_CREWS: DemoCrew[] = [
     lng: 77.212,
     capabilities: ['JUMP_START'],
     stockedSkus: [],
+    canSignIn: false,
   },
   {
-    // ~1.9 km, at Gole Market. Can jump-start AND replace a battery, and
-    // carries one, so it covers both contending faults.
+    // ~1.9 km, at Gole Market. Every skill, every part — the answer to anything
+    // the driver can report.
     label: 'B',
     technicianId: 'demo-technician-b',
     userId: 'demo-user-tech-b',
@@ -104,17 +153,19 @@ export const DEMO_CREWS: DemoCrew[] = [
     employeeCode: 'DMO-TB',
     unitId: 'demo-unit-b',
     unitCode: 'DMO-VB',
-    unitKind: 'VAN',
+    unitKind: 'FLATBED_TOW',
     lat: 28.63,
     lng: 77.2,
-    capabilities: ['JUMP_START', 'BATTERY_REPLACEMENT'],
-    stockedSkus: ['BAT-45AH'],
+    capabilities: ALL_CAPABILITIES,
+    stockedSkus: ALL_PARTS,
+    canSignIn: true,
   },
   {
-    // ~1.5 km, towards Barakhamba Road. A tow crew: FLATBED_LOADING needs a
-    // flatbed, so this unit is a FLATBED_TOW rather than a van. Trained for
-    // both battery jobs but carrying no battery, and the demo board has no
-    // depot to fetch one from, so the parts layer rejects it.
+    // ~3.3 km, at Pragati Maidan. Every skill, nothing on board, and the demo
+    // board has no depot to fetch from — so the parts layer rejects it for any
+    // fault that consumes a part. It sits further out than B on purpose: for
+    // the two faults that consume nothing (a lockout, a tow) it is feasible,
+    // and loses on distance instead.
     label: 'C',
     technicianId: 'demo-technician-c',
     userId: 'demo-user-tech-c',
@@ -124,22 +175,16 @@ export const DEMO_CREWS: DemoCrew[] = [
     unitId: 'demo-unit-c',
     unitCode: 'DMO-VC',
     unitKind: 'FLATBED_TOW',
-    lat: 28.6255,
-    lng: 77.2195,
-    capabilities: ['JUMP_START', 'BATTERY_REPLACEMENT', 'FLATBED_LOADING'],
+    lat: 28.618,
+    lng: 77.243,
+    capabilities: ALL_CAPABILITIES,
     stockedSkus: [],
+    canSignIn: false,
   },
   {
-    // ~7.4 km, at Hauz Khas. Can do everything a non-starting car might need
-    // and carries the parts for all of it, so it covers 96% of the fault mass
-    // against B's 80% — and the cost function genuinely values that, because
-    // a crew that can fix the alternator too saves a second callout.
-    //
-    // HOW FAR IS FAR ENOUGH WAS MEASURED, not guessed. At ~4.4 km (Sarojini
-    // Nagar, the first position tried) D WON on real roads: OSRM put it only
-    // 3.5 minutes behind B, and its coverage was worth more than that. Under
-    // haversine B won by under 2 cost points — a margin a presenter's pin
-    // moved a few hundred metres could flip. Here B wins under both.
+    // ~7.4 km, at Hauz Khas. As capable as B and as well stocked — feasible for
+    // everything, and the crew a job requeues to when B declines. Distance is
+    // its only disadvantage.
     label: 'D',
     technicianId: 'demo-technician-d',
     userId: 'demo-user-tech-d',
@@ -148,11 +193,12 @@ export const DEMO_CREWS: DemoCrew[] = [
     employeeCode: 'DMO-TD',
     unitId: 'demo-unit-d',
     unitCode: 'DMO-VD',
-    unitKind: 'VAN',
+    unitKind: 'FLATBED_TOW',
     lat: 28.5494,
     lng: 77.2001,
-    capabilities: ['JUMP_START', 'BATTERY_REPLACEMENT', 'ALTERNATOR_REPLACEMENT', 'OBD_DIAGNOSTICS'],
-    stockedSkus: ['BAT-45AH', 'ALT-RECON', 'DRIVE-BELT', 'STR-MOTOR-RECON'],
+    capabilities: ALL_CAPABILITIES,
+    stockedSkus: ALL_PARTS,
+    canSignIn: false,
   },
 ];
 
