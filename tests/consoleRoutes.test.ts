@@ -327,6 +327,18 @@ async function buildFixture(): Promise<void> {
     });
   }
 
+  // RETIRE EVERY EARLIER RUN'S JOBS FIRST. They carry job_events, which are
+  // append-only, so they can never be deleted — and each one stayed PLANNED
+  // forever. jobA is HIGH_RISK, the queue sorts HIGH_RISK first and oldest
+  // first within it, so after ~200 runs the leftovers filled `/queue?limit=200`
+  // and pushed this run's own jobA off the page. It failed exactly that way on
+  // the 200th run. Cancelling takes them out of the queue's INTAKE/PLANNED
+  // filter; only this file's prefix is touched (CLAUDE.md, GOTCHAS).
+  await prismaBase.job.updateMany({
+    where: { id: { startsWith: `${PREFIX}-job-` }, status: { in: ['INTAKE', 'PLANNED'] } },
+    data: { status: 'CANCELLED' },
+  });
+
   const stamp = Date.now();
   jobA = `${PREFIX}-job-a-${stamp}`;
   jobB = `${PREFIX}-job-b-${stamp}`;
