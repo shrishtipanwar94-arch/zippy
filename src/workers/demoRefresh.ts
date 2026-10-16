@@ -1,6 +1,7 @@
 // THE DEMO BOARD'S FIFTEEN-MINUTE REFRESH — only when DEMO_MODE=true.
 //
-// Keeps the four demo crews on shift and their stock counted (see
+// Frees any demo van left stuck (src/demo/freeDemoVans.ts), then keeps the
+// four demo crews on shift and their stock counted (see
 // src/demo/refreshDemoShifts.ts and src/demo/refreshDemoStock.ts for why each
 // goes stale on its own). Scheduled on the CLEANUP QUEUE, the periodic-work
 // queue, beside the sweep and the payout run, and told apart by job name.
@@ -19,6 +20,7 @@ import { logger } from '../infra/logger.js';
 import { prismaBase } from '../infra/prismaBase.js';
 import { refreshDemoShifts } from '../demo/refreshDemoShifts.js';
 import { refreshDemoStock } from '../demo/refreshDemoStock.js';
+import { freeStuckDemoVans } from '../demo/freeDemoVans.js';
 
 export const DEMO_REFRESH_SCHEDULER_ID = 'demo-refresh';
 export const DEMO_REFRESH_JOB_NAME = 'demo-refresh';
@@ -38,9 +40,16 @@ export async function scheduleDemoRefresh(cleanupQueue: Queue): Promise<void> {
 
 // Called directly once on worker boot, and by the scheduled job after that.
 export async function runDemoRefresh(): Promise<string> {
+  // Free stuck vans FIRST, so a van this frees is also put back on shift and
+  // re-counted by the two calls after it.
+  const freed = await freeStuckDemoVans(prismaBase);
   const technicians = await refreshDemoShifts(prismaBase);
   const units = await refreshDemoStock(prismaBase);
-  return `demo refresh: ${technicians.length} shifts reopened, ${units.length} vans re-counted`;
+  return (
+    `demo refresh: ${technicians.length} shifts reopened, ${units.length} vans re-counted, ` +
+    `${freed.offersTimedOut} stale offers timed out, ${freed.holdsReleased} stale holds released, ` +
+    `vans freed: ${freed.vansFreed.join(', ') || 'none'}`
+  );
 }
 
 export async function processDemoRefresh(job: Job): Promise<void> {
