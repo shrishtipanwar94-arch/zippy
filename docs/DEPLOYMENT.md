@@ -1,45 +1,112 @@
 # Deployment
 
-This is the target shape. Nothing here is built yet — deployment work lands
-in Phase 26. It is written down now so the choices made along the way stay
-compatible with it.
+What is deployed, how, and what it deliberately leaves out. The one-time
+switch from the full seed to the demo board is in
+[LIVE-CUTOVER.md](LIVE-CUTOVER.md).
 
 ## Shape
 
-- ONE platform. ONE origin. TWO always-on processes: `web` and `worker`.
-- Managed Postgres and managed Redis from the same provider.
-- Migrations run on release (`npm run db:deploy`).
-- The seed is idempotent and safe to run on every release.
+One Railway project, one public origin, four services:
 
-## No free tier that sleeps
+| service | built from | what it is |
+| --- | --- | --- |
+| `web` | `Dockerfile`, `ZIPPY_PROCESS=web` | migrates, builds the demo board, serves the API, the consoles and the WebSocket |
+| `worker` | `Dockerfile`, `ZIPPY_PROCESS=worker` | waits for migrations, then runs the BullMQ queues, the health loop and the demo refresh |
+| `Postgres` | Railway template | **PostgreSQL 16** — the source of truth (invariant 1) |
+| `Redis` | Railway template | **Redis 7** — cache and queues only |
 
-The simulator, the queues and the WebSocket connections must stay up. A
-platform that spins the process down after idle produces an empty dispatch
-board, which is the one thing an interviewer must never open the link to.
-Budget for a paid always-on tier (~$10–20/month).
+`web` and `worker` are ONE image started two ways (`scripts/start-process.sh`),
+so the two can never run different versions of the engine against one
+database. Only `web` has a public domain.
 
-## No separate frontend host
+### Versions are pinned to what the tests run against
 
-A split frontend does not fix a cold start — the cold start lives in the API
-and the WebSocket handshake, not in serving the HTML. And a serverless
-frontend host cannot hold the persistent WebSocket connections the dispatch
-board depends on. Express serves `/public` from the same origin.
+PostgreSQL **16** and Redis **7**: `docker-compose.yml` (`postgres:16`,
+`redis:7`) and the testcontainers suite use exactly these, and so must the
+deployment. Railway's templates default to newer majors — the first deploy of
+this project came up on Postgres 18 and Redis 8.2. A major version cannot be
+changed in place (a data directory written by 18 will not start under 16), so
+the fix is a fresh service on the right image, done during the cutover:
+see [LIVE-CUTOVER.md](LIVE-CUTOVER.md), step 4.
 
-## Keeping the deployed board alive
+| service | image to use |
+| --- | --- |
+| Postgres | `ghcr.io/railwayapp-templates/postgres-ssl:16` |
+| Redis | `redis:7` |
 
-- The simulator (Phase 3) runs continuously on the deployed instance so the
-  board is never empty.
-- A scheduled reset every 4 hours, announced in the UI before it happens.
-- Four demo accounts seeded, with the dispatcher console featured.
+### No routing service
 
-## LLM cost ceiling (from Phase 16)
+Production runs with **haversine routing** (`ROUTING_MODE` unset means
+`HAVERSINE` when `NODE_ENV=production`; see `chooseRoutingMode` in
+`src/infra/config.ts`). The OSRM service was dropped: one fewer always-on
+container, and the Delhi graph was the largest image in the deployment.
+Haversine is local and deterministic, so invariant 10 holds; what is lost is
+road shape — one-way streets and dividers are invisible to a straight line.
+`GET /health` reports `routing.mode`, and every estimate stays flagged
+degraded. Development and the test suites keep OSRM (`docker compose up`).
 
-- A per-IP rate limit on intake.
-- A global daily token budget. Crossing it trips DEGRADED mode, which falls
-  back to the deterministic intake path. The resilience fallback and the cost
-  ceiling are the same mechanism.
+## Variables
 
-## The rule everything serves
+Set on BOTH `web` and `worker` unless noted. Secrets are platform variables,
+never committed and never baked into an image (`.dockerignore` drops `.env`).
 
-An interviewer opening the link cold sees something interesting within thirty
-seconds, without clicking anything.
+| variable | value |
+| --- | --- |
+| `NODE_ENV` | `production` |
+| `ZIPPY_PROCESS` | `web` on web, `worker` on worker |
+| `DATABASE_URL` | `${{Postgres.DATABASE_URL}}` (private network) |
+| `REDIS_URL` | `${{Redis.REDIS_URL}}` (private network) |
+| `PUBLIC_URL`, `WS_ORIGIN`, `CORS_ORIGINS` | `https://${{web.RAILWAY_PUBLIC_DOMAIN}}` |
+| `JWT_ACCESS_SECRET`, `JWT_REFRESH_SECRET` | two different random 32+ character strings |
+| `SEED_PASSWORD` | every seeded login's password. Required in production; there is no fallback |
+| `DEMO_MODE` | `true` for the demo board (below) |
+
+`PORT` is injected by Railway. `OSRM_URL` is no longer read in production.
+The LLM and Razorpay keys are optional; without them intake uses the symptom
+picker and payments use the stub provider, and dispatch is unaffected.
+
+## The demo board (`DEMO_MODE=true`)
+
+- **On every `web` boot**, after `prisma migrate deploy` and before serving,
+  `prisma/seed/demoMinimal.ts` runs `ensureDemoBoard`: one zone, one
+  dispatcher, one driver with a car, four crews (`src/demo/demoCrews.ts`).
+  Idempotent, so it is safe on every boot. If it fails, the boot fails and the
+  deploy shows as failed rather than serving an empty board.
+- **On `worker` boot and every 15 minutes**, `refreshDemoShifts` and
+  `refreshDemoStock` keep the crews on shift and their stock counted
+  (`src/workers/demoRefresh.ts`). Without this the board stops working within
+  eight hours: shifts end, and a stock count that old reads UNVERIFIED.
+- **A van on a live job is never touched** by either (invariant 7).
+- `npx tsx scripts/demo-dry-check.ts` checks the board makes the choice it was
+  built for, and exits non-zero if not.
+
+## Failure and restart
+
+- **Migrations run in one place**, the `web` boot. The `worker` waits for every
+  migration its image ships before its first query
+  (`src/infra/waitForMigrations.ts`), up to five minutes, then exits non-zero.
+- **Restart on failure**: `railway.json` sets `ON_FAILURE`, 10 retries, for
+  every service built from the repo.
+- **Health**: `GET /health` is 200 only when Postgres and Redis answer, 503
+  otherwise, and carries the ladder and the routing mode.
+- **The chaos panel does not exist in production** — `/chaos` routes are not
+  mounted, so they are 404 (`tests/productionRoutes.test.ts`).
+
+## Rules this deployment keeps
+
+- **No free tier that sleeps.** The queues, the health loop and the WebSocket
+  connections must stay up; a platform that spins the process down produces an
+  empty board, which is the one thing a visitor must never open the link to.
+- **No separate frontend host.** Express serves `/public` from the same origin,
+  because the WebSocket the board depends on cannot live on a static host.
+
+## Not built
+
+Written down earlier as intentions; none of these exist yet. Do not describe
+them as features.
+
+- A simulator running continuously on the deployed instance.
+- A scheduled board reset every four hours, announced in the UI.
+- A per-IP rate limit on intake, and a daily LLM token budget that trips
+  DEGRADED mode.
+- Backups. The Railway trial's Postgres has none configured.
