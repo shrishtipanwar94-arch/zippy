@@ -12,7 +12,7 @@
 // prisma/migrations) with the ones the database has FINISHED applying
 // (`_prisma_migrations`), and waits, with growing gaps, until every one is
 // there. If they never arrive it throws, the process exits non-zero, and the
-// platform's restart-on-failure policy starts it again (railway.json).
+// platform's restart-on-failure policy starts it again (docs/DEPLOYMENT.md).
 
 import { readdirSync } from 'node:fs';
 import { join } from 'node:path';

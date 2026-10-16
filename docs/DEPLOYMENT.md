@@ -85,8 +85,12 @@ picker and payments use the stub provider, and dispatch is unaffected.
 - **Migrations run in one place**, the `web` boot. The `worker` waits for every
   migration its image ships before its first query
   (`src/infra/waitForMigrations.ts`), up to five minutes, then exits non-zero.
-- **Restart on failure**: `railway.json` sets `ON_FAILURE`, 10 retries, for
-  every service built from the repo.
+- **Restart on failure**: `web` and `worker` run Railway's `ON_FAILURE` restart
+  policy with 10 retries — its default, confirmed on the live services through
+  the API. It is a dashboard setting, not a file: a `railway.json` pinning it
+  was tried and dropped, because Railway deprecated config-as-code and stops
+  reading those files on 2026-12-01. If the setting should live in the repo,
+  Railway's replacement is `.railway/railway.ts` (`railway config migrate`).
 - **Health**: `GET /health` is 200 only when Postgres and Redis answer, 503
   otherwise, and carries the ladder and the routing mode.
 - **The chaos panel does not exist in production** — `/chaos` routes are not
