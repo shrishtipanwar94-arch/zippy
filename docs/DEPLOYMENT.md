@@ -74,18 +74,37 @@ picker and payments use the stub provider, and dispatch is unaffected.
 
 ## The demo board (`DEMO_MODE=true`)
 
+Turned on with the steps in [LIVE-CUTOVER.md](LIVE-CUTOVER.md). **Nothing is
+wiped**: the full seed stays in the database and demo mode hides it.
+
 - **On every `web` boot**, after `prisma migrate deploy` and before serving,
-  `prisma/seed/demoMinimal.ts` runs `ensureDemoBoard`: one zone, one
-  dispatcher, one driver with a car, four crews (`src/demo/demoCrews.ts`).
-  Idempotent, so it is safe on every boot. If it fails, the boot fails and the
-  deploy shows as failed rather than serving an empty board.
-- **On `worker` boot and every 15 minutes**, `refreshDemoShifts` and
-  `refreshDemoStock` keep the crews on shift and their stock counted
-  (`src/workers/demoRefresh.ts`). Without this the board stops working within
-  eight hours: shifts end, and a stock count that old reads UNVERIFIED.
-- **A van on a live job is never touched** by either (invariant 7).
-- `npx tsx scripts/demo-dry-check.ts` checks the board makes the choice it was
-  built for, and exits non-zero if not.
+  `prisma/seed/demoMinimal.ts` runs `ensureDemoBoard`: the demo zone, a
+  dispatcher, a driver with a car, four crews (`src/demo/demoCrews.ts` — B can
+  do everything and carries every part; A, C and D each lose for a reason the
+  candidate table shows; only B can sign in), one 24x7 workshop, and once, a
+  finished reference job run through the real dispatch path
+  (`prisma/seed/demoReferenceJob.ts`). Idempotent. If it fails, the boot fails.
+- **Hidden by filter, not deleted** (`src/demo/demoScope.ts`): the solver's
+  snapshot and every dispatcher list see only the demo board — demo-tenant live
+  jobs plus the reference job, the four crews, no depots, the demo workshop.
+  With the flag off each filter is `{}`.
+- **Two moments that had no trigger get one** (`src/demo/demoDispatch.ts`): a
+  job whose intake finishes is re-planned so a dispatch card appears; a
+  declined or timed-out offer is re-planned without whoever refused.
+- **On `worker` boot and every 15 minutes** (`src/workers/demoRefresh.ts`): free
+  any demo van left stuck (`src/demo/freeDemoVans.ts`), retire demo jobs left
+  unassigned for over an hour, re-open shifts, re-count stock. A van on a
+  running job is never touched (invariant 7). A completed job's van is also
+  freed immediately, because completion alone never frees a van (see Not built).
+- **Sign-in** (`GET /login/accounts`): only the three demo accounts are offered.
+- `npx tsx scripts/demo-dry-check.ts` runs the engine for every fault type and,
+  in demo mode, every fault through the real routes to crew B's screen. Exits
+  non-zero on any failure; the tow is reported as a known limitation.
+
+**The assistant's spending ceiling** applies in production whatever the demo
+flag: `AI_HOURLY_LIMIT_PER_IP` (20) and `AI_DAILY_CALL_CAP` (300) on web, counted
+in Redis (`src/ai/usageLimits.ts`). Past either, the driver gets the question
+picker and a one-line reason.
 
 ## Failure and restart
 
@@ -121,3 +140,11 @@ them as features.
 - A per-IP rate limit on intake, and a daily LLM token budget that trips
   DEGRADED mode.
 - Backups. The Railway trial's Postgres has none configured.
+- **A completed job never frees its van.** Product-wide: the only code that
+  sets a unit AVAILABLE is releasing a crew during a reassignment. Demo mode
+  works around it for the demo vans; on the main seed every van stays ON_JOB
+  after its first job.
+- **Tows cannot be dispatched**: no workshop counterparty can confirm the
+  destination (INTERVIEW.md 15.44).
+- **No job cancellation route**, and no price range shown to the driver before
+  the technician's estimate.
