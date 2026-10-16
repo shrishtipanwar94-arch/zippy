@@ -85,7 +85,7 @@ export function connect() {
     // A THIRD CONSUMER, and the only one that is not a state write. The
     // driver's panel is worded by the server, so an event means "re-read the
     // driver view" rather than "patch this object". See state.onJobEvent.
-    notifyJobEvent(event.jobId);
+    notifyJobEvent(event.jobId, event.eventType);
     if (jobChanged || timelineChanged) render();
   });
 

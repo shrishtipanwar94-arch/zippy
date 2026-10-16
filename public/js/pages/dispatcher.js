@@ -31,6 +31,7 @@ import {
   setEscalationDecision,
   setActions,
   getState,
+  onJobEvent,
 } from '../state.js';
 import * as api from '../api.js';
 import { connect, onPoll } from '../socket.js';
@@ -351,6 +352,36 @@ function startHealthPolling() {
     render();
   }, HEALTH_POLL_MS);
 }
+
+// THE FEW EVENTS THAT CHANGE THE QUEUE OR THE ACTION LIST, refetched when they
+// arrive. Everything else stays a Refresh-button read, for the reason above —
+// but a job reported, a card raised or executed, or a reservation unwinding is
+// exactly what a dispatcher is waiting to see, and needing to press Refresh to
+// see a new breakdown is the board failing at its one job. Found walking the
+// demo: a driver's report and its dispatch card sat invisible until Refresh.
+// Debounced, so one burst of events (a card raised with its run recorded)
+// costs one refetch.
+const BOARD_CHANGING_EVENTS = new Set([
+  'JOB_CREATED',
+  'INTAKE_COMPLETED',
+  'ACTION_RECOMMEND',
+  'ACTION_EXECUTED',
+  'ACTION_CANCELLED',
+  'DISPATCH_REQUEUED',
+  'DISPATCH_COMMITTED',
+  'JOB_CANCELLED',
+  'SAFETY_LEVEL_CHANGED',
+]);
+let boardRefreshTimer = null;
+
+onJobEvent((_jobId, eventType) => {
+  if (!BOARD_CHANGING_EVENTS.has(eventType) || boardRefreshTimer) return;
+  boardRefreshTimer = setTimeout(async () => {
+    boardRefreshTimer = null;
+    await refreshBoard();
+    render();
+  }, 400);
+});
 
 // THE POLLING FALLBACK'S CALLBACK. Registered here rather than in socket.js
 // because what is worth refetching is a property of this page: the board, the

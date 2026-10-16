@@ -541,8 +541,10 @@ export function onJobEvent(listener) {
   jobEventListeners.push(listener);
 }
 
-export function notifyJobEvent(jobId) {
-  for (const listener of jobEventListeners) listener(jobId);
+// The event type rides along so a page can react to the few events it cares
+// about; listeners that only need the job id simply ignore the second argument.
+export function notifyJobEvent(jobId, eventType) {
+  for (const listener of jobEventListeners) listener(jobId, eventType);
 }
 
 export function setNextQuestion(next) {
