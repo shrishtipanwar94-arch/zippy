@@ -1147,3 +1147,142 @@ vehicle asking fewer intake questions — never touched the dashboard at all.
 and the test is what proved it. A requeued job sat in a 50-row slice of 9,274
 pending rows with nothing marking it, so the first thing that spoke was the SLA
 breach card. Visible only after it becomes a breach is not visible.
+
+## Phase 26 — a self-maintaining demo board on Railway / 2026-10-17 / (this commit)
+
+### Built
+- `src/demo/demoCrews.ts` — the demo cast as plain data: zone, dispatcher,
+  driver, four crews (A Janpath JUMP_START only; B Gole Market, both battery
+  skills + BAT-45AH; C Barakhamba flatbed, both skills, no stock; D Hauz Khas,
+  four skills, fully stocked). `DEMO_DRIVER_LOCATION` = the driver form's
+  default coordinates.
+- `src/demo/busyDemoUnits.ts` `findBusyUnitIds`, `src/demo/idleDemoCrews.ts`
+  `findIdleDemoCrews`, `src/demo/refreshDemoShifts.ts`,
+  `src/demo/refreshDemoStock.ts`.
+- `prisma/seed/demoBoard.ts` `ensureDemoBoard`, `prisma/seed/demoCrewRows.ts`
+  `seedDemoCrew`; `prisma/seed/demoMinimal.ts` reduced to the CLI entry.
+- `src/workers/demoRefresh.ts` — 15-minute job scheduler on the cleanup queue,
+  removed when DEMO_MODE is off; `src/worker.ts` runs it once on boot.
+- `scripts/start-process.sh` — web runs ensureDemoBoard after migrations when
+  `DEMO_MODE=true`.
+- config: `DEMO_MODE`, `ROUTING_MODE`, `chooseRoutingMode`; `/health` gains
+  `routing: { mode, detail }`; `src/infra/routing.ts` short-circuits to
+  haversine in HAVERSINE mode.
+- `src/infra/waitForMigrations.ts` — `waitUntilApplied`, `missingMigrations`.
+- `mountChaosRoutes(app, isProduction)`; `seedPassword(env)`.
+- `scripts/demo-dry-check.ts` rewritten around `solve()`, exits 1 unless B;
+  now shipped in the image.
+- `prisma/cutover/wipe-all-data.sql`, `docs/LIVE-CUTOVER.md`,
+  `docs/DEPLOYMENT.md` rewritten, DEMO.md rewritten for four crews.
+- Tests: demoBoard, seedPassword, routingMode, productionRoutes,
+  waitForMigrations; health gains a routing assertion.
+- Live: Railway `osrm` service deleted, `OSRM_URL` removed from web and worker.
+
+### Decisions
+Decision: four crews, each failing a different filter, instead of one van.
+Why: with one van the solver has no choice to show; A, C and D make a hard
+filter, a parts filter and a real cost trade-off each visible.
+Alternative: one capable van. Why not: nothing to explain on the inspector.
+Tradeoff: the outcome now depends on cost weights, so it needs a check.
+
+Decision: when the dry check chose D, move D (the seed), not the cost function.
+Why: the engine is what the evaluation harness measures; bending it for a demo
+makes the demo a lie. Alternative: strip D's extra skills. Why not: D's wider
+coverage is the product's thesis and worth showing losing to distance honestly.
+Tradeoff: D's position encodes a margin (B wins by ~14 cost points on
+haversine, ~4.7 on OSRM roads) that a cost-weight change could erase — the dry
+check is what notices.
+
+Decision: busy vans are skipped, not refused, by the seed.
+Why: it now runs on every web boot; a refusal would stop the site starting.
+Alternative: keep refusing. Why not: one stuck job takes the site down.
+
+Decision: refresh STOCK as well as shifts every 15 minutes.
+Why: counts older than 8h read UNVERIFIED, which the parts layer treats as
+absent — B's battery would vanish overnight and D would win.
+Alternative: only shifts, as asked. Why not: the board breaks within a day.
+Tradeoff: a fixture pretending a recount happened, gated by DEMO_MODE.
+
+Decision: periodic refresh as a BullMQ job scheduler, not a timer.
+Why: the health loop documents itself as the one deliberate bare timer, and the
+cleanup queue is the periodic-work queue. Schedulers persist in Redis, so
+DEMO_MODE=false removes it explicitly.
+
+Decision: haversine as the explicit production default (ROUTING_MODE).
+Why: OSRM was the biggest always-on cost; an explicit mode avoids paying
+OSRM_TIMEOUT_MS per call to discover it is gone. Alternative: keep OSRM.
+Why not: trial credit. Tradeoff: no one-way or divider awareness in
+production; `/health` states it; development and tests keep OSRM. Deviates
+from the stack line "self-hosted OSRM from Phase 6"; invariant 10 still holds.
+
+Decision: wipe via one TRUNCATE in a reviewed SQL file a person runs.
+Why: atomic, keeps `_prisma_migrations`, and gets past the append-only row
+triggers precisely because it is not a row operation — which is why the app
+never calls it.
+
+Decision: drop railway.json the same day it was added. Why: Railway stops
+reading config-as-code on 2026-12-01, and it only restated the live default.
+
+### Concurrency
+Scenario: the 15-minute refresh (or a web boot) runs while a dispatcher holds a
+demo van for an offer. What races: the refresh resetting the van to AVAILABLE
+against the saga consuming the hold. Why dangerous: the van reads AVAILABLE
+with a job on it and a second job lands on it — invariant 7. How handled:
+`findBusyUnitIds` treats an unfinished assigned job or an unexpired ACTIVE hold
+as busy, and every demo write skips busy vans. Assumption relied on: the
+check-then-write window is not atomic — a hold taken between the read and the
+write can still be overwritten. Accepted for a demo board; the real dispatch
+path's holds are conditional updates and are unaffected.
+
+Scenario: worker and web boot together on a deploy with new migrations.
+What races: the worker's first queries against web's `migrate deploy`. How
+handled: the worker waits for every shipped migration to appear finished in
+`_prisma_migrations`, backoff to 15s, 5 min cap, then exits non-zero and the
+platform restarts it.
+
+### Weaknesses introduced
+- The busy check is read-then-write, not a conditional update (above). Matters
+  only if a reservation lands inside a refresh's few milliseconds.
+- Haversine in production: ETAs ignore road shape; flagged degraded everywhere.
+- The demo outcome depends on cost weights and is guarded only by the dry
+  check, which is not in the test suite (it needs a demo-only database).
+- The four-crew browser flow has not been walked end to end; DEMO.md marks
+  which screens are engine-measured only.
+- Live still runs Postgres 18 / Redis 8.2 against 16 / 7 tested; the swap is
+  an untested appendix in LIVE-CUTOVER.md.
+- No backups on the Railway Postgres.
+- The demo crews compete with other suites' fixtures in zippy_test while
+  tests/demoBoard.test.ts runs; they did win demoFlow's job once.
+
+### Concepts now genuinely in use
+Idempotent boot-time seeding on natural keys; job schedulers persisted in
+Redis, and why removal must be explicit; migration gating between two
+processes; TRUNCATE versus row-level triggers; environment-dependent defaults
+stated in health output.
+
+### What broke
+- The dry check's first real run chose D: 96% coverage beat B's 80% on OSRM
+  roads with D at ~4.4 km. Fixed by moving D to ~7.4 km and widening the zone.
+  The zone upsert had `update: {}` and would never have propagated that, so it
+  now updates its geometry.
+- `process.exit()` in the dry check aborted Node on Windows with a libuv
+  assertion (exit 127). Switched to `process.exitCode`.
+- `consoleRoutes` failed on its own: 199 leftover HIGH_RISK `console-job-a-*`
+  jobs pushed its newest past `/queue?limit=200`. A pre-existing time bomb that
+  about 200 runs set off; it now cancels its own leftovers first.
+- `demoFlow` failed in parallel: it legitimately picked demo crew B, and the
+  demo test's afterAll forced the held van OFFLINE. afterAll now skips busy
+  vans, and an expired-but-ACTIVE hold no longer counts as busy.
+- The migration wait logged "relation _prisma_migrations does not exist"
+  because Prisma prints caught raw-query errors; it now checks to_regclass.
+- The image did not contain the dry check the docs told people to run in it.
+- `railway variable delete` has no --skip-deploys; each delete redeployed.
+
+### Interview angle
+"How do you keep a public demo from rotting?" Make the board ensure itself on
+boot and refresh its clocks from the worker, skipping anything on a live job,
+and give it a check that fails if the solver stops making the intended choice.
+
+"Your demo picked the wrong van — what did you change?" The seed, not the cost
+function: the far crew's wider coverage really was worth more at 4 km, so the
+fixture was wrong, not the engine.
