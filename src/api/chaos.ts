@@ -56,8 +56,11 @@ const actionSchema = z.object({
   minutes: z.number().int().min(1).max(1440).default(10),
 });
 
-export function mountChaosRoutes(app: Express): void {
-  if (config.isProduction) {
+// `isProduction` is a parameter only so a test can build a production-shaped
+// app without restarting the process with NODE_ENV=production (config is read
+// once, at import). Every real caller passes nothing and gets the real config.
+export function mountChaosRoutes(app: Express, isProduction: boolean = config.isProduction): void {
+  if (isProduction) {
     logger.info('chaos controls are not mounted in production');
     return;
   }
