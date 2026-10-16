@@ -13,14 +13,22 @@ import { hashSync } from '@node-rs/argon2';
 
 export const DEV_PASSWORD = 'password-dev-only';
 
-function seedPassword(): string {
-  const fromSecret = process.env.SEED_PASSWORD;
+// Takes the environment as an argument so the rule can be tested without
+// touching process.env. Whitespace-only counts as unset: a secret pasted as a
+// stray space would otherwise become every seeded user's password.
+export function seedPassword(env: { NODE_ENV?: string; SEED_PASSWORD?: string }): string {
+  const fromSecret = env.SEED_PASSWORD?.trim();
   if (fromSecret) return fromSecret;
-  if (process.env.NODE_ENV === 'production') {
-    throw new Error('SEED_PASSWORD must be set to seed a production database');
+  if (env.NODE_ENV === 'production') {
+    throw new Error(
+      'SEED_PASSWORD is not set. In production every seeded login, including the ' +
+        'demo board the web process builds on boot when DEMO_MODE=true, takes its ' +
+        'password from SEED_PASSWORD, and there is deliberately no fallback. Set it ' +
+        'on the service (never in a committed file) and redeploy.',
+    );
   }
   return DEV_PASSWORD;
 }
 
 // Named for what it is in development; in production it hashes SEED_PASSWORD.
-export const DEV_PASSWORD_HASH: string = hashSync(seedPassword());
+export const DEV_PASSWORD_HASH: string = hashSync(seedPassword(process.env));
