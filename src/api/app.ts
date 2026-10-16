@@ -7,6 +7,7 @@ import { randomUUID } from 'node:crypto';
 import { config } from '../infra/config.js';
 import { logger } from '../infra/logger.js';
 import { healthRouter } from './health.js';
+import { loginAccountsRouter } from './loginAccounts.js';
 import { authRouter } from './auth.js';
 import { jobsRouter } from './jobs.js';
 import { vehiclesRouter } from './vehicles.js';
@@ -86,6 +87,7 @@ export function createApp(): Express {
   app.use(express.json({ limit: '1mb' }));
 
   app.use(healthRouter);
+  app.use(loginAccountsRouter);
   app.use(authRouter);
   app.use(jobsRouter);
   app.use(vehiclesRouter);

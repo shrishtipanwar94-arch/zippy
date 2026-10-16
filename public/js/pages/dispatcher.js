@@ -5,6 +5,7 @@
 // for jobs it never subscribed to — that is the zone fan-out doing its job, and
 // it is why this page needs no per-job subscription to stay current.
 
+import { applyLoginHints } from '../loginHints.js';
 import {
   registerPanel,
   render,
@@ -78,6 +79,9 @@ wireChatActions();
 function value(selector) {
   return document.querySelector(selector).value.trim();
 }
+
+// Demo mode swaps in the demo account for this page; see loginHints.js.
+void applyLoginHints('dispatcher');
 
 document.querySelector('[data-action="login"]').addEventListener('click', async () => {
   try {

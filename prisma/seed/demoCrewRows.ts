@@ -9,18 +9,22 @@
 import type { PrismaClient } from '@prisma/client';
 import type { DemoCrew } from '../../src/demo/demoCrews.js';
 import { DEMO_ZONE } from '../../src/demo/demoCrews.js';
-import { DEV_PASSWORD_HASH } from './devPassword.js';
+import { DEV_PASSWORD_HASH, unusablePasswordHash } from './devPassword.js';
 
 type SeededCrew = { technicianId: string; unitId: string };
 
 async function seedTechnician(db: PrismaClient, crew: DemoCrew): Promise<string> {
+  // Only crew B can sign in. A, C and D get a password nobody knows, re-rolled
+  // on every boot, so their accounts exist (a technician row needs a user) but
+  // cannot be used and are never listed (src/api/loginAccounts.ts).
+  const passwordHash = crew.canSignIn ? DEV_PASSWORD_HASH : unusablePasswordHash();
   const user = await db.user.upsert({
     where: { email: crew.email },
-    update: { passwordHash: DEV_PASSWORD_HASH, name: crew.name },
+    update: { passwordHash, name: crew.name },
     create: {
       id: crew.userId,
       email: crew.email,
-      passwordHash: DEV_PASSWORD_HASH,
+      passwordHash,
       role: 'TECHNICIAN',
       name: crew.name,
     },

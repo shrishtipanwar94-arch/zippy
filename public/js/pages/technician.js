@@ -13,6 +13,7 @@
 // only for the same kind of reason: an offer expires in forty-five seconds,
 // and a count of the van is a thing somebody is doing while standing still.
 
+import { applyLoginHints } from '../loginHints.js';
 import {
   getState,
   onJobEvent,
@@ -181,6 +182,9 @@ async function refreshVanStock() {
 }
 
 onJobEvent(() => refreshWork());
+
+// Demo mode swaps in the demo account for this page; see loginHints.js.
+void applyLoginHints('technician');
 
 document.querySelector('[data-action="login"]').addEventListener('click', async () => {
   try {

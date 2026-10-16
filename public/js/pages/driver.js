@@ -10,6 +10,7 @@
 // object" — see state.onJobEvent for why that hook exists rather than a render
 // function quietly doing I/O.
 
+import { applyLoginHints } from '../loginHints.js';
 import {
   getState,
   onJobEvent,
@@ -113,6 +114,9 @@ document.querySelector('[data-action="pay-callout"]')?.addEventListener('click',
 onJobEvent((jobId) => {
   if (jobId === getState().activeJobId) refreshDriverView();
 });
+
+// Demo mode swaps in the demo account for this page; see loginHints.js.
+void applyLoginHints('driver');
 
 document.querySelector('[data-action="login"]').addEventListener('click', async () => {
   try {

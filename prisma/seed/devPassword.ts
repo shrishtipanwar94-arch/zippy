@@ -9,6 +9,7 @@
 // one rather than quietly falling back — a public demo whose dispatcher login
 // is printed on GitHub is a public dispatcher console.
 
+import { randomBytes } from 'node:crypto';
 import { hashSync } from '@node-rs/argon2';
 
 export const DEV_PASSWORD = 'password-dev-only';
@@ -32,3 +33,12 @@ export function seedPassword(env: { NODE_ENV?: string; SEED_PASSWORD?: string })
 
 // Named for what it is in development; in production it hashes SEED_PASSWORD.
 export const DEV_PASSWORD_HASH: string = hashSync(seedPassword(process.env));
+
+// A PASSWORD NOBODY KNOWS, for accounts that must exist but never sign in:
+// the demo board's crews A, C and D are real technicians the solver weighs,
+// but only crew B is meant to be logged in to. Hashing 32 random bytes that
+// are thrown away immediately is the plainest way to say "no password"
+// without a nullable column or a special case in the login route.
+export function unusablePasswordHash(): string {
+  return hashSync(randomBytes(32).toString('hex'));
+}
