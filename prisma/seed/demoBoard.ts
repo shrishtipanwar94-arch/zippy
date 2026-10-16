@@ -29,20 +29,17 @@ import { seedPricing } from './pricing.js';
 import { seedIntakeQuestions } from './intakeQuestions.js';
 import { seedLedgerAccounts } from './ledgerAccounts.js';
 import { seedDemoCrew } from './demoCrewRows.js';
-import type { SeededCrew } from './demoCrewRows.js';
 import { findBusyUnitIds } from '../../src/demo/busyDemoUnits.js';
+import { refreshDemoShifts } from '../../src/demo/refreshDemoShifts.js';
+import { refreshDemoStock } from '../../src/demo/refreshDemoStock.js';
 import {
   DEMO_CREWS,
   DEMO_DISPATCHER,
   DEMO_DRIVER,
   DEMO_DRIVER_LOCATION,
-  DEMO_STOCK_QUANTITY,
   DEMO_TENANT_ID,
   DEMO_ZONE,
 } from '../../src/demo/demoCrews.js';
-
-const SHIFT_STARTED_HOURS_AGO = 1;
-const SHIFT_ENDS_IN_HOURS = 8;
 
 export type DemoBoardSummary = {
   crewsReady: number;
@@ -155,35 +152,6 @@ async function findBusyUnitCodes(db: PrismaClient): Promise<Set<string>> {
   return busyCodes;
 }
 
-// THE SHIFT, RELATIVE TO NOW. A shift written as a clock time goes stale the
-// next day and every unit then fails NO_TECHNICIAN_ON_SHIFT.
-async function openShift(db: PrismaClient, seeded: SeededCrew, now: Date): Promise<void> {
-  await db.technicianShift.deleteMany({ where: { technicianId: seeded.technicianId } });
-  await db.technicianShift.create({
-    data: {
-      technicianId: seeded.technicianId,
-      zoneId: DEMO_ZONE.id,
-      startsAt: new Date(now.getTime() - SHIFT_STARTED_HOURS_AGO * 60 * 60_000),
-      endsAt: new Date(now.getTime() + SHIFT_ENDS_IN_HOURS * 60 * 60_000),
-    },
-  });
-}
-
-// COUNTED JUST NOW. Stock whose count has aged out reads UNVERIFIED, and
-// src/engine/partSourcing.ts treats UNVERIFIED as absent.
-async function stockVan(db: PrismaClient, seeded: SeededCrew, skus: string[], now: Date): Promise<void> {
-  for (const sku of skus) {
-    const part = await db.part.findFirst({ where: { sku }, select: { id: true } });
-    if (!part) throw new Error(`part ${sku} is not in the catalogue`);
-    const counted = { quantity: DEMO_STOCK_QUANTITY, startingQty: DEMO_STOCK_QUANTITY, confirmedAt: now };
-    await db.unitStock.upsert({
-      where: { unitId_partId: { unitId: seeded.unitId, partId: part.id } },
-      update: counted,
-      create: { unitId: seeded.unitId, partId: part.id, ...counted },
-    });
-  }
-}
-
 export async function ensureDemoBoard(db: PrismaClient, now: Date = new Date()): Promise<DemoBoardSummary> {
   // Read BEFORE anything is written, so a van on a live job is recognised as
   // busy from the state the presenter left it in.
@@ -199,14 +167,14 @@ export async function ensureDemoBoard(db: PrismaClient, now: Date = new Date()):
   await seedZoneAndTenant(db);
   await seedDriver(db);
 
-  let crewsReady = 0;
   for (const crew of DEMO_CREWS) {
-    const seeded = await seedDemoCrew(db, crew, busyUnitCodes, now);
-    if (!seeded) continue;
-    await openShift(db, seeded, now);
-    await stockVan(db, seeded, crew.stockedSkus, now);
-    crewsReady += 1;
+    await seedDemoCrew(db, crew, busyUnitCodes, now);
   }
 
-  return { crewsReady, busyUnitCodes: [...busyUnitCodes] };
+  // The same two functions the worker runs every fifteen minutes, so there is
+  // one definition of "on shift" and "counted" for a demo crew, not two.
+  const refreshedTechnicians = await refreshDemoShifts(db, now);
+  await refreshDemoStock(db, now);
+
+  return { crewsReady: refreshedTechnicians.length, busyUnitCodes: [...busyUnitCodes] };
 }

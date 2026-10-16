@@ -11,7 +11,7 @@ import type { DemoCrew } from '../../src/demo/demoCrews.js';
 import { DEMO_ZONE } from '../../src/demo/demoCrews.js';
 import { DEV_PASSWORD_HASH } from './devPassword.js';
 
-export type SeededCrew = { technicianId: string; unitId: string };
+type SeededCrew = { technicianId: string; unitId: string };
 
 async function seedTechnician(db: PrismaClient, crew: DemoCrew): Promise<string> {
   const user = await db.user.upsert({
@@ -104,12 +104,10 @@ export async function seedDemoCrew(
   crew: DemoCrew,
   busyUnitCodes: Set<string>,
   now: Date,
-): Promise<SeededCrew | null> {
+): Promise<void> {
   const technicianId = await seedTechnician(db, crew);
-  if (busyUnitCodes.has(crew.unitCode)) return null;
+  if (busyUnitCodes.has(crew.unitCode)) return;
 
   const unitId = await seedUnit(db, crew, technicianId, now);
-  const seeded = { technicianId, unitId };
-  await grantCapabilities(db, crew, seeded);
-  return seeded;
+  await grantCapabilities(db, crew, { technicianId, unitId });
 }
