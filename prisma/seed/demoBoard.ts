@@ -48,17 +48,23 @@ export type DemoBoardSummary = {
 };
 
 async function seedZoneAndTenant(db: PrismaClient): Promise<void> {
+  // The boundary and centroid are UPDATED, not just created: they are this
+  // file's to own, and a seed change that never reached an existing board
+  // would leave crew D outside its own zone.
+  const geometry = {
+    centroidLat: DEMO_DRIVER_LOCATION.lat,
+    centroidLng: DEMO_DRIVER_LOCATION.lng,
+    boundary: DEMO_ZONE.boundary,
+  };
   await db.zone.upsert({
     where: { code: DEMO_ZONE.code },
-    update: {},
+    update: geometry,
     create: {
       id: DEMO_ZONE.id,
       code: DEMO_ZONE.code,
       name: DEMO_ZONE.name,
       city: 'Delhi',
-      centroidLat: DEMO_DRIVER_LOCATION.lat,
-      centroidLng: DEMO_DRIVER_LOCATION.lng,
-      boundary: DEMO_ZONE.boundary,
+      ...geometry,
     },
   });
 

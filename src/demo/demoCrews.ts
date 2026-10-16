@@ -51,7 +51,8 @@ export const DEMO_ZONE = {
   id: 'demo-zone',
   code: 'DMO',
   name: 'Demo Zone',
-  boundary: { type: 'bbox', minLat: 28.58, maxLat: 28.65, minLng: 77.175, maxLng: 77.245 },
+  // Wide enough to take in Hauz Khas to the south, where crew D waits.
+  boundary: { type: 'bbox', minLat: 28.54, maxLat: 28.65, minLng: 77.175, maxLng: 77.245 },
 };
 
 export const DEMO_TENANT_ID = 'demo-tenant';
@@ -129,8 +130,16 @@ export const DEMO_CREWS: DemoCrew[] = [
     stockedSkus: [],
   },
   {
-    // ~4.4 km, near Sarojini Nagar. Can do everything a non-starting car might
-    // need and carries the parts for all of it — feasible, just far.
+    // ~7.4 km, at Hauz Khas. Can do everything a non-starting car might need
+    // and carries the parts for all of it, so it covers 96% of the fault mass
+    // against B's 80% — and the cost function genuinely values that, because
+    // a crew that can fix the alternator too saves a second callout.
+    //
+    // HOW FAR IS FAR ENOUGH WAS MEASURED, not guessed. At ~4.4 km (Sarojini
+    // Nagar, the first position tried) D WON on real roads: OSRM put it only
+    // 3.5 minutes behind B, and its coverage was worth more than that. Under
+    // haversine B won by under 2 cost points — a margin a presenter's pin
+    // moved a few hundred metres could flip. Here B wins under both.
     label: 'D',
     technicianId: 'demo-technician-d',
     userId: 'demo-user-tech-d',
@@ -140,8 +149,8 @@ export const DEMO_CREWS: DemoCrew[] = [
     unitId: 'demo-unit-d',
     unitCode: 'DMO-VD',
     unitKind: 'VAN',
-    lat: 28.585,
-    lng: 77.18,
+    lat: 28.5494,
+    lng: 77.2001,
     capabilities: ['JUMP_START', 'BATTERY_REPLACEMENT', 'ALTERNATOR_REPLACEMENT', 'OBD_DIAGNOSTICS'],
     stockedSkus: ['BAT-45AH', 'ALT-RECON', 'DRIVE-BELT', 'STR-MOTOR-RECON'],
   },
