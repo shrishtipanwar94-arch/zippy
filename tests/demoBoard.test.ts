@@ -17,10 +17,12 @@ import type { PrismaClient } from '@prisma/client';
 import { openDemoDatabase } from './helpers/demoDatabase.js';
 import { ensureDemoBoard } from '../prisma/seed/demoBoard.js';
 import { refreshDemoShifts } from '../src/demo/refreshDemoShifts.js';
+import { freeStuckDemoVans } from '../src/demo/freeDemoVans.js';
 import {
   DEMO_CREWS,
   DEMO_DISPATCHER,
   DEMO_DRIVER,
+  DEMO_REFERENCE_DRIVER,
   DEMO_TECHNICIAN_IDS,
   DEMO_UNIT_IDS,
   DEMO_ZONE,
@@ -28,6 +30,7 @@ import {
 
 const RUN = Date.now();
 const BUSY_JOB_ID = `demoboard-test-job-${RUN}`;
+const RUNNING_JOB_ID = `demoboard-test-running-${RUN}`;
 
 let db: PrismaClient;
 
@@ -49,6 +52,9 @@ async function countDemoRows(): Promise<Record<string, number>> {
     shifts: await db.technicianShift.count({ where: { technicianId: { in: DEMO_TECHNICIAN_IDS } } }),
     stockLines: await db.unitStock.count({ where: { unitId: { in: DEMO_UNIT_IDS } } }),
     workshops: await db.workshop.count({ where: { code: 'WS-DMO' } }),
+    referenceJobs: await db.job.count({
+      where: { vehicle: { registration: DEMO_REFERENCE_DRIVER.registration } },
+    }),
   };
 }
 
@@ -65,7 +71,7 @@ beforeAll(async () => {
 }, 60_000);
 
 afterAll(async () => {
-  await db.job.deleteMany({ where: { id: BUSY_JOB_ID } });
+  await db.job.deleteMany({ where: { id: { in: [BUSY_JOB_ID, RUNNING_JOB_ID] } } });
   await db.$disconnect();
 });
 
@@ -78,6 +84,9 @@ describe('ensureDemoBoard', () => {
     expect(afterSecond).toEqual(afterFirst);
     // And the counts are the board it claims to build, not merely stable.
     expect(afterFirst.zones).toBe(1);
+    // The reference job is created once, through the real dispatch path, and
+    // never again however many times the board is ensured.
+    expect(afterFirst.referenceJobs).toBe(1);
     expect(afterFirst.workshops).toBe(1);
     expect(afterFirst.users).toBe(2 + DEMO_CREWS.length);
     expect(afterFirst.technicians).toBe(DEMO_CREWS.length);
@@ -130,5 +139,45 @@ describe('refreshDemoShifts', () => {
     expect(await shiftOf(busyCrew.technicianId)).toEqual(busyBefore);
     const idleAfter = await shiftOf(idleCrew.technicianId);
     expect(idleAfter.startsAt.getTime()).toBeGreaterThan(idleBefore.startsAt.getTime());
+  });
+});
+
+describe('freeStuckDemoVans', () => {
+  it('frees a van left stuck with no job, and never touches one on a running job', async () => {
+    const stuck = DEMO_CREWS.find((crew) => crew.label === 'C')!;
+    const working = DEMO_CREWS.find((crew) => crew.label === 'D')!;
+
+    // C: marked ON_JOB, but nothing is assigned to it — the leftover a
+    // flushed queue or an ill-timed restart can leave behind.
+    await db.unit.update({ where: { id: stuck.unitId }, data: { status: 'ON_JOB' } });
+    // D: genuinely on a job, en route.
+    await db.unit.update({ where: { id: working.unitId }, data: { status: 'ON_JOB' } });
+    await db.job.create({
+      data: {
+        id: RUNNING_JOB_ID,
+        driverId: DEMO_DRIVER.driverId,
+        vehicleId: DEMO_DRIVER.vehicleId,
+        zoneId: DEMO_ZONE.id,
+        status: 'EN_ROUTE',
+        assignedUnitId: working.unitId,
+        createdAt: new Date('2020-06-01T11:00:00.000Z'),
+      },
+    });
+
+    const freed = await freeStuckDemoVans(db);
+
+    expect(freed.vansFreed).toContain(stuck.unitCode);
+    expect(freed.vansFreed).not.toContain(working.unitCode);
+    const units = await db.unit.findMany({
+      where: { id: { in: [stuck.unitId, working.unitId] } },
+      select: { id: true, status: true },
+    });
+    const statusOf = (id: string) => units.find((unit) => unit.id === id)?.status;
+    expect(statusOf(stuck.unitId)).toBe('AVAILABLE');
+    expect(statusOf(working.unitId)).toBe('ON_JOB');
+
+    // Put D back for the next run of this file; the job is removed in afterAll.
+    await db.job.update({ where: { id: RUNNING_JOB_ID }, data: { status: 'CANCELLED' } });
+    await db.unit.update({ where: { id: working.unitId }, data: { status: 'AVAILABLE' } });
   });
 });
