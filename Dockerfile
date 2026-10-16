@@ -28,7 +28,7 @@ COPY public ./public
 # The dry check ships too, so the deployed board can be checked from inside
 # the container: `railway ssh -s web -- npx tsx scripts/demo-dry-check.ts`.
 # It runs under tsx against src/, which is already in the image.
-COPY scripts/start-process.sh scripts/demo-dry-check.ts ./scripts/
+COPY scripts/start-process.sh scripts/demo-dry-check.ts scripts/demoJourney.ts ./scripts/
 RUN npx prisma generate && npm run build
 
 ENV NODE_ENV=production

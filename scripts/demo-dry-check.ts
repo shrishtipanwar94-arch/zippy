@@ -11,8 +11,16 @@
  * If it fails, fix the SEED, not the engine: the engine is what the evaluation
  * harness measures, and bending it to suit a demo would make the demo a lie.
  *
- * IT WRITES NOTHING. Each job is built in memory and never inserted: the solver
- * is a pure function over a snapshot (invariant 2).
+ * PART 1 WRITES NOTHING. Each job is built in memory and never inserted: the
+ * solver is a pure function over a snapshot (invariant 2).
+ *
+ * PART 2, WITH DEMO_MODE ON, GOES THE WHOLE WAY for every fault type: a real
+ * job through the driver's routes, the dispatcher's card executed, crew B's own
+ * screen query checked for the offer, then cleaned up — B declines and the job
+ * is retired as CANCELLED, never deleted (scripts/demoJourney.ts). It also
+ * checks the dispatcher's board holds exactly two jobs while a demo job is
+ * live, and that the sign-in list offers exactly three accounts. It needs the
+ * deployment's SEED_PASSWORD (or the dev password locally) to sign in.
  *
  *   npx tsx scripts/demo-dry-check.ts
  */
@@ -30,6 +38,10 @@ import { requiredCapabilities, faultsNeedTow } from '../src/domain/capabilitySet
 import { DEMO_CREWS, DEMO_DRIVER_LOCATION, DEMO_ZONE } from '../src/demo/demoCrews.js';
 import { FAULT_SCENARIOS } from '../src/demo/faultScenarios.js';
 import type { FaultScenario } from '../src/demo/faultScenarios.js';
+import { createApp } from '../src/api/app.js';
+import { visibleAccounts } from '../src/api/loginAccounts.js';
+import { seedPassword } from '../prisma/seed/devPassword.js';
+import { closeConnections, runJourney, signInDemoAccounts } from './demoJourney.js';
 
 const EXPECTED_WINNER = 'B';
 
@@ -100,6 +112,35 @@ async function checkFault(scenario: FaultScenario, snapshot: DispatchSnapshot, n
   return correct;
 }
 
+// PART 2: the real routes, end to end. Returns the faults that failed.
+async function checkJourneys(): Promise<string[]> {
+  const failed: string[] = [];
+  const app = createApp();
+
+  const accounts = visibleAccounts(config.demoMode);
+  print(`sign-in list offers ${accounts.length} accounts: ${accounts.map((account) => account.email).join(', ')}`);
+  if (accounts.length !== 3) failed.push('sign-in list is not exactly three accounts');
+
+  const tokens = await signInDemoAccounts(app, seedPassword(process.env));
+  for (const scenario of FAULT_SCENARIOS) {
+    const result = await runJourney(app, tokens, scenario);
+    const seen = result.offerSeenByB ? 'B sees the offer' : 'B does NOT see the offer';
+    const board = `board ${result.dispatcherJobCount ?? '?'} jobs`;
+    if (result.knownLimitation) {
+      print(`${scenario.fault.padEnd(20)} KNOWN LIMITATION — card names ${result.cardCrew}; ${result.knownLimitation}`);
+      continue;
+    }
+    const passed =
+      result.problem === null && result.cardCrew === EXPECTED_WINNER && result.offerSeenByB && result.dispatcherJobCount === 2;
+    print(
+      `${scenario.fault.padEnd(20)} ${passed ? 'PASS' : 'FAIL'}  intake concluded ${result.topFault}, ` +
+        `card names ${result.cardCrew}, ${seen}, ${board}${result.problem ? ` — ${result.problem}` : ''}`,
+    );
+    if (!passed) failed.push(scenario.fault);
+  }
+  return failed;
+}
+
 async function main(): Promise<void> {
   const now = new Date();
   const { snapshot } = await buildDispatchSnapshot(prismaBase);
@@ -117,22 +158,45 @@ async function main(): Promise<void> {
   }
 
   print('-'.repeat(76));
-  if (failed.length === 0) {
-    print(`PASS — crew ${EXPECTED_WINNER} wins all ${FAULT_SCENARIOS.length} fault types.`);
+  if (config.demoMode) {
+    print('END TO END, through the real routes');
+    print('-'.repeat(76));
+    for (const fault of await checkJourneys()) failed.push(`end-to-end ${fault}`);
   } else {
-    print(`FAIL — crew ${EXPECTED_WINNER} did not win: ${failed.join(', ')}. Fix the SEED, not the engine.`);
+    print('end-to-end checks skipped: DEMO_MODE is off (the dispatch card after intake is a demo-mode behaviour)');
+  }
+
+  print('-'.repeat(76));
+  if (failed.length === 0) {
+    print(`PASS — crew ${EXPECTED_WINNER} wins every fault type${config.demoMode ? ', end to end' : ''}.`);
+  } else {
+    print(`FAIL — ${failed.join(', ')}. Fix the SEED or the glue, not the engine.`);
   }
 
   // exitCode, not process.exit(): on Windows, exiting while Prisma's engine
   // is still closing its handles aborts Node with a libuv assertion and exit
   // code 127 — which made a PASS indistinguishable from a crash.
   process.exitCode = failed.length === 0 ? 0 : 1;
+  await closeConnections();
   await prismaBase.$disconnect();
+  exitSoon();
+}
+
+// THE BACKSTOP, like the one src/index.ts uses on shutdown. Everything this
+// script opened is closed above, but the in-process app pulls in modules that
+// keep a handle of their own, and the process would otherwise sit there after
+// printing its verdict — which, from outside, is indistinguishable from a hang.
+// `unref` means the timer itself never keeps Node alive: if nothing else is
+// holding the event loop the process has already ended before it fires.
+function exitSoon(): void {
+  setTimeout(() => process.exit(process.exitCode ?? 1), 1000).unref();
 }
 
 main().catch(async (error: unknown) => {
   // eslint-disable-next-line no-console
   console.error(error);
   process.exitCode = 1;
+  await closeConnections();
   await prismaBase.$disconnect();
+  exitSoon();
 });
