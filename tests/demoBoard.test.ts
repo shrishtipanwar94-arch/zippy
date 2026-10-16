@@ -7,28 +7,16 @@
 //   2. refreshDemoShifts runs every fifteen minutes from the worker, and must
 //      never touch a van with a live job (invariant 7).
 //
-// SCOPED, NOT RAW, COUNTS. `zippy_test` is shared by every suite and vitest
-// runs files in parallel, so every count below is of rows identified by the
-// demo board's own natural keys (CLAUDE.md, GOTCHAS).
-//
-// THE DEMO CREWS COMPETE WITH OTHER SUITES' FIXTURES while this file runs —
-// buildDispatchSnapshot reads the whole fleet. They hold no BRAKE_REPAIR and no
-// EV_HV_CERTIFICATION, so they cannot serve the two scarce-pair fixtures
-// (tests/redispatch*.test.ts), and afterAll takes the IDLE ones off the board
-// again so the window is this file's runtime, not forever.
-//
-// THEY CAN STILL WIN ANOTHER SUITE'S JOB, legitimately: tests/demoFlow.test.ts
-// runs a real dispatch near Connaught Place, and once chose crew B and held its
-// van. This file's first afterAll then forced every demo van OFFLINE, including
-// that HELD one, and demoFlow's accept failed — this file breaking the exact
-// rule it exists to pin. So afterAll now leaves busy vans alone, and the test
-// picks its crews from whichever are idle rather than assuming B and A.
+// ON ITS OWN DATABASE (tests/helpers/demoDatabase.ts), not the shared
+// `zippy_test`: crew B can do everything, so on the shared board it won other
+// suites' jobs while this file ran. Nothing else reads `zippy_test_demo`, so
+// these assertions can name B and A directly.
 
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { prismaBase } from '../src/infra/prismaBase.js';
+import type { PrismaClient } from '@prisma/client';
+import { openDemoDatabase } from './helpers/demoDatabase.js';
 import { ensureDemoBoard } from '../prisma/seed/demoBoard.js';
 import { refreshDemoShifts } from '../src/demo/refreshDemoShifts.js';
-import { findIdleDemoCrews } from '../src/demo/idleDemoCrews.js';
 import {
   DEMO_CREWS,
   DEMO_DISPATCHER,
@@ -41,81 +29,80 @@ import {
 const RUN = Date.now();
 const BUSY_JOB_ID = `demoboard-test-job-${RUN}`;
 
+let db: PrismaClient;
+
 async function countDemoRows(): Promise<Record<string, number>> {
   const emails = [DEMO_DISPATCHER.email, DEMO_DRIVER.email, ...DEMO_CREWS.map((crew) => crew.email)];
   return {
-    users: await prismaBase.user.count({ where: { email: { in: emails } } }),
-    zones: await prismaBase.zone.count({ where: { code: DEMO_ZONE.code } }),
-    vehicles: await prismaBase.vehicle.count({ where: { registration: DEMO_DRIVER.registration } }),
-    memberships: await prismaBase.tenantMembership.count({ where: { userId: DEMO_DRIVER.userId } }),
-    technicians: await prismaBase.technician.count({
+    users: await db.user.count({ where: { email: { in: emails } } }),
+    zones: await db.zone.count({ where: { code: DEMO_ZONE.code } }),
+    vehicles: await db.vehicle.count({ where: { registration: DEMO_DRIVER.registration } }),
+    memberships: await db.tenantMembership.count({ where: { userId: DEMO_DRIVER.userId } }),
+    technicians: await db.technician.count({
       where: { employeeCode: { in: DEMO_CREWS.map((crew) => crew.employeeCode) } },
     }),
-    units: await prismaBase.unit.count({ where: { code: { in: DEMO_CREWS.map((crew) => crew.unitCode) } } }),
-    technicianCapabilities: await prismaBase.technicianCapability.count({
+    units: await db.unit.count({ where: { code: { in: DEMO_CREWS.map((crew) => crew.unitCode) } } }),
+    technicianCapabilities: await db.technicianCapability.count({
       where: { technicianId: { in: DEMO_TECHNICIAN_IDS } },
     }),
-    unitCapabilities: await prismaBase.unitCapability.count({ where: { unitId: { in: DEMO_UNIT_IDS } } }),
-    shifts: await prismaBase.technicianShift.count({ where: { technicianId: { in: DEMO_TECHNICIAN_IDS } } }),
-    stockLines: await prismaBase.unitStock.count({ where: { unitId: { in: DEMO_UNIT_IDS } } }),
+    unitCapabilities: await db.unitCapability.count({ where: { unitId: { in: DEMO_UNIT_IDS } } }),
+    shifts: await db.technicianShift.count({ where: { technicianId: { in: DEMO_TECHNICIAN_IDS } } }),
+    stockLines: await db.unitStock.count({ where: { unitId: { in: DEMO_UNIT_IDS } } }),
+    workshops: await db.workshop.count({ where: { code: 'WS-DMO' } }),
   };
 }
 
 async function shiftOf(technicianId: string): Promise<{ startsAt: Date; endsAt: Date }> {
-  return prismaBase.technicianShift.findFirstOrThrow({
+  return db.technicianShift.findFirstOrThrow({
     where: { technicianId },
     select: { startsAt: true, endsAt: true },
   });
 }
 
 beforeAll(async () => {
-  await ensureDemoBoard(prismaBase);
-});
+  db = await openDemoDatabase();
+  await ensureDemoBoard(db);
+}, 60_000);
 
 afterAll(async () => {
-  await prismaBase.job.deleteMany({ where: { id: BUSY_JOB_ID } });
-  // Off the board between runs — no shift, and OFFLINE — but only the idle
-  // crews: a van another suite is mid-way through reserving stays as it is.
-  // The next run of this file brings them back through ensureDemoBoard.
-  const idle = await findIdleDemoCrews(prismaBase);
-  const idleTechnicianIds = idle.map((entry) => entry.technicianId);
-  const idleUnitIds = idle.map((entry) => entry.unitId);
-  await prismaBase.technicianShift.deleteMany({ where: { technicianId: { in: idleTechnicianIds } } });
-  await prismaBase.unit.updateMany({ where: { id: { in: idleUnitIds } }, data: { status: 'OFFLINE' } });
+  await db.job.deleteMany({ where: { id: BUSY_JOB_ID } });
+  await db.$disconnect();
 });
 
 describe('ensureDemoBoard', () => {
   it('leaves the same rows when run twice', async () => {
     const afterFirst = await countDemoRows();
-    await ensureDemoBoard(prismaBase);
+    await ensureDemoBoard(db);
     const afterSecond = await countDemoRows();
 
     expect(afterSecond).toEqual(afterFirst);
     // And the counts are the board it claims to build, not merely stable.
     expect(afterFirst.zones).toBe(1);
+    expect(afterFirst.workshops).toBe(1);
     expect(afterFirst.users).toBe(2 + DEMO_CREWS.length);
     expect(afterFirst.technicians).toBe(DEMO_CREWS.length);
     expect(afterFirst.units).toBe(DEMO_CREWS.length);
     expect(afterFirst.shifts).toBe(DEMO_CREWS.length);
     let grantedLinks = 0;
-    for (const crew of DEMO_CREWS) grantedLinks += crew.capabilities.length;
+    let stockedLines = 0;
+    for (const crew of DEMO_CREWS) {
+      grantedLinks += crew.capabilities.length;
+      stockedLines += crew.stockedSkus.length;
+    }
     expect(afterFirst.technicianCapabilities).toBe(grantedLinks);
     expect(afterFirst.unitCapabilities).toBe(grantedLinks);
+    expect(afterFirst.stockLines).toBe(stockedLines);
   });
 });
 
 describe('refreshDemoShifts', () => {
   it('skips a van with a live job and refreshes every other demo crew', async () => {
-    // Two crews nobody else is using right now — see the header for why this
-    // cannot simply be B and A.
-    const idle = await findIdleDemoCrews(prismaBase);
-    expect(idle.length).toBeGreaterThanOrEqual(2);
-    const busyCrew = idle[0]!.crew;
-    const idleCrew = idle[1]!.crew;
+    const busyCrew = DEMO_CREWS.find((crew) => crew.label === 'B')!;
+    const idleCrew = DEMO_CREWS.find((crew) => crew.label === 'A')!;
 
-    // A COMMITTED job on crew B's van, written directly. Dated in the past so
-    // it never occupies a "newest fifty" slot another suite is asserting on.
-    await prismaBase.job.create({
+    // A COMMITTED job on crew B's van, written directly: this test is about
+    // the refresh's guard, not about how a job gets committed.
+    await db.job.create({
       data: {
         id: BUSY_JOB_ID,
         driverId: DEMO_DRIVER.driverId,
@@ -132,11 +119,10 @@ describe('refreshDemoShifts', () => {
 
     // An hour on, so a refreshed shift is visibly different from the old one.
     const later = new Date(Date.now() + 60 * 60_000);
-    const refreshed = await refreshDemoShifts(prismaBase, later);
+    const refreshed = await refreshDemoShifts(db, later);
 
     expect(refreshed).not.toContain(busyCrew.technicianId);
     expect(refreshed).toContain(idleCrew.technicianId);
-    // Only demo technicians are ever touched.
     for (const technicianId of refreshed) {
       expect(DEMO_TECHNICIAN_IDS).toContain(technicianId);
     }
