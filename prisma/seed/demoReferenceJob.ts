@@ -36,6 +36,7 @@ import { safetyReportSchema } from '../../src/domain/safety.js';
 import { locationSchema } from '../../src/domain/location.js';
 import { LADDER_STEPS } from '../../src/domain/jobLadder.js';
 import { DEMO_CREWS, DEMO_REFERENCE_DRIVER } from '../../src/demo/demoCrews.js';
+import { isRazorpayConfigured } from '../../src/payments/razorpayClient.js';
 import { FAULT_SCENARIOS } from '../../src/demo/faultScenarios.js';
 
 // A flat tyre at Lodhi Garden: a different fault and a different place from
@@ -122,12 +123,44 @@ async function workTheLadder(db: PrismaClient, jobId: string, technicianId: stri
       throw new Error(`reference job: ${step} gave ${result.outcome}`);
     }
   }
-  await captureOnCompletionQuietly(db, jobId);
+  if (paysWithoutAHuman()) await captureOnCompletionQuietly(db, jobId);
+}
+
+// MONEY ONLY WHEN NOBODY HAS TO PAY BY HAND. With the stub provider the
+// callout is authorised and the total captured on the spot, as the routes do.
+// With Razorpay configured, a walk-in authorisation is a test-mode order that
+// waits for the driver to complete Razorpay's checkout — and this driver is a
+// seed, so it would wait for ever, the payment would sit PENDING_AUTHORISATION,
+// and the payments banner would turn amber ten minutes after every boot. So in
+// that case the reference job is finished without a payment row: honest about
+// what a seed can do, and silent on the operator's banner.
+function paysWithoutAHuman(): boolean {
+  return !isRazorpayConfigured();
+}
+
+// A finished job has nothing left to decide, so any card still open on it is
+// acknowledged, as the dispatcher would. B's decline leaves one behind: the
+// saga raises "nobody is assigned" when the reservation unwinds, and only the
+// re-plan card after it is executed. Run on every boot so a board seeded
+// before this existed is tidied too.
+async function acknowledgeOpenCards(db: PrismaClient, jobId: string): Promise<void> {
+  const open = await db.actionRequest.findMany({ where: { jobId, status: 'PENDING' }, select: { id: true } });
+  for (const card of open) {
+    await resolveAction(db, {
+      actionRequestId: card.id,
+      decision: 'EXECUTED',
+      approver: SYSTEM_ACTOR,
+      note: 'reference job finished; acknowledged by the demo seed',
+    });
+  }
 }
 
 export async function ensureReferenceJob(db: PrismaClient): Promise<ReferenceJobOutcome> {
   const existing = await existingReferenceJob(db);
-  if (existing) return { created: false, jobId: existing.id, status: existing.status };
+  if (existing) {
+    if (existing.status === 'RESOLVED') await acknowledgeOpenCards(db, existing.id);
+    return { created: false, jobId: existing.id, status: existing.status };
+  }
 
   const vehicle = await db.vehicle.findUniqueOrThrow({
     where: { registration: DEMO_REFERENCE_DRIVER.registration },
@@ -154,9 +187,10 @@ export async function ensureReferenceJob(db: PrismaClient): Promise<ReferenceJob
   const state = await recordTechnicianDecision(db, { sagaId: offer.sagaId, decision: 'ACCEPTED' });
   if (state !== 'COMMITTED') throw new Error(`reference job: accept gave ${state}`);
   await recordArrivalEstimateQuietly(db, jobId);
-  await authoriseCalloutQuietly(db, jobId);
+  if (paysWithoutAHuman()) await authoriseCalloutQuietly(db, jobId);
 
   await workTheLadder(db, jobId, offer.technicianId);
+  await acknowledgeOpenCards(db, jobId);
 
   const finished = await db.job.findUniqueOrThrow({ where: { id: jobId }, select: { status: true } });
   return { created: true, jobId, status: finished.status };
