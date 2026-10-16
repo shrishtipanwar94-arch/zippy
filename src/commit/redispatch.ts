@@ -67,6 +67,16 @@ export type HandleTriggerInput = {
 // How many times this job has already been reassigned. Counted from the
 // durable record rather than held in memory, because thrash is a property of
 // the job's history and has to survive a restart.
+// "Ravi Kumar · DMO-VB". Falls back to the ids if either row has gone.
+async function crewInWords(db: PrismaClient, unitId: string, technicianId: string): Promise<string> {
+  const unit = await db.unit.findUnique({ where: { id: unitId }, select: { code: true } });
+  const technician = await db.technician.findUnique({
+    where: { id: technicianId },
+    select: { user: { select: { name: true } } },
+  });
+  return `${technician?.user.name ?? technicianId} · ${unit?.code ?? unitId}`;
+}
+
 async function reassignmentCount(db: PrismaClient, jobId: string): Promise<number> {
   return db.dispatchOffer.count({ where: { jobId } });
 }
@@ -163,6 +173,11 @@ export async function handleTrigger(
     return { outcome: 'NO_CHANGE', solverRunId, reason: 'same assignment' };
   }
 
+  // WHO THE CARD SENDS, in words. The impact carries the unit and technician
+  // ids for the code that executes it; the dispatcher reading the card needs a
+  // name and a van, and without this no reassignment card ever said who.
+  const sends = await crewInWords(db, assignment.unitId, assignment.technicianId);
+
   // 5. A real change. RECOMMEND, with the impact a dispatcher needs to judge
   // it — not AUTO, because this changes who is driving to a breakdown.
   const action = await requestAction(db, {
@@ -185,6 +200,7 @@ export async function handleTrigger(
         assignment.option.destination.status === 'CHOSEN'
           ? assignment.option.destination.workshopId
           : null,
+      sends,
       expectedResolutionMinutes: assignment.cost.expectedTimeToResolution.value,
       totalCost: assignment.cost.total,
       // DOES THE CREW ALREADY ON SITE SURVIVE THE NEW PLAN? Computed here,

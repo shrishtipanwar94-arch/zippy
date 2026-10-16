@@ -133,7 +133,7 @@ function cardMarkup(action) {
           <span class="badge ${approve ? 'text-bg-danger' : 'text-bg-warning'}">
             ${escapeHtml(TIER_LABEL[action.tier] ?? action.tier)}
           </span>
-          <strong class="ms-1">${escapeHtml(KIND_LABEL[action.kind] ?? action.kind)}</strong>
+          <strong class="ms-1">${escapeHtml(titleFor(action))}</strong>
         </div>
       </div>
 
@@ -156,6 +156,15 @@ function cardMarkup(action) {
 // is JSON written by several different callers (redispatch, contention, SLA
 // escalation) and a panel that assumed one of their shapes would silently show
 // nothing for the others.
+// A dispatch card raised because intake finished is the job's FIRST crew, not
+// a change of crew, so "Reassign" would misdescribe it (src/demo/demoDispatch.ts).
+function titleFor(action) {
+  if (action.kind === 'REASSIGN_AFTER_TRIGGER' && action.computedImpact?.trigger === 'INTAKE_COMPLETED') {
+    return 'Dispatch — intake is complete';
+  }
+  return KIND_LABEL[action.kind] ?? action.kind;
+}
+
 function impactMarkup(impact) {
   if (!impact || typeof impact !== 'object') return '';
   const rows = Object.entries(impact)
