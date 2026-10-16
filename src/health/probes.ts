@@ -17,6 +17,7 @@ import { redis } from '../infra/redis.js';
 import { isChaosOn } from '../chaos/switches.js';
 import type { ComponentReading } from '../domain/healthLadder.js';
 import { POSITION_STALE_AFTER_MS } from '../commit/unitPosition.js';
+import { demoJobWhere, demoUnitWhere } from '../demo/demoScope.js';
 
 // How stale the newest position in the fleet may be before the map is lying.
 // Units report on movement rather than on a timer, so this is generous: it is
@@ -124,6 +125,8 @@ async function probeGps(db: PrismaClient, now: Date): Promise<ComponentReading> 
   const onJob = await db.unit.findMany({
     where: {
       assignedJobs: { some: { status: { notIn: [...FINISHED_JOB_STATUSES] } } },
+      // DEMO_MODE: only the demo crews; {} otherwise (src/demo/demoScope.ts).
+      ...demoUnitWhere(),
     },
     select: { code: true, lastLocationAt: true },
   });
@@ -205,6 +208,8 @@ async function probePayments(db: PrismaClient, now: Date): Promise<ComponentRead
     where: {
       status: 'PENDING_AUTHORISATION',
       createdAt: { lt: new Date(now.getTime() - PAYMENT_PENDING_AFTER_MS) },
+      // DEMO_MODE: only the demo board's jobs; {} otherwise.
+      job: demoJobWhere(),
     },
   });
   if (stuck > 0) {
@@ -238,13 +243,17 @@ async function probePayments(db: PrismaClient, now: Date): Promise<ComponentRead
 const FLEET_IS_THIN_BELOW = 0.5;
 
 async function probeCrewOnShift(db: PrismaClient, now: Date): Promise<ComponentReading> {
-  const crewed = await db.unit.count({ where: { currentTechnicianId: { not: null } } });
+  // DEMO_MODE: the demo crews only. The full seed's shifts are clock times
+  // that lapse daily; counting its hidden vans would put "Crew on shift"
+  // degraded on a demo board whose four crews are all on duty.
+  const crewed = await db.unit.count({ where: { currentTechnicianId: { not: null }, ...demoUnitWhere() } });
   if (crewed === 0) {
     return { component: 'CREW_ON_SHIFT', state: 'DEGRADED', detail: 'no unit has a crew assigned' };
   }
 
   const onShift = await db.unit.count({
     where: {
+      ...demoUnitWhere(),
       currentTechnicianId: { not: null },
       currentTechnician: {
         is: { shifts: { some: { startsAt: { lte: now }, endsAt: { gte: now } } } },
