@@ -34,6 +34,13 @@ import type { FaultDistribution } from '../domain/faults.js';
 import { stockConfidence } from '../domain/stockConfidence.js';
 import type { ContractTerms, ContractTierSnapshot } from '../domain/contractExposure.js';
 import { STOCK_AGE_THRESHOLDS } from './vanStock.js';
+import {
+  demoDepotWhere,
+  demoJobWhere,
+  demoTechnicianWhere,
+  demoUnitWhere,
+  demoWorkshopWhere,
+} from '../demo/demoScope.js';
 
 // Jobs the solver should be planning for: raised, diagnosed, and not yet
 // assigned to anyone.
@@ -115,6 +122,9 @@ export async function buildDispatchSnapshot(
           : { status: { in: [...PENDING_STATUSES] }, assignedUnitId: null }),
         ...(options.jobIds ? { id: { in: options.jobIds } } : {}),
         ...(options.zoneId ? { zoneId: options.zoneId } : {}),
+        // DEMO_MODE: only the demo board's jobs (src/demo/demoScope.ts). {}
+        // otherwise, so the snapshot is exactly what it was.
+        ...demoJobWhere(),
       },
       select: {
         id: true,
@@ -153,6 +163,7 @@ export async function buildDispatchSnapshot(
       },
     }),
     db.unit.findMany({
+      where: demoUnitWhere(),
       select: {
         id: true,
         zoneId: true,
@@ -165,7 +176,7 @@ export async function buildDispatchSnapshot(
       },
     }),
     db.technician.findMany({
-      where: { active: true },
+      where: { active: true, ...demoTechnicianWhere() },
       select: {
         id: true,
         capabilities: { select: { capability: { select: { code: true } } } },
@@ -194,12 +205,13 @@ export async function buildDispatchSnapshot(
     // is not a place a crew can be sent — skipped here rather than defended
     // against in the engine.
     db.depot.findMany({
-      where: { lat: { not: null }, lng: { not: null } },
+      where: { lat: { not: null }, lng: { not: null }, ...demoDepotWhere() },
       select: { id: true, code: true, lat: true, lng: true },
     }),
     // Every workshop, active or not — filtering is destinationSelection.ts's
     // job, the same split units.findMany makes with unit status.
     db.workshop.findMany({
+      where: demoWorkshopWhere(),
       select: {
         id: true,
         // The name is audit detail rather than a decision input — nothing in

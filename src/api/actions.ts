@@ -14,6 +14,8 @@
 import { Router } from 'express';
 import { z } from 'zod';
 import { prismaBase } from '../infra/prismaBase.js';
+import { config } from '../infra/config.js';
+import { demoJobWhere } from '../demo/demoScope.js';
 import { authenticate, requirePermission } from './middleware/authenticate.js';
 import { isActionKind, needsDecision } from '../domain/actionTiers.js';
 import { resolveAction } from '../commit/actionRequests.js';
@@ -29,7 +31,9 @@ actionsRouter.get(
   requirePermission('read', 'actionRequest'),
   async (_req, res) => {
     const actions = await prismaBase.actionRequest.findMany({
-      where: { status: 'PENDING' },
+      // DEMO_MODE: only cards about the demo board's jobs; with the flag off
+      // the clause is dropped entirely, so job-less cards still show.
+      where: { status: 'PENDING', ...(config.demoMode ? { job: demoJobWhere() } : {}) },
       orderBy: [{ tier: 'asc' }, { createdAt: 'asc' }],
       select: {
         id: true,

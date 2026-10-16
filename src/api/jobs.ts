@@ -9,6 +9,7 @@
 
 import { Router } from 'express';
 import { prisma } from '../infra/db.js';
+import { demoJobWhere } from '../demo/demoScope.js';
 import { authenticate, requirePermission } from './middleware/authenticate.js';
 
 export const jobsRouter = Router();
@@ -21,6 +22,8 @@ export const jobsRouter = Router();
 
 jobsRouter.get('/jobs', authenticate, requirePermission('read', 'job'), async (_req, res) => {
   const jobs = await prisma.job.findMany({
+    // DEMO_MODE: only the demo board's jobs; {} otherwise (src/demo/demoScope.ts).
+    where: demoJobWhere(),
     take: 50,
     orderBy: { createdAt: 'desc' },
     select: {

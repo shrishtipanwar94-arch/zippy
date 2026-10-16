@@ -110,6 +110,22 @@ export const DEMO_DRIVER = {
   registration: 'DL01DM0001',
 };
 
+// THE REFERENCE JOB'S DRIVER — a second demo driver with no login.
+//
+// The dispatcher's board in demo mode shows the job the presenter creates live
+// and one earlier job, so the screen is not empty before the demo starts. That
+// earlier job needs a driver and a car of its own: on the presenter's driver
+// account it would sit in her job list. No password, never listed.
+export const DEMO_REFERENCE_DRIVER = {
+  userId: 'demo-user-reference-driver',
+  driverId: 'demo-reference-driver',
+  membershipId: 'demo-membership-reference-driver',
+  vehicleId: 'demo-reference-vehicle',
+  email: 'demo-reference-driver@zippy.internal',
+  name: 'Vikram Mehta',
+  registration: 'DL01DM0002',
+};
+
 // THE ONE DESTINATION ON THE BOARD, for the tow fault. Open around the clock and
 // authorised for the demo car's brand, so a tow job is never refused for
 // opening hours during an evening demo.

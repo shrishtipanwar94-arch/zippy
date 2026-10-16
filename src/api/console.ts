@@ -17,6 +17,7 @@
 import { Router } from 'express';
 import { z } from 'zod';
 import { prismaBase } from '../infra/prismaBase.js';
+import { demoJobWhere, demoTechnicianWhere, demoUnitWhere } from '../demo/demoScope.js';
 import { authenticate, requirePermission } from './middleware/authenticate.js';
 import { summarise, byUrgency } from '../domain/scarcity.js';
 import { sentenceFor } from '../domain/jobStory.js';
@@ -69,7 +70,9 @@ consoleRouter.get(
       where: {
         ...(jobId ? { jobId } : {}),
         ...(eventType ? { eventType } : {}),
-        ...(zoneId ? { job: { is: { zoneId } } } : {}),
+        // DEMO_MODE adds the demo board's job filter to the same relation; {}
+        // otherwise (src/demo/demoScope.ts).
+        job: { is: { ...(zoneId ? { zoneId } : {}), ...demoJobWhere() } },
       },
       orderBy: { at: 'desc' },
       take: limit,
@@ -347,7 +350,7 @@ consoleRouter.get(
     const [capabilities, units, technicians] = await Promise.all([
       prismaBase.capability.findMany({ select: { code: true }, orderBy: { code: 'asc' } }),
       prismaBase.unit.findMany({
-        where: { status: { not: 'OFFLINE' } },
+        where: { status: { not: 'OFFLINE' }, ...demoUnitWhere() },
         select: {
           id: true,
           currentTechnicianId: true,
@@ -355,7 +358,7 @@ consoleRouter.get(
         },
       }),
       prismaBase.technician.findMany({
-        where: { active: true },
+        where: { active: true, ...demoTechnicianWhere() },
         select: {
           id: true,
           capabilities: { select: { capability: { select: { code: true } } } },
@@ -442,7 +445,7 @@ consoleRouter.get('/queue', authenticate, requirePermission('read', 'job'), asyn
   // over the whole board.
   const [jobs, activeIncidentCount] = await Promise.all([
     prismaBase.job.findMany({
-      where: { status: { in: ['INTAKE', 'PLANNED'] }, assignedUnitId: null },
+      where: { status: { in: ['INTAKE', 'PLANNED'] }, assignedUnitId: null, ...demoJobWhere() },
       select: {
         id: true,
         safetyLevel: true,
@@ -469,7 +472,7 @@ consoleRouter.get('/queue', authenticate, requirePermission('read', 'job'), asyn
         slaPolicy: { select: { responseMinutes: true } },
       },
     }),
-    prismaBase.job.count({ where: { status: { notIn: [...FINISHED_JOB_STATUSES] } } }),
+    prismaBase.job.count({ where: { status: { notIn: [...FINISHED_JOB_STATUSES] }, ...demoJobWhere() } }),
   ]);
 
   const queued = jobs.map((job) => {
@@ -650,7 +653,7 @@ consoleRouter.get(
     const stuckSince = new Date(Date.now() - PAYMENT_PENDING_AFTER_MS);
 
     const payments = await prismaBase.payment.findMany({
-      where: { status: 'PENDING_AUTHORISATION', createdAt: { lt: stuckSince } },
+      where: { status: 'PENDING_AUTHORISATION', createdAt: { lt: stuckSince }, job: demoJobWhere() },
       orderBy: { createdAt: 'asc' },
       select: {
         id: true,
