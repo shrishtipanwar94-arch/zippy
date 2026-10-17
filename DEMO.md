@@ -123,7 +123,12 @@ my way**.
 
 **Driver:** "**Ravi is on the way.**" — "About 5 minutes, roughly", "Ravi · a
 flatbed tow truck" — the estimate is rough because production routing is
-straight-line (`/health` says `routing.mode: HAVERSINE`). **Dispatcher:** the
+straight-line (`/health` says `routing.mode: HAVERSINE`). Once Ravi presses
+**I am on my way**, both maps show the two pins **named** ("You" / "Ravi" on the
+driver's, "Your van" / "Asha" on the technician's), a dashed line between them
+and a **"1.9 km apart"** badge — and in demo mode the van **drives** towards the
+car every ten seconds at city speed, so the distance counts down (1.9 → 1.7 km
+in about 25 s) until it arrives. **Dispatcher:** the
 card clears and the queue empties, live.
 
 ## Act 4 — the estimate
@@ -146,8 +151,11 @@ job moves to WORKING.
 ₹321.60 · 1 job finished**". **Driver:** "**All done. Ravi has finished with
 your vehicle.**", every progress step ticked.
 
-**Payment — Razorpay test mode is on.** The driver pays the callout from the
-**Pay now** panel, which opens Razorpay's test checkout ("Zippy · ₹300"). It
+**Payment — Razorpay test mode is on.** The **Pay now** panel always charges
+what is owed at that moment: before the estimate, the **callout fee (₹300)**;
+once the estimate is approved and nothing is paid yet, **"Your bill" — the
+technician's total (₹402)**; and if the callout was already paid, **"Balance
+due" (₹102)**. It opens Razorpay's test checkout. It
 asks for a mobile number first and **rejects obviously fake ones** — use a
 real-format number you are comfortable entering in test mode, then a Razorpay
 test method. If the callout is not paid, completion still resolves the job and
