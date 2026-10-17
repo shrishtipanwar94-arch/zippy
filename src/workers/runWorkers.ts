@@ -20,7 +20,13 @@ import { processNotification } from './notification.js';
 import { processOfferExpiry } from './offerExpiry.js';
 import { processCleanup, scheduleCleanup } from './cleanup.js';
 import { PAYOUT_JOB_NAME, processPayoutRun, schedulePayoutRun } from './payouts.js';
-import { DEMO_REFRESH_JOB_NAME, processDemoRefresh, scheduleDemoRefresh } from './demoRefresh.js';
+import {
+  DEMO_DRIVE_JOB_NAME,
+  DEMO_REFRESH_JOB_NAME,
+  processDemoDrive,
+  processDemoRefresh,
+  scheduleDemoRefresh,
+} from './demoRefresh.js';
 
 // Keyed by QUEUE_NAMES rather than iterated with Object.entries: TypeScript
 // widens an object literal's keys back to plain `string` when you call
@@ -45,6 +51,10 @@ async function processPeriodic(job: Job): Promise<void> {
   }
   if (job.name === DEMO_REFRESH_JOB_NAME) {
     await processDemoRefresh(job);
+    return;
+  }
+  if (job.name === DEMO_DRIVE_JOB_NAME) {
+    await processDemoDrive(job);
     return;
   }
   await processCleanup(job);

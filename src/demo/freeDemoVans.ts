@@ -31,6 +31,7 @@ import { advanceSaga } from '../commit/saga.js';
 import { releaseHold } from '../commit/holds.js';
 import { findBusyUnitIds } from './busyDemoUnits.js';
 import { DEMO_CREWS } from './demoCrews.js';
+import { findIdleDemoCrews } from './idleDemoCrews.js';
 
 export const STALE_AFTER_MS = 10 * 60_000;
 
@@ -112,7 +113,28 @@ export async function freeDemoVansAfterCompletion(db: PrismaClient): Promise<voi
   if (!config.demoMode) return;
   try {
     await freeStuckDemoVans(db);
+    await sendIdleDemoVansHome(db);
   } catch (error) {
     logger.error({ err: error }, 'demo van clean-up after completion failed');
   }
+}
+
+// BACK TO WHERE THE STORY NEEDS THEM. A van that finished a job is parked at
+// that car, and with the drive simulation (src/demo/simulateDemoDrives.ts) the
+// car is wherever the presenter reported it — so crew B would start the next
+// demo as the NEAREST crew, and A's lesson ("closest, but cannot do the job")
+// would quietly disappear from the candidate table. Idle demo vans go home:
+// after every completion, and on the fifteen-minute refresh. A van on a live
+// job is never moved (findIdleDemoCrews leaves busy vans out).
+export async function sendIdleDemoVansHome(db: PrismaClient, now: Date = new Date()): Promise<string[]> {
+  const idle = await findIdleDemoCrews(db);
+  const sent: string[] = [];
+  for (const { crew, unitId } of idle) {
+    const moved = await db.unit.updateMany({
+      where: { id: unitId, OR: [{ lat: { not: crew.lat } }, { lng: { not: crew.lng } }] },
+      data: { lat: crew.lat, lng: crew.lng, lastLocationAt: now },
+    });
+    if (moved.count > 0) sent.push(crew.unitCode);
+  }
+  return sent;
 }

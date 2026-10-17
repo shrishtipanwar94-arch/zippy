@@ -20,16 +20,22 @@ import { logger } from '../infra/logger.js';
 import { prismaBase } from '../infra/prismaBase.js';
 import { refreshDemoShifts } from '../demo/refreshDemoShifts.js';
 import { refreshDemoStock } from '../demo/refreshDemoStock.js';
-import { freeStuckDemoVans } from '../demo/freeDemoVans.js';
+import { freeStuckDemoVans, sendIdleDemoVansHome } from '../demo/freeDemoVans.js';
+import { advanceDemoDrives, DRIVE_TICK_MS } from '../demo/simulateDemoDrives.js';
 import { retireStaleDemoJobs } from '../demo/retireStaleDemoJobs.js';
 
 export const DEMO_REFRESH_SCHEDULER_ID = 'demo-refresh';
 export const DEMO_REFRESH_JOB_NAME = 'demo-refresh';
+// The van's simulated drive to the car, every ten seconds while a demo job is
+// en route (src/demo/simulateDemoDrives.ts). Same queue, its own name.
+export const DEMO_DRIVE_SCHEDULER_ID = 'demo-drive';
+export const DEMO_DRIVE_JOB_NAME = 'demo-drive';
 const FIFTEEN_MINUTES_MS = 15 * 60 * 1000;
 
 export async function scheduleDemoRefresh(cleanupQueue: Queue): Promise<void> {
   if (!config.demoMode) {
     await cleanupQueue.removeJobScheduler(DEMO_REFRESH_SCHEDULER_ID);
+    await cleanupQueue.removeJobScheduler(DEMO_DRIVE_SCHEDULER_ID);
     return;
   }
   await cleanupQueue.upsertJobScheduler(
@@ -37,6 +43,17 @@ export async function scheduleDemoRefresh(cleanupQueue: Queue): Promise<void> {
     { every: FIFTEEN_MINUTES_MS },
     { name: DEMO_REFRESH_JOB_NAME },
   );
+  await cleanupQueue.upsertJobScheduler(
+    DEMO_DRIVE_SCHEDULER_ID,
+    { every: DRIVE_TICK_MS },
+    { name: DEMO_DRIVE_JOB_NAME },
+  );
+}
+
+export async function processDemoDrive(job: Job): Promise<void> {
+  if (!config.demoMode) return;
+  const moved = await advanceDemoDrives(prismaBase);
+  if (moved > 0) await job.log(`moved ${moved} demo van(s) towards the car`);
 }
 
 // Called directly once on worker boot, and by the scheduled job after that.
@@ -47,12 +64,14 @@ export async function runDemoRefresh(): Promise<string> {
   // And clear any demo job left unfinished for over an hour, so the next demo
   // opens on two jobs (src/demo/retireStaleDemoJobs.ts).
   const retired = await retireStaleDemoJobs(prismaBase);
+  const home = await sendIdleDemoVansHome(prismaBase);
   const technicians = await refreshDemoShifts(prismaBase);
   const units = await refreshDemoStock(prismaBase);
   return (
     `demo refresh: ${technicians.length} shifts reopened, ${units.length} vans re-counted, ` +
     `${freed.offersTimedOut} stale offers timed out, ${freed.holdsReleased} stale holds released, ` +
-    `vans freed: ${freed.vansFreed.join(', ') || 'none'}, stale demo jobs retired: ${retired.length}`
+    `vans freed: ${freed.vansFreed.join(', ') || 'none'}, stale demo jobs retired: ${retired.length}, ` +
+    `vans sent home: ${home.join(', ') || 'none'}`
   );
 }
 
