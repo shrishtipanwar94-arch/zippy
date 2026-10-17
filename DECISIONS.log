@@ -1415,3 +1415,63 @@ off, so hiding is a filter and undo is one variable.
 the engine?" No: the seed gives B every skill and part and the others a
 visible flaw, and a dry check drives the real routes for all eleven faults and
 fails if B ever loses.
+
+## Phase 27, addendum — the browser walk / 2026-10-17 / (this commit)
+
+### Built
+Fixes only, each found by walking the six acts in a real browser on a local
+copy of the live board (demo mode, Razorpay test keys, Groq assistant), then
+switching the live deployment on: DEMO_MODE=true on web and worker, pushed,
+redeployed; the dry check passed inside the live web container.
+
+### Decisions
+Decision: keep Razorpay test mode on, as the maintainer asked. Why: their
+call. Consequence handled: the seed's reference job skips its payment when
+Razorpay is configured (a seed cannot complete a checkout), and the docs say
+the test checkout needs a real-format mobile number.
+
+Decision: dispatcher board refetches on a short list of event types, debounced,
+rather than on every event or only on Refresh. Why: the queue and action list
+were Refresh-only by design ("a request per event" was the worry), which hid
+a new breakdown from the dispatcher; the events that change them are rare.
+
+### Concurrency
+Scenario: the offer-expiry job fires for an offer already declined. What
+races: two re-plans for one job. How handled: re-plan from the worker only
+when timeoutOffer RECORDED this run's timeout. (Replaces the "double card"
+weakness recorded above — it was not a rare race, it happened on every decline.)
+
+### Weaknesses introduced
+- The inspector heading shows the unit's internal id, not its code.
+- "Pay now" stays on the driver's screen after completion when unpaid.
+- The deployed site was not walked in a browser: Chrome showed "Security
+  error" for the Railway domain (server answered 200 to curl).
+
+### Concepts now genuinely in use
+Event-type-filtered UI refetch; transition-only event writing.
+
+### What broke
+- The health banner said "Crew on shift degraded (7 of 28)" in demo mode: the
+  probes counted the hidden full seed. Probes now use the demo filters.
+- The reference job left a "nobody is assigned" card open forever (B's decline
+  raises it; only the re-plan card was executed). The seed acknowledges it.
+- The driver read "Your technician found the problem is not what we first
+  thought" the moment a fresh job got its dispatch card. The replanning
+  sentence now needs a crew actually being replaced (pre-existing for the
+  safety-message card too).
+- Dispatch cards never said who they send (nested ids, unrendered); the
+  intake card was titled "Reassign". Now "sends: Ravi Kumar · DMO-VB" and
+  "Dispatch — intake is complete".
+- With Razorpay on, one open driver page wrote 2,521 PAYMENT_AUTHORISATION_PENDING
+  events in six minutes: checkout asked on every refresh, each ask wrote an
+  event, each event refreshed the page. Events now only on a transition.
+- New jobs and cards did not appear on the dispatcher's board until Refresh.
+- Every declined job got a second dispatch card at its 45 s deadline.
+- The timeline's filter dropdowns listed the hidden seed's zones and events.
+- The seed-twice test exceeded vitest's 5 s once the seed grew; given 30 s.
+
+### Interview angle
+"What did a browser find that 1,030 tests did not?" A payment event loop that
+only exists with a real gateway's 'awaiting customer' answer, and a dispatcher
+board that needed a manual refresh to show a new breakdown — both invisible to
+any test that calls one route at a time.

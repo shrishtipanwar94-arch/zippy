@@ -11,7 +11,12 @@ linked to the `zippy` project.
 
 ---
 
-## 1 — Turn Razorpay off · **YOU**
+> **Done on 2026-10-17:** steps 2–5 were run. Razorpay was KEPT ON at the
+> maintainer's request (test keys), so step 1 was skipped; the seed's
+> reference job therefore carries no payment (see prisma/seed/demoReferenceJob.ts).
+> The dry check passed inside the live web container.
+
+## 1 — Turn Razorpay off · **YOU** (optional; skipped on 2026-10-17)
 
 ```bash
 for s in web worker; do

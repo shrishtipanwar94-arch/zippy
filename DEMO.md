@@ -9,13 +9,15 @@ crew B's screen.
 `DEMO_SCRIPT.md` the nine-beat presentation script. This file is the one you
 run.
 
-**What was verified, and how.** Acts 1, 2, 3 and 6 for every fault type are
-checked by `scripts/demo-dry-check.ts`, which drives the real HTTP routes with
-real sign-ins (10 of 11 fault types pass end to end; the tow is a known
-limitation, below). Acts 3, 4 and 5 were walked once over the real routes on a
-local copy of the live board. **None of the six acts has been walked in a
-browser on the deployed site**; where a line describes what a screen shows
-rather than what the API returned, it says so.
+**What was verified, and how.** All six acts were walked **in a browser** on
+2026-10-17, on a local copy of the live board (full seed + demo board, demo
+mode, Razorpay test keys, the Groq assistant) — every screen described below
+is what that walk showed. On the **deployed site**, `scripts/demo-dry-check.ts`
+ran inside the web container and passed: every fault type through the real
+routes to crew B's screen (10 of 11; the tow is a known limitation, below).
+The deployed site has **not** been walked in a browser: Chrome on the
+maintainer's machine showed a "Security error" page for the Railway domain
+while the server answered normally.
 
 ---
 
@@ -82,27 +84,31 @@ soon as more answers cannot change who is sent.
 If the assistant is unavailable or capped, the screen says so in one sentence
 and you answer the same questions by hand. Nothing else changes.
 
-**What the driver sees:** the headline moves from "We are taking down the
-details of your breakdown." to "Finding someone equipped for this."
+**What the driver sees:** a diagnosis in plain words — "We are not certain
+whether it is a flat battery or a battery that needs replacing, so we are
+sending someone equipped for both." — the headline moving from "We are taking
+down the details of your breakdown." to "**Finding someone equipped for
+this.**", and a **Callout fee ₹300.00 · Pay now** panel (the pinned callout
+price; optional at this point).
 
-**Not built: a pinned price range.** The job does pin a price list when it is
-created, but the driver is not shown a range before the technician's estimate.
-Say it rather than look for it.
+**Not built: a price range.** The driver sees the pinned callout fee (₹300)
+and, later, the technician's itemised estimate — but no range up front.
 
 ## Act 2 — the dispatcher sees the choice
 
-**Dispatcher window.** The board shows **two jobs**: yours and the reference
-job. In the **action queue** a card appears by itself as intake finishes —
-`REASSIGN_AFTER_TRIGGER`, reason **"intake complete: ready to dispatch"**,
-naming **Ravi (crew B)**. (Demo mode raises it; elsewhere the system waits for
-a re-plan trigger.)
+**Dispatcher window.** The job arrives in the **priority queue** by itself
+("DL01DM0001 · a flat battery · ELEVATED · <your landmark> — Demo Zone"), and a
+card lands in the **action queue**: **"Dispatch — intake is complete"**, reason
+"intake complete: ready to dispatch", **sends: Ravi Kumar · DMO-VB**, with its
+cost and expected resolution minutes. (Demo mode raises it; elsewhere the
+system waits for a re-plan trigger.) No banner: the board is healthy.
 
-Open **"Why this technician?"** on the job. *(Contents measured through the
-engine and the API; not yet seen in a browser.)* B chosen; D feasible but
-dearer (it can do everything too — it is just far); A rejected
-`CAPABILITY_MISSING` though it is nearest; C rejected `PART_UNAVAILABLE` — the
-skill, not the part, and no depot to fetch one from. Hard constraints are
-filters with reason codes, never penalties.
+Click the job in the queue to open the inspector, **"Why Ravi Kumar in
+demo-unit-b?"**: B chosen; D feasible but dearer (it can do everything too — it
+is just far); A rejected `CAPABILITY_MISSING` though it is nearest; C rejected
+`PART_UNAVAILABLE` — the skill, not the part, and no depot to fetch one from.
+Hard constraints are filters with reason codes, never penalties. (The heading
+shows the unit's internal id rather than its code — cosmetic.)
 
 ## Act 3 — the offer, the accept, the ETA
 
@@ -110,40 +116,45 @@ filters with reason codes, never penalties.
 assigned — a hold with a TTL, taken by a conditional update, so two dispatchers
 cannot both win it.
 
-**Technician window:** one offer with a **45-second countdown**. Press
-**Accept**.
+**Technician window:** one offer — "Maruti Suzuki Swift · DL01DM0001 · Demo
+Zone · <landmark>" — with a **45-second countdown**. Press **Accept**. Ravi's
+screen shows "Assigned to you — Asha", "The part is in your van", and **I am on
+my way**.
 
-**Driver (verified over the API):** "**Ravi is on the way.**" with an arrival
-estimate ("About 5 minutes") marked rough — production routing is
-straight-line, not road (`/health` says `routing.mode: HAVERSINE`).
-**Dispatcher:** the job leaves the queue; updates arrive live.
+**Driver:** "**Ravi is on the way.**" — "About 5 minutes, roughly", "Ravi · a
+flatbed tow truck" — the estimate is rough because production routing is
+straight-line (`/health` says `routing.mode: HAVERSINE`). **Dispatcher:** the
+card clears and the queue empties, live.
 
 ## Act 4 — the estimate
 
-**Technician:** step through **On my way → Arrived → Diagnosing**, then send the
-estimate. **Driver:** approve (or decline) it.
+**Technician:** **I am on my way → I have arrived → Start diagnosing**, then
+**Send the driver a cost**. Ravi's screen shows the cost sent (your time · 10
+minutes ₹102, coming out to you ₹300, **the driver pays ₹402**) and "Paused —
+waiting on the driver". **Driver:** the same lines with **Approve this cost** /
+**Cancel the job**, plus the **completion code** to read out at the end.
 
-**Pressing send twice creates nothing new** (verified over the API): the second
-send returns the same estimate and the job still has one; a second approval is
-refused `409 already_answered`. Estimates are unique per priced inputs, enforced
-in the database.
+**Pressing send twice, and approve twice, creates nothing new** (checked in the
+database during the browser walk): one estimate issued, one approval, and the
+job moves to WORKING.
 
 ## Act 5 — finish and pay
 
-**Technician:** **Working → Complete**. The driver's screen shows a completion
-code to read out once the work is done; the technician enters it.
+**Technician:** "Before you finish — did you fit anything from the van?" →
+**Nothing from the van** (for a jump start), then **Ask the driver for their
+6-digit code** → type it → **Finish job**. Ravi's screen: "**Earned today
+₹321.60 · 1 job finished**". **Driver:** "**All done. Ravi has finished with
+your vehicle.**", every progress step ticked.
 
-**Payment** (verified over the API, with the stub provider): the callout was
-authorised when Ravi accepted, and completion captures the approved total
-(₹402 for the flat battery) and posts it to the ledger. Ravi's earnings
-statement (`/technician/earnings`, the technician's money panel) shows his
-share — ₹321.60, held because payouts start at ₹500.
-
-This is the **manual path**: with no Razorpay keys set, a stub provider
-authorises and captures. With Razorpay keys set the driver is sent to
-Razorpay's test checkout instead, and an unpaid checkout leaves the
-authorisation pending (the payments banner turns amber after 10 minutes).
-**Turn Razorpay off for this demo** (step 1 of docs/LIVE-CUTOVER.md).
+**Payment — Razorpay test mode is on.** The driver pays the callout from the
+**Pay now** panel, which opens Razorpay's test checkout ("Zippy · ₹300"). It
+asks for a mobile number first and **rejects obviously fake ones** — use a
+real-format number you are comfortable entering in test mode, then a Razorpay
+test method. If the callout is not paid, completion still resolves the job and
+pays Ravi (the ledger rows are written), but the capture fails
+(`PAYMENT_CAPTURE_FAILED`) and "Pay now" stays on the driver's screen. (With
+no Razorpay keys a stub provider authorises and captures instead — the manual
+path.)
 
 Crew B's van is free again the moment the job completes.
 
@@ -152,11 +163,12 @@ Crew B's van is free again the moment the job completes.
 Report a second breakdown (Act 1 again). Execute its card. On the technician
 window press **Decline** — or let the 45 seconds run out.
 
-**Dispatcher** (verified over the API): two cards for that job —
-`ESCALATE_DISPATCH_REQUEUED` ("the reservation for this job did not hold
-(technician DECLINED)") and a new `REASSIGN_AFTER_TRIGGER`, **"offer declined:
-re-planned without the crew that refused"**, naming **Meera (crew D)**. The
-re-plan leaves out whoever refused; that exclusion is the narration.
+**Dispatcher** (live, no Refresh): two cards for that job — "**The crew for this
+job did not hold — nobody is assigned**" (technician DECLINED) and "**Reassign —
+a re-plan trigger fired**: offer declined: re-planned without the crew that
+refused · **sends Meera Nair · DMO-VD**". The re-plan leaves out whoever
+refused; that exclusion is the narration. **Driver:** "Still looking for a crew
+for this." Nothing more appears when the 45 s deadline passes.
 
 **Stop at the card.** Nobody can sign in as Meera, so executing it would send
 an offer that can only time out. Leave the job: the worker retires it once it
@@ -170,7 +182,7 @@ has sat unassigned for an hour.
 | --- | --- |
 | **A tow cannot be dispatched** | "Stuck or damaged" diagnoses `IMMOBILISED_UNKNOWN`, which needs a tow. The solver chooses B, but Execute is refused: a tow's third leg needs a workshop to confirm the destination, and the product has no workshop participant (INTERVIEW.md 15.44). The card turns into "No crew can take this job". Avoid that complaint. |
 | **No price range** before the estimate | see Act 1 |
-| **Razorpay** | off for the demo; the stub provider is the manual path (Act 5) |
+| **Razorpay test checkout** | needs a real-format mobile number; an unpaid callout fails capture at completion and "Pay now" stays visible (Act 5) |
 | **Routing is straight-line** | ETAs are rough and flagged so |
 | **Cannot be shown live** | the concurrency suite (real Postgres races, `npm run test:concurrency`), the degradation banner and chaos panel (not mounted in production), and the evaluation benchmark (`npm run eval`). Show them locally. |
 
