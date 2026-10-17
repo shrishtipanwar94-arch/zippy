@@ -40,8 +40,39 @@ export function render(state) {
   if (panel.hidden) return;
 
   const amount = panel.querySelector('[data-field="checkout-amount"]');
-  const text = `₹${(checkout.amountPaise / 100).toFixed(2)}`;
+  const text = rupees(checkout.amountPaise);
   if (amount && amount.textContent !== text) amount.textContent = text;
+
+  // WHICH PAYMENT THIS IS, in the driver's words. The amount on this button
+  // must match the technician's bill once there is one — the callout fee alone
+  // before the estimate, the whole approved total after it, or just what is
+  // left once the callout has been paid (src/commit/checkoutOrder.ts).
+  const words = WORDS[checkout.purpose] ?? WORDS.CALLOUT;
+  setText(panel.querySelector('[data-field="checkout-label"]'), words.label);
+  setText(panel.querySelector('[data-field="checkout-note"]'), words.note(checkout));
+}
+
+const WORDS = {
+  CALLOUT: {
+    label: 'Callout fee',
+    note: () => 'Paying now is optional — help is already on the way either way.',
+  },
+  TOTAL: {
+    label: 'Your bill',
+    note: () => 'The amount you approved: the callout fee plus the work.',
+  },
+  BALANCE: {
+    label: 'Balance due',
+    note: (checkout) => `Your bill is ${rupees(checkout.totalPaise)}; you have already paid the callout fee.`,
+  },
+};
+
+function rupees(paise) {
+  return `₹${(Number(paise ?? 0) / 100).toFixed(2)}`;
+}
+
+function setText(node, text) {
+  if (node && node.textContent !== text) node.textContent = text;
 }
 
 // Loaded on demand rather than in driver.html, so a driver whose job never
@@ -81,7 +112,7 @@ export async function openCheckout(jobId, onFinished) {
       amount: checkout.amountPaise,
       currency: checkout.currency,
       name: 'Zippy',
-      description: 'Callout fee',
+      description: WORDS[checkout.purpose]?.label ?? 'Callout fee',
       handler: async (response) => {
         await api.confirmCheckout(jobId, {
           orderRef: response.razorpay_order_id,

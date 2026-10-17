@@ -29,6 +29,7 @@ import { config } from '../infra/config.js';
 import { logger } from '../infra/logger.js';
 import { authenticate, requirePermission } from './middleware/authenticate.js';
 import { authoriseCallout } from '../commit/payments.js';
+import { checkoutOrderFor } from '../commit/checkoutOrder.js';
 import { reconcileJobPayment } from '../commit/paymentReconciliation.js';
 import { checkoutKeyId } from '../payments/razorpayProvider.js';
 import { verifyCheckoutSignature } from '../payments/razorpaySignature.js';
@@ -47,9 +48,32 @@ checkoutRouter.post(
       return;
     }
 
+    // WITH RAZORPAY: which order, for how much — the callout, the whole approved
+    // bill, or the balance after a callout already paid. See
+    // src/commit/checkoutOrder.ts for why one fixed callout order was wrong.
+    const keyId = checkoutKeyId();
+    if (keyId) {
+      const order = await checkoutOrderFor(prismaBase, jobId);
+      if (order.status !== 'READY') {
+        res.json({ status: order.status });
+        return;
+      }
+      res.json({
+        status: 'READY',
+        keyId,
+        purpose: order.purpose,
+        orderRef: order.orderRef,
+        amountPaise: order.amountPaise,
+        totalPaise: order.totalPaise,
+        currency: order.currency,
+      });
+      return;
+    }
+
+    // WITHOUT A CHECKOUT KEY (the stub provider), exactly as before: there is no
+    // widget to open, so the answer is only whether anything is owed.
     // IDEMPOTENT BY CONSTRUCTION. `authoriseCallout` finds an existing payment
-    // row and reuses its key, and the adapter finds an existing order by that
-    // key — so a driver tapping the button four times gets one order.
+    // row and reuses its key — so a refresh never opens a second one.
     await authoriseCallout(prismaBase, { jobId });
 
     const payment = await prismaBase.payment.findFirst({
@@ -68,22 +92,9 @@ checkoutRouter.post(
       return;
     }
 
-    const keyId = checkoutKeyId();
-    if (!keyId || !payment.gatewayOrderRef) {
-      // The stub provider, or a gateway that could not be reached. The job has
-      // dispatched regardless — that is invariant 8 — and the sweep will come
-      // back for the money.
-      res.json({ status: 'UNAVAILABLE' });
-      return;
-    }
-
-    res.json({
-      status: 'READY',
-      keyId,
-      orderRef: payment.gatewayOrderRef,
-      amountPaise: payment.amountPaise,
-      currency: payment.currency,
-    });
+    // The stub provider has no widget. The job has dispatched regardless —
+    // that is invariant 8 — and the sweep will come back for the money.
+    res.json({ status: 'UNAVAILABLE' });
   },
 );
 

@@ -358,7 +358,7 @@ export async function captureOnCompletion(
 
   const payment = await db.payment.findFirst({
     where: { jobId: job.id },
-    select: { id: true, status: true, externalRef: true, amountPaise: true },
+    select: { id: true, status: true, externalRef: true, amountPaise: true, balanceOrderRef: true },
   });
   if (!payment) return { outcome: 'NOTHING_TO_CAPTURE', reason: 'this job has no payment' };
   if (payment.status === 'CAPTURED') {
@@ -372,6 +372,7 @@ export async function captureOnCompletion(
     heldPaise: payment.status === 'AUTHORISED' ? payment.amountPaise : 0,
     amountPaise: approvedTotalPaise,
     keyPrefix: 'complete',
+    balanceOrderRef: payment.balanceOrderRef,
   });
   if (captured.outcome === 'FAILED') {
     await recordCaptureFailure(db, job.id, payment.id, captured.reason);
@@ -430,6 +431,10 @@ type CaptureAttempt = {
   // Distinguishes a completion capture from a cancellation capture, so the two
   // can never collide on an idempotency key for the same job.
   keyPrefix: string;
+  // The balance order the driver was shown at checkout, if any — passed to the
+  // top-up authorisation so the provider checks THAT order rather than opening
+  // a new one (see Payment.balanceOrderRef and src/commit/checkoutOrder.ts).
+  balanceOrderRef?: string | null;
 };
 
 type CaptureAttemptResult =
@@ -453,6 +458,7 @@ async function captureAgainstPayment(
       amountPaise: shortfall,
       currency: 'INR',
       reference: input.jobId,
+      knownOrderRef: input.balanceOrderRef ?? undefined,
     });
     if (topUp.outcome !== 'AUTHORISED') {
       return { outcome: 'FAILED', reason: `second authorisation: ${topUp.reason}` };

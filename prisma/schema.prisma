@@ -1309,6 +1309,14 @@ model Payment {
   // from one already authorised. Null for the stub provider, which has no
   // order concept at all.
   gatewayOrderRef String?       @map("gateway_order_ref")
+  // THE SECOND ORDER, for the balance between the callout already held and a
+  // larger approved total. Razorpay has no way to find an order again by its
+  // receipt (measured: a just-created order did not show up in a receipt
+  // search), so the checkout that opens it records it here, and the capture
+  // at completion hands it back as `knownOrderRef` — which is how the
+  // provider recognises the balance the driver has already paid instead of
+  // opening a third order nobody will ever see.
+  balanceOrderRef String?       @map("balance_order_ref")
   externalRef     String?       @map("external_ref")
   createdAt       DateTime      @default(now()) @map("created_at")
   updatedAt       DateTime      @updatedAt @map("updated_at")

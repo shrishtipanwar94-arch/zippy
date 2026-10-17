@@ -40,6 +40,7 @@ import type {
 } from '../src/payments/provider.js';
 import { authoriseCallout, captureOnCompletion, settleCancellation } from '../src/commit/payments.js';
 import { retryPendingAuthorisations } from '../src/commit/authorisationRetry.js';
+import { checkoutOrderFor } from '../src/commit/checkoutOrder.js';
 import { createIntakeJob } from '../src/intake/createJob.js';
 import type { JobStatus } from '@prisma/client';
 
@@ -442,6 +443,95 @@ describe('completion captures the approved total', () => {
 });
 
 // ---------------------------------------------------------------------------
+
+// A GATEWAY THAT BEHAVES LIKE RAZORPAY'S CHECKOUT: an authorisation is an open
+// order until the customer pays it, and an order is only found again when its
+// reference is handed back (`knownOrderRef`) — never by its receipt.
+class CheckoutGateway implements PaymentProvider {
+  readonly name = 'checkout-gateway';
+  readonly paid = new Set<string>();
+  readonly opened: { orderRef: string; amountPaise: number }[] = [];
+  readonly knownRefsAsked: (string | undefined)[] = [];
+  readonly captured: number[] = [];
+  private next = 1;
+
+  async authorise(request: AuthoriseRequest): Promise<AuthoriseResult> {
+    this.knownRefsAsked.push(request.knownOrderRef);
+    let orderRef = request.knownOrderRef;
+    if (!orderRef) {
+      orderRef = `order_${this.next++}`;
+      this.opened.push({ orderRef, amountPaise: request.amountPaise });
+    }
+    if (this.paid.has(orderRef)) {
+      return { outcome: 'AUTHORISED', externalRef: `pay_${orderRef}`, expiresAt: new Date(Date.now() + 3_600_000) };
+    }
+    return { outcome: 'AWAITING_CUSTOMER', orderRef, reason: 'the customer has not paid yet' };
+  }
+
+  async capture(request: CaptureRequest): Promise<CaptureResult> {
+    this.captured.push(request.amountPaise);
+    return { outcome: 'CAPTURED', externalRef: `cap_${request.idempotencyKey}` };
+  }
+
+  async voidAuthorisation(_request: VoidRequest): Promise<VoidResult> {
+    return { outcome: 'VOIDED' };
+  }
+}
+
+// WHAT "PAY NOW" CHARGES MATCHES THE BILL (src/commit/checkoutOrder.ts). Found
+// walking the demo with Razorpay test keys: the driver's button said ₹300 while
+// the technician's bill said ₹402, and the ₹102 could never be collected.
+describe('the driver pays what the bill says', () => {
+  it('offers the callout fee before there is an estimate', async () => {
+    const { jobId } = await createJobFor(WALKIN, 'walkin-vehicle');
+    const order = await checkoutOrderFor(prismaBase, jobId, new CheckoutGateway());
+    expect(order).toMatchObject({ status: 'READY', purpose: 'CALLOUT', amountPaise: CALLOUT_PAISE });
+  });
+
+  it('offers ONE order for the whole approved total when nothing is paid yet', async () => {
+    const gateway = new CheckoutGateway();
+    const { jobId } = await createJobFor(WALKIN, 'walkin-vehicle');
+    await checkoutOrderFor(prismaBase, jobId, gateway); // the callout order
+    await approveEstimate(jobId, 40200);
+
+    const first = await checkoutOrderFor(prismaBase, jobId, gateway);
+    const again = await checkoutOrderFor(prismaBase, jobId, gateway);
+    expect(first).toMatchObject({ status: 'READY', purpose: 'TOTAL', amountPaise: 40200, totalPaise: 40200 });
+    // Asking again re-offers the same order rather than opening another.
+    expect(again).toEqual(first);
+    expect(gateway.opened.map((order) => order.amountPaise)).toEqual([CALLOUT_PAISE, 40200]);
+
+    // Paid, then completed: one capture for the whole bill, no second order.
+    if (first.status !== 'READY') throw new Error('expected an order');
+    gateway.paid.add(first.orderRef);
+    await authoriseCallout(prismaBase, { jobId, provider: gateway });
+    const result = await captureOnCompletion(prismaBase, { jobId, provider: gateway });
+    expect(result).toMatchObject({ outcome: 'CAPTURED', amountPaise: 40200, secondAuthorisation: false });
+    expect(gateway.captured).toEqual([40200]);
+  });
+
+  it('offers just the balance once the callout is paid, and completion captures that same order', async () => {
+    const gateway = new CheckoutGateway();
+    const { jobId } = await createJobFor(WALKIN, 'walkin-vehicle');
+    const callout = await checkoutOrderFor(prismaBase, jobId, gateway);
+    if (callout.status !== 'READY') throw new Error('expected the callout order');
+    gateway.paid.add(callout.orderRef);
+    await authoriseCallout(prismaBase, { jobId, provider: gateway }); // now AUTHORISED for ₹300
+    await approveEstimate(jobId, 40200);
+
+    const balance = await checkoutOrderFor(prismaBase, jobId, gateway);
+    expect(balance).toMatchObject({ status: 'READY', purpose: 'BALANCE', amountPaise: 40200 - CALLOUT_PAISE, totalPaise: 40200 });
+    if (balance.status !== 'READY') throw new Error('expected the balance order');
+    gateway.paid.add(balance.orderRef);
+    expect(await checkoutOrderFor(prismaBase, jobId, gateway)).toEqual({ status: 'ALREADY_PAID' });
+
+    const result = await captureOnCompletion(prismaBase, { jobId, provider: gateway });
+    expect(result).toMatchObject({ outcome: 'CAPTURED', amountPaise: 40200, secondAuthorisation: true });
+    expect(gateway.captured).toEqual([CALLOUT_PAISE, 40200 - CALLOUT_PAISE]);
+    // The top-up asked about the order the driver paid, not a new one.
+    expect(gateway.knownRefsAsked.at(-1)).toBe(balance.orderRef);
+  });
+});
 
 async function createJobFor(tenantId: string, vehicleSuffix: string) {
   const created = await createIntakeJob(prismaBase, {
