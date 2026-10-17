@@ -177,6 +177,26 @@
  * one level down. Only the container needs the guard: `grid-column` on the
  * child of something that is not a grid is simply ignored.
  */
+/* ON A PHONE THE TWO WRAPPERS DISAPPEAR. `display: contents` hands their
+ * children straight to the panel's column, and the explicit order puts the
+ * blocks back where they have always been on a phone: identity, map, parts
+ * and cost, the thumb bar, then re-diagnosis. */
+[data-panel='ladder'] {
+  display: flex;
+  flex-direction: column;
+}
+
+[data-panel='ladder'] > .job-main,
+[data-panel='ladder'] > .job-aside {
+  display: contents;
+}
+
+[data-panel='ladder'] .job-card { order: 1; }
+[data-panel='ladder'] .job-map { order: 2; }
+[data-panel='ladder'] .context-card { order: 3; }
+[data-panel='ladder'] .job-action { order: 4; }
+[data-panel='ladder'] .job-diagnosis { order: 5; }
+
 @media (min-width: 1024px) {
   [data-panel='ladder']:has(.job-map) {
     display: grid;
@@ -185,18 +205,25 @@
     align-items: start;
   }
 
-  [data-panel='ladder'] > * {
+  /* TWO REAL COLUMNS. The side column holds the map and the one thing to
+   * press, and STAYS IN VIEW while the main column scrolls — so the button is
+   * always beside the job rather than wherever a grid row happened to put it. */
+  [data-panel='ladder']:has(.job-map) > .job-main {
+    display: block;
     grid-column: 1;
   }
 
-  [data-panel='ladder'] > .job-map {
+  [data-panel='ladder']:has(.job-map) > .job-aside {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-3);
     grid-column: 2;
-    grid-row: 1;
+    position: sticky;
+    top: var(--space-4);
   }
 
-  [data-panel='ladder'] > .job-action {
-    grid-column: 2;
-    grid-row: 2;
+  [data-panel='ladder']:has(.job-map) > .job-aside > .job-map {
+    margin-bottom: 0 !important;
   }
 
   /* Beside the card rather than under it, so it can be as tall as the card

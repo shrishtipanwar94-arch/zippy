@@ -160,9 +160,14 @@
     grid-row: 2;
   }
 
+  /* STAYS IN VIEW while the left column scrolls: the map and the progress are
+   * what a waiting driver keeps glancing back at, and letting them scroll away
+   * as cards come and go at each stage made the page feel rearranged. */
   [data-panel='driver-status'] > .driver-aside {
     grid-column: 2;
     grid-row: 1 / span 2;
+    position: sticky;
+    top: var(--space-4);
   }
 
   /* Taller than the 180px it gets on a phone: beside the hero rather than

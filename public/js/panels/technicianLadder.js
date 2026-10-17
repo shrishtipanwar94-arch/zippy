@@ -131,19 +131,27 @@ function skeletonMarkup() {
 // action is in the sticky bar, where it cannot scroll away. Re-diagnosing is a
 // section of its own, outside the card, because it is a different task.
 //
-// THE MAP IS A SIBLING OF THE CARD, NOT INSIDE IT, and that is a layout
-// decision rather than a tidying one. Above 1024 the map and the one thing to
-// press move into a column of their own beside the card (technician.css), and
-// a grid can only place its own children. On a phone nothing moves: the map
-// still renders immediately under the identity block, which is where it was.
+// TWO COLUMNS, WRAPPED. Above 1024 the map and the one thing to press sit in a
+// column of their own (`.job-aside`) that stays put while the rest scrolls, and
+// everything else is the main column (`.job-main`). They used to be loose
+// siblings pinned to grid rows 1 and 2 — and a grid row is as tall as whatever
+// the LEFT column happens to hold, so the button lined up with whichever card
+// was second at that stage and the gap under it changed every step: the layout
+// looked rearranged after each tap. On a phone both wrappers are
+// `display: contents` and technician.css orders the blocks exactly as before:
+// card, map, parts and cost, the action bar, then re-diagnosis.
 function jobMarkup(job, state) {
   return `
-    ${jobCardMarkup(job)}
-    ${trackingMarkup(job)}
-    ${contextMarkup(job)}
-    ${estimateMarkup(job)}
-    ${nextActionMarkup(job, state)}
-    ${diagnosisMarkup(job, state)}`;
+    <div class="job-main">
+      ${jobCardMarkup(job)}
+      ${contextMarkup(job)}
+      ${estimateMarkup(job)}
+      ${diagnosisMarkup(job, state)}
+    </div>
+    <div class="job-aside">
+      ${trackingMarkup(job)}
+      ${nextActionMarkup(job, state)}
+    </div>`;
 }
 
 // WHO AND WHERE. Identity, progress and the person — the things a technician
@@ -176,7 +184,7 @@ function diagnosisMarkup(job, state) {
   const pricing = state.estimateInFlight === job.jobId;
 
   return `
-    <section class="mb-4">
+    <section class="mb-4 job-diagnosis">
       <p class="section-head">Found something different?</p>
       <label class="sr-only" for="diagnosis-complaint">What you found</label>
       <select id="diagnosis-complaint" class="form-select mb-2" data-field="diagnosis-complaint" ${offline ? 'disabled' : ''}>
