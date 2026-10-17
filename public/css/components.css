@@ -491,6 +491,46 @@
   box-shadow: 0 0 0 4px var(--brand-soft);
 }
 
+/* WHO EACH DOT IS, and how far apart they are. The names sit beside their
+ * dots permanently (a tooltip only on hover would be invisible on a phone);
+ * the dashed line says "these two are connected", and the badge in the corner
+ * is the one number the map exists to show. */
+.map-label.leaflet-tooltip {
+  background: var(--ground);
+  color: var(--text);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-badge);
+  box-shadow: none;
+  font-family: var(--sans);
+  font-size: 12px;
+  font-weight: var(--weight-strong);
+  padding: 2px 6px;
+}
+
+.map-label.leaflet-tooltip-top::before {
+  border-top-color: var(--line);
+}
+
+.map-link {
+  stroke: var(--brand);
+  stroke-opacity: 0.9;
+}
+
+.map-distance {
+  position: absolute;
+  top: var(--space-2);
+  left: var(--space-2);
+  z-index: 500;
+  background: var(--ground);
+  color: var(--text);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-badge);
+  font-size: 12px;
+  font-weight: var(--weight-strong);
+  padding: 2px 8px;
+  pointer-events: none;
+}
+
 /* Leaflet paints its own light ground behind the tiles. On a dark page that
  * flashes white before the first tile lands. */
 .track-map .leaflet-container {

@@ -20,6 +20,10 @@ export function createTrackingMap(container, options = {}) {
   let map = null;
   let layer = null;
   let markers = { a: null, b: null };
+  // The dashed line between the two dots and the "1.9 km apart" badge. Created
+  // once, moved after that, like the markers.
+  let link = null;
+  let badge = null;
   // The positions the current framing was chosen for, so the view is refitted
   // when the picture genuinely changes and left alone when it does not.
   let fittedKey = '';
@@ -29,7 +33,18 @@ export function createTrackingMap(container, options = {}) {
   // `aClass` / `bClass` are the two marker shapes. They differ on purpose: two
   // identical circles need a legend, and a map with a legend on a phone is a map
   // nobody reads.
-  return function draw({ a, b, aClass = 'driver-dot', bClass = 'helper-dot', fade = false }) {
+  // `aLabel` / `bLabel` name the two dots ("You", "Ravi") — a bare circle and a
+  // bare pin left people guessing which was which, and which way to read the
+  // map. The distance between them is the one number the map exists to show.
+  return function draw({
+    a,
+    b,
+    aClass = 'driver-dot',
+    bClass = 'helper-dot',
+    fade = false,
+    aLabel = null,
+    bLabel = null,
+  }) {
     const L = typeof window !== 'undefined' ? window.L : undefined;
     if (!L || !container) return false;
     if (!a && !b) return false;
@@ -65,10 +80,51 @@ export function createTrackingMap(container, options = {}) {
 
     markers.a = place(L, layer, markers.a, a, aClass, false);
     markers.b = place(L, layer, markers.b, b, bClass, fade);
-
+    label(markers.a, aLabel);
+    label(markers.b, bLabel);
+    joinTheDots(L, a, b);
     frame(map, a, b);
     return true;
   };
+
+  // A name that stays on screen beside its dot. Re-bound only when the words
+  // change, so a tick that moves the dot does not rebuild the label.
+  function label(marker, text) {
+    if (!marker) return;
+    const current = marker.getTooltip();
+    if (!text) {
+      if (current) marker.unbindTooltip();
+      return;
+    }
+    if (current && current.getContent() === text) return;
+    marker.unbindTooltip();
+    marker.bindTooltip(text, { permanent: true, direction: 'top', offset: [0, -12], className: 'map-label' });
+  }
+
+  // The line and the badge only make sense with two dots; with one they go.
+  function joinTheDots(L, a, b) {
+    if (!a || !b) {
+      if (link) layer.removeLayer(link);
+      link = null;
+      if (badge) badge.hidden = true;
+      return;
+    }
+    const points = [
+      [a.lat, a.lng],
+      [b.lat, b.lng],
+    ];
+    if (link) link.setLatLngs(points);
+    else link = L.polyline(points, { className: 'map-link', weight: 2, dashArray: '6 6', interactive: false }).addTo(layer);
+
+    if (!badge) {
+      badge = document.createElement('div');
+      badge.className = 'map-distance';
+      container.appendChild(badge);
+    }
+    badge.hidden = false;
+    const text = `${distanceText(a, b)} apart`;
+    if (badge.textContent !== text) badge.textContent = text;
+  }
 
   // Moves a marker, creates it the first time, removes it when its point is
   // gone. `setLatLng` mutates the marker already on the map, which is what
@@ -128,6 +184,24 @@ export function createTrackingMap(container, options = {}) {
       { padding: [34, 34], maxZoom: 15, animate: false },
     );
   }
+}
+
+// STRAIGHT-LINE DISTANCE, said the way a person says it. The arrival time is
+// the server's (it knows the routing mode); this is just how far apart the two
+// dots on this map are, which is what the eye is trying to judge anyway.
+function distanceText(a, b) {
+  const metres = haversineMetres(a, b);
+  if (metres < 1000) return `${Math.max(10, Math.round(metres / 10) * 10)} m`;
+  return `${(metres / 1000).toFixed(1)} km`;
+}
+
+function haversineMetres(a, b) {
+  const toRadians = (degrees) => (degrees * Math.PI) / 180;
+  const dLat = toRadians(b.lat - a.lat);
+  const dLng = toRadians(b.lng - a.lng);
+  const h =
+    Math.sin(dLat / 2) ** 2 + Math.cos(toRadians(a.lat)) * Math.cos(toRadians(b.lat)) * Math.sin(dLng / 2) ** 2;
+  return 2 * 6_371_000 * Math.asin(Math.sqrt(h));
 }
 
 // Three decimal places is about 100 metres — below that a refit is noise.

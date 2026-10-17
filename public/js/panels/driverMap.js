@@ -45,6 +45,8 @@ export function render(state) {
     // A stale fix is drawn faded as well as described. Removing the dot would
     // answer "where are they" with silence, which is worse.
     fade: Boolean(tracking.stale),
+    aLabel: 'You',
+    bLabel: state.driverView?.helper?.name ?? 'Your technician',
   });
   section.hidden = !drawn;
 

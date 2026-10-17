@@ -45,5 +45,12 @@ export function render(state) {
   // colour. On this screen the car is what you are heading towards.
   // The technician is a plain dot; the car they are heading to is a pin. The
   // shapes differ so neither needs a legend.
-  draw({ a: tracking.you, b: tracking.job, aClass: 'driver-dot', bClass: 'job-pin' });
+  draw({
+    a: tracking.you,
+    b: tracking.job,
+    aClass: 'driver-dot',
+    bClass: 'job-pin',
+    aLabel: 'Your van',
+    bLabel: job.driver?.name ?? 'The car',
+  });
 }
